@@ -28,17 +28,17 @@ Before beginning this phase, ensure the following:
 
 - **Server Preparation Complete:**
     - All servers are running the maintenance environment (completed via [Server Preparation Guide](ztp-server-preparation-guide.md))
-    - Console shows "ROE setup completed successfully" on each server
+    - Console shows "Maintenance environment setup completed successfully" on each server
     - Virtual media has been unmounted (cleanup step)
 
 - **Azure Prerequisites:**
-    - Subscription allowlisted for Azure Local ZTP private preview
+    - Subscription enrolled in the Azure Local Simplified machine provisioning public preview
     - Required feature flags enabled and resource providers registered
     - Resource group created: `{cluster_resource_group}`
 
 - **Permissions:**
     - Resource group **Owner**, or **Contributor** + **Role Based Access Control Administrator** on the resource group
-    - Access to Azure preview portal: https://aka.ms/ztp/tryit
+    - Access to Azure preview portal: https://portal.azure.com
 
 - **Tools Required:**
     - Windows 11 PC with reliable internet connection
@@ -46,7 +46,7 @@ Before beginning this phase, ensure the following:
 
 - **Cluster-Specific Information:**
     - Cluster Name: `{cluster_name}`
-    - Azure Region: `{region}` (East US only for private preview)
+    - Azure Region: `{region}` (East US only for public preview)
     - Node Count: {node_count}x {node_model}
     - Resource Group: `{cluster_resource_group}`
     - Key Vault: `{keyvault_azure_local_name}`
@@ -100,7 +100,7 @@ If you used the USB preparation method during server bootstrap:
 ## Step 2: Create Azure Site
 
 !!! warning "Important"
-    Use the Azure preview portal URL to access ZTP features: https://aka.ms/ztp/tryit
+    Use the Azure preview portal URL to access ZTP features: https://portal.azure.com
 
 1. Navigate to **Azure Arc > Operations > Provisioning (preview)** in the Azure portal.
 
@@ -252,7 +252,7 @@ Launch Azure Cloud Shell using Bash and run the following command:
 # Replace with your actual subscription ID and resource group name
 curl -fsSL "https://aka.ms/ztp/collect-armjson.sh" | bash -s -- \
   --subscription "{mgmt_subscription_id}" \
-  --resource-group "rg-c01-azl-eus-01"
+  --resource-group "{cluster_resource_group}"
 ```
 
 ### Common Issues
@@ -290,7 +290,7 @@ Launch Azure Cloud Shell using Bash and run:
 # Replace with your actual subscription ID and resource group name
 curl -fsSL "https://aka.ms/ztp/cleanup.sh" | bash -s -- \
   --subscription "{mgmt_subscription_id}" \
-  --resource-group "rg-c01-azl-eus-01"
+  --resource-group "{cluster_resource_group}"
 ```
 
 ## Document References

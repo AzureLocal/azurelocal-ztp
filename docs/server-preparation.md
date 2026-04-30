@@ -12,7 +12,7 @@ This guide covers the server preparation phase of Azure Local Zero-Touch Provisi
 The complete ZTP workflow consists of three main phases:
 
 1. **Server Preparation** (This guide) - Configure environment and prepare servers
-2. **Azure Portal Provisioning** ([Portal Provisioning Guide](ztp-azure-portal-provisioning-guide.md)) - Set up sites and provision machines via Azure
+2. **Azure Portal Provisioning** ([Portal Provisioning Guide](azure-portal-provisioning.md)) - Set up sites and provision machines via Azure
 3. **On-site Setup** - Connect servers and power on for automated configuration
 
 ## Prerequisites
@@ -20,7 +20,7 @@ The complete ZTP workflow consists of three main phases:
 Before beginning, ensure you have:
 
 - **Hardware Prerequisites:**
-    - Lenovo: 650v3 and 650v4, HPE DL360 Gen 11, Dell AX-760 servers
+    - Dell AX-650, AX-750 servers (validated); Lenovo MX650 V3, V4 and HPE DL360 Gen11 (planned)
     - Windows 11 PC with reliable internet connection
     - USB flash drive with at least 8GB capacity
 
@@ -132,7 +132,7 @@ curl -fsSL "https://aka.ms/ztp/checkprovider.sh" -o checkprovider.sh && chmod +x
 
 ### Verify Subscription Allowlisting
 
-Contact Microsoft Product Team to confirm your subscription is allowlisted for the Azure Local ZTP private preview. Provide your subscription ID when requesting access.
+Confirm your subscription is enrolled in the Azure Local Simplified machine provisioning public preview. See [Microsoft's prerequisites](https://learn.microsoft.com/en-us/azure/azure-local/deploy/simplified-machine-provisioning#prerequisites) for enrollment steps.
 
 ### Create Resource Group
 
@@ -385,7 +385,7 @@ The **Configurator App for Azure Local V2** is used to download ownership vouche
 The script downloads the Configurator App to the same directory as the maintenance environment tools (`ztp.download_directory` from config).
 
 !!! tip "Tip"
-    You can also download the Configurator App from the Azure Portal: https://aka.ms/ztp/tryit → **Azure Arc > Operations > Provisioning (preview)** → **Get started** → **View Downloads**.
+    You can also download the Configurator App from the Azure Portal: https://portal.azure.com → **Azure Arc > Operations > Provisioning (preview)** → **Get started** → **View Downloads**.
 
 **The Configurator App is used for:**
 
@@ -394,7 +394,7 @@ The script downloads the Configurator App to the same directory as the maintenan
 - Monitoring machine provisioning progress from a Windows 11 PC
 - Running diagnostic tests and collecting support packages for troubleshooting
 
-See [Azure Portal Provisioning Guide](ztp-azure-portal-provisioning-guide.md) for detailed Configurator App usage.
+See [Azure Portal Provisioning Guide](azure-portal-provisioning.md) for detailed Configurator App usage.
 
 ## Mark Files as Safe
 
@@ -1407,7 +1407,7 @@ $credential = Get-Credential
     .\Mount-AzureLocalISO.ps1 -Credential $cred -Force
 
 .EXAMPLE
-    .\Mount-AzureLocalISO.ps1 -Credential $cred -IsoUrl "http://10.250.1.38:8080/provision-os.iso" -Force
+    .\Mount-AzureLocalISO.ps1 -Credential $cred -IsoUrl "http://{fileserver_ip}:{fileserver_port}/provision-os.iso" -Force
 
 .NOTES
     Requires: PowerShell 7.0+, AzureLocalConfig.psm1
@@ -2329,7 +2329,7 @@ $Credential = Get-Credential
 
 Once servers have completed the maintenance environment installation, proceed to **Phase 2** of the ZTP workflow:
 
-**📖 Next Guide:** [Azure Portal Provisioning Guide](ztp-azure-portal-provisioning-guide.md)
+**📖 Next Guide:** [Azure Portal Provisioning Guide](azure-portal-provisioning.md)
 
 1. **Collect Ownership Vouchers** - Use the Configurator App or USB drives to collect ownership vouchers from each server
 2. **Create Azure Site** - Set up site-level configuration in the Azure portal
@@ -2917,7 +2917,7 @@ After reboot, BIOS POST will:
 - Re-enumerate hardware and create fresh default boot entries
 - `SysPrepClean` auto-resets to "None"
 
-Dell AX-760 factory default boot order (rebuilt by BIOS):
+Dell AX-series server factory default boot order (rebuilt by BIOS):
 
 1. **PXE Device 1** — Embedded NIC 1 Port 1 Partition 1
 2. **PXE Device 2** — Embedded NIC 1 Port 2 Partition 1
@@ -3039,7 +3039,7 @@ TIP: Always run with `-DryRun` first to see current boot state. After applying, 
     - Re-enumerate hardware and create fresh default boot entries
     - SysPrepClean auto-resets to "None"
 
-    Dell AX-760 factory default boot order (rebuilt by BIOS):
+    Dell AX-series server factory default boot order (rebuilt by BIOS):
       1. PXE Device 1 — Embedded NIC 1 Port 1 Partition 1
       2. PXE Device 2 — Embedded NIC 1 Port 2 Partition 1
       3. BOSS Card Virtual Disk (RAID 1 M.2 SSD)
@@ -4226,7 +4226,7 @@ This is commonly observed when:
 
 #### Root Cause
 
-The **Dell BOSS (Boot Optimized Storage Solution)** card is a hardware RAID controller that mirrors two M.2 SSDs in a RAID 1 configuration for OS boot. On Dell PowerEdge AX-series servers (e.g., AX-760), this is typically a **BOSS-N1** controller (16th generation). Older generations may use BOSS-S1 (14G) or BOSS-S2 (15G).
+The **Dell BOSS (Boot Optimized Storage Solution)** card is a hardware RAID controller that mirrors two M.2 SSDs in a RAID 1 configuration for OS boot. The BOSS controller generation varies by server model — see the BOSS card generations table in the script notes below for the mapping.
 
 When a server was previously provisioned, the BOSS card's virtual disk contains partitions and a Windows Boot Manager entry from the prior installation. Even after setting the boot source override to virtual CD for ZTP, the BIOS may fall back to the stale boot entry on the BOSS card, causing a boot loop.
 
@@ -4271,7 +4271,7 @@ $cred = Get-Credential -UserName root -Message "Enter iDRAC password"
 - Summary table with pass/fail per node
 - JSON results file in `logs/boss-reset-results-<timestamp>.json`
 
-TIP: On Dell AX-760 servers with a BOSS-N1 controller, the FQDD is typically `AHCI.Slot.4-1`. The script auto-detects this — use `-BOSSControllerFQDD` only if auto-detection fails.
+TIP: On Dell AX-750 servers with a BOSS-S2 controller, the FQDD is typically `AHCI.Slot.4-1` or `AHCI.Slot.3-1`. The script auto-detects the BOSS controller — use `-BOSSControllerFQDD` only if auto-detection fails.
 
 **Or copy/paste the script contents:**
 ```powershell
@@ -4350,9 +4350,9 @@ TIP: On Dell AX-760 servers with a BOSS-N1 controller, the FQDD is typically `AH
     - environment.yaml configured with keyvault.platform_name and ztp.idrac_secret_name
 
     Dell BOSS Card Generations:
-    - BOSS-N1: 16th gen (AX-760, R760) — typically AHCI.Slot.4-1
-    - BOSS-S2: 15th gen (AX-750, R750) — typically AHCI.Slot.4-1 or AHCI.Slot.3-1
+    - BOSS-S2: 15th gen (AX-750, R750) — typically AHCI.Slot.4-1 or AHCI.Slot.3-1 (validated)
     - BOSS-S1: 14th gen (AX-740, R740) — varies by configuration
+    - BOSS-N1: 16th gen (AX-760, R760) — typically AHCI.Slot.4-1 (AX-760 NOT validated for Simplified machine provisioning)
 
     WARNING: This script permanently destroys all data on the BOSS card M.2 drives.
 #>
