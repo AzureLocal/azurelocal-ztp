@@ -1,0 +1,17 @@
+# MkDocs build dependencies for Azure Local ZTP
+# Used by deploy-docs.yml workflow and local `mkdocs serve`
+
+mkdocs==1.6.1
+mkdocs-material==9.5.49
+mkdocs-material-extensions==1.3.1
+pymdown-extensions==10.13
+
+# Pin pygments to avoid filename=None TypeError with pymdownx.highlight
+# (pygments >=2.19 changed HtmlFormatter option handling)
+pygments==2.17.2
+
+# Plugins
+mkdocs-include-markdown-plugin==7.1.2
+mkdocs-mermaid2-plugin==1.2.1
+mkdocs-minify-plugin==0.8.0
+mkdocs-git-revision-date-localized-plugin==1.3.0
