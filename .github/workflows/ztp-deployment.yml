@@ -1,0 +1,26 @@
+name: ZTP Deployment
+
+# PLACEHOLDER — see repo-management/automation.md ("ztp-deployment.yml") for
+# the intended implementation.
+#
+# Intent: manual workflow_dispatch that runs end-to-end automation against a
+# target cluster:
+#   - Discover BMCs
+#   - Mount the maintenance environment ISO via Redfish
+#   - Set boot order
+#   - Restart
+#   - Collect FDO ownership vouchers
+#   - (optional) drive Azure portal provisioning steps
+#
+# This is the primary differentiator vs the official Microsoft documentation,
+# which requires manual USB media creation and per-machine boot.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder
+        run: echo "ztp-deployment.yml is a placeholder. See repo-management/automation.md."

@@ -1,0 +1,11 @@
+# Test Directory Structure
+# This directory contains various types of tests for the repository
+
+## unit/
+# Unit tests for individual components (scripts, modules, etc.)
+
+## integration/
+# Integration tests that test combinations of components
+
+## e2e/
+# End-to-end tests that test complete deployment scenarios

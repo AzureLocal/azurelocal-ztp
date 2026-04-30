@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m:*)",
+      "Bash(git push:*)",
+      "Bash(gh pr:*)",
+      "Bash(gh issue:*)",
+      "Bash(gh run:*)",
+      "Bash(gh api:*)",
+      "Bash(gh label:*)",
+      "Bash(gh workflow:*)",
+      "Bash(mkdocs build:*)",
+      "Bash(mkdocs serve:*)",
+      "Bash(pip install mkdocs:*)",
+      "Bash(pwsh -NoProfile -File:*)",
+      "Bash(pwsh -NoProfile -Command:*)",
+      "Bash(pwsh -NonInteractive:*)",
+      "Bash(Invoke-Pester:*)",
+      "Bash(Invoke-ScriptAnalyzer:*)",
+      "WebFetch(domain:learn.microsoft.com)",
+      "WebFetch(domain:azurelocal.cloud)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:docs.dell.com)",
+      "WebFetch(domain:download.lenovo.com)",
+      "WebFetch(domain:support.hpe.com)",
+      "WebFetch(domain:fidoalliance.org)",
+      "mcp__claude_ai_Microsoft_Learn__microsoft_docs_search",
+      "mcp__claude_ai_Microsoft_Learn__microsoft_docs_fetch",
+      "mcp__claude_ai_Microsoft_Learn__microsoft_code_sample_search"
+    ]
+  }
+}

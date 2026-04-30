@@ -1,0 +1,76 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# OS
+.DS_Store
+*.log
+*.tmp
+*.swp
+*.bak
+Thumbs.db
+Desktop.ini
+
+# Terraform
+.terraform/
+terraform.tfstate
+terraform.tfstate.backup
+*.tfvars
+
+# Bicep
+*.bicepparam
+
+# Ansible
+*.retry
+
+# Build outputs
+dist/
+build/
+docs/build/
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code local overrides (committed: .claude/settings.json — shared)
+.claude/settings.local.json
+.claude/.credentials.json
+
+# MkDocs build output
+site/
+
+# Test results
+test-results/
+coverage/
+
+# Logs (but keep sample logs)
+logs/*.log
+!logs/README.md
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Generated config (built from cluster-config.md at pipeline time)
+# These contain environment-specific values and should NOT be committed.
+# Run Generate-ConfigFromMD.ps1 to regenerate from cluster-config.md.
+config/environment.yaml
+config/environment.json
+
+# Cluster reference with real values (template is committed, actual .env is not)
+config/cluster-reference.env
+
+# Cluster config (contains secrets, never commit)
+config/cluster/cluster-config.md
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Docker
+.dockerignore

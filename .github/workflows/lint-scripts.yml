@@ -1,0 +1,15 @@
+name: Lint Scripts
+
+# PLACEHOLDER — see repo-management/automation.md for the intended implementation.
+# When wired up, this should run PSScriptAnalyzer against scripts/**/*.ps1 on
+# push or PR that touches scripts/**.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder
+        run: echo "lint-scripts.yml is a placeholder. See repo-management/automation.md."

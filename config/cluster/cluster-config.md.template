@@ -1,0 +1,419 @@
+# Azure Local Cluster Configuration — TEMPLATE
+
+[![Azure Local Configuration](https://img.shields.io/badge/Azure%20Local-Converged-blue?logo=microsoft-azure)](https://azure.microsoft.com/en-us/products/azure-stack/)
+
+## Overview
+
+This is a **TEMPLATE** cluster-config.md. For new deployments:
+
+1. Fill in `config/cluster-reference.env` (copy from `.template`)
+2. Run Pipeline 1 ("ZTP Config Bootstrap") to generate this file automatically
+3. Or manually copy this template and fill in your values
+
+> **DO NOT** edit this template file directly. It is the reference scaffolding
+> that `Generate-ConfigFromReference.ps1` uses as its output format.
+
+| Detail | Value |
+|--------|-------|
+| **Cluster Name** | `[CHANGE-ME]` |
+| **Configuration Type** | Converged Intent with External Storage |
+| **Node Count** | [CHANGE-ME]x Dell AX-760 |
+| **Azure Region** | [CHANGE-ME] |
+| **Last Updated** | [AUTO-GENERATED] |
+| **Generated From** | cluster-reference.env |
+
+---
+
+## Table of Contents
+
+1. [Azure Identity](#1-azure-identity)
+2. [Azure Resources](#2-azure-resources)
+3. [Active Directory & Domain](#3-active-directory--domain)
+4. [Infrastructure](#4-infrastructure)
+5. [Nodes](#5-nodes)
+6. [Networking](#6-networking)
+7. [Storage (Fiber Channel / Pure)](#7-storage-fiber-channel--pure)
+8. [Deployment Configuration](#8-deployment-configuration)
+9. [Authentication & Credentials](#9-authentication--credentials)
+10. [ZTP Configuration](#10-ztp-configuration)
+11. [Scripts Configuration](#11-scripts-configuration)
+12. [GitHub Actions Runner](#12-github-actions-runner)
+
+---
+
+## 1. Azure Identity
+
+### Azure Tenant
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| AZURE_TENANT_ID | [CHANGE-ME] | Azure tenant ID |
+| AZURE_PRIMARY_DOMAIN | [CHANGE-ME] | Azure primary domain |
+| AZURE_TENANT_DIRECTORY | [CHANGE-ME] | Azure tenant directory |
+
+### Azure Subscriptions
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| AZURE_MGMT_SUBSCRIPTION_ID | [CHANGE-ME] | Management subscription ID |
+| AZURE_WORKLOAD_SUBSCRIPTION_ID | [CHANGE-ME] | Workload subscription ID |
+
+---
+
+## 2. Azure Resources
+
+### Resource Groups
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| RG_CLUSTER | [CHANGE-ME] | Azure Local cluster resource group |
+| RG_ARC | [CHANGE-ME] | Arc resources resource group |
+| RG_INFRA | [CHANGE-ME] | Management infrastructure resource group |
+
+### Core Azure Resources
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| AZURE_CLUSTER_RESOURCE_NAME | [CHANGE-ME] | Azure Local cluster resource name |
+| AZURE_CUSTOM_LOCATION_NAME | [CHANGE-ME]-CL | Azure Local custom location name |
+| AZURE_CLOUD_WITNESS_STORAGE | [CHANGE-ME] | Cloud witness storage account |
+| AZURE_DIAGNOSTIC_STORAGE | [CHANGE-ME] | Diagnostic storage account |
+
+### Key Vault
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| KEYVAULT_AZURE_LOCAL_NAME | [CHANGE-ME]-kv | Azure Local Key Vault name (created by deployment) |
+| KEYVAULT_AZURE_LOCAL_RESOURCE_GROUP | [CHANGE-ME] | Azure Local Key Vault resource group |
+| KEYVAULT_PLATFORM_NAME | [CHANGE-ME] | Platform Key Vault name |
+| KEYVAULT_PLATFORM_RESOURCE_GROUP | [CHANGE-ME] | Platform Key Vault resource group |
+| KEYVAULT_SUBSCRIPTION_ID | [CHANGE-ME] | Key Vault subscription ID |
+
+---
+
+## 3. Active Directory & Domain
+
+### Domain Configuration
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| DOMAIN_FQDN | [CHANGE-ME] | Active Directory FQDN |
+| DOMAIN_NETBIOS | [CHANGE-ME] | Active Directory NetBIOS name |
+| DOMAIN_OU_PATH | [CHANGE-ME] | Organizational Unit path |
+| NAMING_PREFIX | hci | Naming prefix |
+
+### Active Directory Groups
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| AD_GROUP_AZURE_LOCAL_ADMINS | Azure Local Admins | Azure Local administrators group |
+
+---
+
+## 4. Infrastructure
+
+### Cluster Details
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| CLUSTER_NAME | [CHANGE-ME] | Azure Local cluster name |
+| CLUSTER_ENVIRONMENT | [CHANGE-ME] | Environment designation |
+| CLUSTER_LOCATION | [CHANGE-ME] | Location code |
+| NODE_COUNT | [CHANGE-ME] | Number of cluster nodes |
+
+### Azure VMs
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| AZURE_DC_01_IP | [CHANGE-ME] | Domain Controller 1 IP address |
+| AZURE_DC_01_ROLE | Domain Controller | Domain Controller 1 role |
+| AZURE_DC_02_IP | [CHANGE-ME] | Domain Controller 2 IP address |
+| AZURE_DC_02_ROLE | Domain Controller | Domain Controller 2 role |
+| AZURE_RUNNER_IP | [CHANGE-ME] | GitHub Actions runner / share server IP |
+| AZURE_RUNNER_ROLE | GitHub Actions Runner + Share Server | Runner VM role |
+
+---
+
+## 5. Nodes
+
+### Physical Nodes (Dell AX-760)
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| NODE_01_HOSTNAME | [CHANGE-ME] | Node 1 hostname |
+| NODE_01_FQDN | [CHANGE-ME] | Node 1 FQDN |
+| NODE_01_IP | [CHANGE-ME] | Node 1 management IP |
+| NODE_01_IDRAC_IP | [CHANGE-ME] | Node 1 iDRAC IP |
+| NODE_01_SERVICE_TAG | [DISCOVERED] | Node 1 Dell service tag |
+| NODE_01_RACK_POSITION | [CHANGE-ME] | Node 1 rack position |
+
+> Repeat for each node (NODE_02, NODE_03, NODE_04, etc.)
+
+---
+
+## 6. Networking
+
+### 6.1 Network Definitions
+
+| Network | CIDR | Gateway | VLAN | Purpose |
+|---------|------|---------|------|---------|
+| OOB | [CHANGE-ME] | [CHANGE-ME] | [CHANGE-ME] | Out Of Band Network |
+| Management | [CHANGE-ME] | [CHANGE-ME] | [CHANGE-ME] | Management Network |
+| SMB-A | [CHANGE-ME] | — | [CHANGE-ME] | Storage SMB Network A |
+| SMB-B | [CHANGE-ME] | — | [CHANGE-ME] | Storage SMB Network B |
+| Compute | [CHANGE-ME] | [CHANGE-ME] | [CHANGE-ME] | Compute Network |
+
+### 6.2 Cluster Infrastructure IPs
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| CLUSTER_IP_POOL_START | [CHANGE-ME] | Infrastructure IP pool start |
+| CLUSTER_IP_POOL_END | [CHANGE-ME] | Infrastructure IP pool end |
+| INFRASTRUCTURE_GATEWAY | [CHANGE-ME] | Infrastructure network gateway |
+| INFRASTRUCTURE_SUBNET_MASK | 255.255.255.0 | Infrastructure subnet mask |
+| DNS_SERVER_1 | [CHANGE-ME] | Primary DNS server |
+| DNS_SERVER_2 | [CHANGE-ME] | Secondary DNS server |
+
+### 6.3 Network Intents
+
+> Standard Dell AX-760 network intent configuration. Modify only if your
+> hardware differs from the standard 3-intent layout.
+
+#### Intent 1: Management
+
+| Setting | Value |
+|---------|-------|
+| Name | Management |
+| Traffic Type | Management |
+| Adapters | Embedded Nic 1, Embedded Nic 2 |
+| Jumbo Packet | 9014 |
+| Network Direct | Disabled |
+
+#### Intent 2: Compute
+
+| Setting | Value |
+|---------|-------|
+| Name | Compute |
+| Traffic Type | Compute |
+| Adapters | Slot 3 Port 1, Slot 6 Port 1 |
+| Jumbo Packet | 9014 |
+| Network Direct | Enabled |
+| Network Direct Technology | RoCEv2 |
+
+#### Intent 3: Storage
+
+| Setting | Value |
+|---------|-------|
+| Name | Storage |
+| Traffic Type | Storage |
+| Adapters | Slot 3 Port 2, Slot 6 Port 2 |
+| Jumbo Packet | 9014 |
+| Network Direct | Enabled |
+| Network Direct Technology | RoCEv2 |
+
+### 6.4 Physical Port MAC Addresses
+
+> These are populated automatically by hardware discovery.
+
+| Port | MAC Address |
+|------|-------------|
+| Slot 3 Port 1 | [DISCOVERED] |
+| Slot 3 Port 2 | [DISCOVERED] |
+| Slot 6 Port 1 | [DISCOVERED] |
+| Slot 6 Port 2 | [DISCOVERED] |
+
+---
+
+## 7. Storage (Fiber Channel / Pure)
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| FC_HBA_MODEL | [CHANGE-ME] | Fiber channel HBA model |
+| FC_SPEED | [CHANGE-ME] | Fiber channel speed |
+| FC_MULTIPATHING | MPIO | Multipathing configuration |
+
+---
+
+## 8. Deployment Configuration
+
+### 8.1 General Settings
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| DEPLOYMENT_MODE | Validate | Deployment mode |
+| CONFIGURATION_MODE | InfraOnly | Configuration mode |
+| AZURE_CLOUD_TYPE | Public | Azure cloud type |
+| AZURE_REGION | [CHANGE-ME] | Target Azure region |
+| CREATE_NEW_KEY_VAULT | true | Whether to create a new Key Vault |
+| WITNESS_TYPE | Cloud | Witness type |
+
+### 8.2 Security Settings
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| SECURITY_LEVEL | Customized | Security level |
+| DRIFT_CONTROL_ENFORCED | true | Drift control enforced |
+| CREDENTIAL_GUARD_ENFORCED | true | Credential guard enforced |
+| SMB_SIGNING_ENFORCED | true | SMB signing enforced |
+| SMB_CLUSTER_ENCRYPTION | true | SMB cluster encryption |
+| BITLOCKER_BOOT_VOLUME | true | BitLocker boot volume |
+| BITLOCKER_DATA_VOLUMES | true | BitLocker data volumes |
+| WDAC_ENFORCED | false | WDAC enforced |
+
+---
+
+## 9. Authentication & Credentials
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| LOCAL_ADMIN_USERNAME | administrator | Local administrator username |
+| LOCAL_ADMIN_PASSWORD | [SECURED] | Local administrator password |
+| LCM_DEPLOYMENT_ACCOUNT | [CHANGE-ME] | LCM deployment account |
+| LCM_DEPLOYMENT_ACCOUNT_PASSWORD | [SECURED] | LCM deployment account password |
+| PROVISIONING_ACCOUNT | azl-admin | Provisioning account |
+| PROVISIONING_ACCOUNT_PASSWORD | [SECURED] | Provisioning account password |
+| IDRAC_USERNAME | [CHANGE-ME] | iDRAC management username |
+| IDRAC_PASSWORD | [SECURED] | iDRAC password (retrieve from Key Vault) |
+
+---
+
+## 10. ZTP Configuration
+
+### 10.1 File Share
+
+> **Relocated:** Share variables have moved to [Section 12.4 — Share Configuration](#124-share-configuration). The share runs on the GitHub Actions runner by default but can be pointed at a separate server.
+
+### 10.2 ZTP Media
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| ZTP_MAINTENANCE_VERSION | 2512 | Azure Local maintenance version |
+| ZTP_DOWNLOAD_URL | https://aka.ms/aep/installeros/2512 | Azure Local OS download URL |
+| ZTP_DOWNLOAD_DIRECTORY | C:\AzureLocal\ZTP | Local download directory |
+| ZTP_EXTRACTED_DIRECTORY | C:\AzureLocal\ZTP\extracted | Extracted tools directory |
+
+### 10.3 ZTP Credentials
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| IDRAC_SECRET_NAME | idrac-credentials | Key Vault secret name for iDRAC credentials |
+
+---
+
+## 11. Scripts Configuration
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| SCRIPTS_WORKING_DIRECTORY | [AUTO-DETECTED] | Scripts working directory (repo root on runner) |
+| SCRIPTS_LOGS_DIRECTORY | .\logs | Logs output directory |
+| SCRIPTS_OUTPUT_DIRECTORY | .\output | Script output directory |
+| SCRIPTS_TEMP_DIRECTORY | .\temp | Temporary files directory |
+
+---
+
+## 12. GitHub Actions Runner
+
+The runner is the server where the pipeline executes, the repository is cloned, and (by default) the ZTP file share is hosted. `RUNNER_DEPLOYMENT_MODE` controls whether Pipeline 0 deploys a new VM or connects to an existing server.
+
+### 12.1 Deployment Control
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| RUNNER_DEPLOYMENT_MODE | [CHANGE-ME] | How the runner is provisioned: `deploy_azure_vm`, `existing_azure_vm`, `existing_onprem`, `manual` |
+| RUNNER_SKIP_AGENT_INSTALL | false | Skip GitHub Actions agent installation (operator handles it) |
+| RUNNER_SKIP_PREREQUISITES | false | Skip prerequisite software installation (PS7, Git, Az CLI, VS Code) |
+
+### 12.2 Server Identity
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| RUNNER_IP_ADDRESS | [CHANGE-ME] | Runner server IP address |
+| RUNNER_HOSTNAME | [CHANGE-ME] | Windows computer name (15 character max) |
+| RUNNER_FQDN | [CHANGE-ME] | Fully qualified domain name |
+| RUNNER_OS | Windows Server 2025 | Operating system |
+| RUNNER_DOMAIN_JOINED | true | Whether the server is/should be domain-joined |
+
+### 12.3 GitHub Agent Configuration
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| RUNNER_AGENT_ORG | [CHANGE-ME] | GitHub organization |
+| RUNNER_AGENT_REPO | [CHANGE-ME] | GitHub repository name |
+| RUNNER_AGENT_REPO_URL | [CHANGE-ME] | Full clone URL (supports forks, GHE) |
+| RUNNER_AGENT_GROUP | default | GitHub runner group |
+| RUNNER_AGENT_LABELS | self-hosted, Windows, ztp | Comma-separated runner labels |
+| RUNNER_AGENT_NAME | [CHANGE-ME] | Runner display name in GitHub Actions |
+| RUNNER_AGENT_PAT_SECRET | github-runner-pat | Key Vault secret name for GitHub PAT |
+| RUNNER_AGENT_INSTALL_DIR | C:\actions-runner | Runner agent install directory |
+| RUNNER_REPO_CLONE_DIR | C:\git\[REPO_NAME] | Where the repository is cloned |
+
+### 12.4 Share Configuration
+
+The ZTP file share runs on the runner by default. To host the share on a different server, change `RUNNER_SHARE_SERVER_IP`.
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| RUNNER_SHARE_SERVER_IP | [CHANGE-ME] | Share host IP (defaults to RUNNER_IP_ADDRESS if blank) |
+| RUNNER_SHARE_NAME | ztp | SMB share name |
+| RUNNER_SHARE_LOCAL_PATH | C:\share\ztp | Local filesystem path for the share |
+| RUNNER_SHARE_NETWORK_PATH | [AUTO] | UNC path — auto-composed from server_ip + name if blank |
+| RUNNER_SHARE_ACCESS_USERNAME | svc_idrac_share | Local user created for iDRAC share access |
+| RUNNER_SHARE_ACCESS_PWD_SECRET | share-access-password | Key Vault secret for share password |
+| RUNNER_SHARE_SKIP_SETUP | false | Skip share creation (share already exists) |
+| RUNNER_SHARE_SKIP_USER | false | Skip local user creation (user already exists) |
+| RUNNER_SHARE_EXTRA_DISK | false | Use a dedicated data disk for share storage |
+| RUNNER_SHARE_DISK_SIZE_GB | 256 | Data disk size in GB (when extra_disk is true) |
+| RUNNER_SHARE_DISK_LETTER | D | Drive letter for the data disk |
+
+### 12.5 Azure VM Deployment
+
+Only used when `RUNNER_DEPLOYMENT_MODE = deploy_azure_vm`.
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| RUNNER_VM_RESOURCE_NAME | [CHANGE-ME] | Azure resource name for the VM |
+| RUNNER_VM_RESOURCE_GROUP | [CHANGE-ME] | Target resource group |
+| RUNNER_VM_SUBSCRIPTION_ID | [CHANGE-ME] | Target subscription ID |
+| RUNNER_VM_TENANT_ID | [CHANGE-ME] | Target tenant ID (defaults to AZURE_TENANT_ID if blank) |
+| RUNNER_VM_LOCATION | eastus | Azure region |
+| RUNNER_VM_SKU_SIZE | Standard_D4s_v5 | VM SKU (4 vCPU / 16 GB min) |
+| RUNNER_VM_IMAGE_PUBLISHER | MicrosoftWindowsServer | Marketplace image publisher |
+| RUNNER_VM_IMAGE_OFFER | WindowsServer | Marketplace image offer |
+| RUNNER_VM_IMAGE_SKU | 2025-datacenter-g2 | Marketplace image SKU |
+| RUNNER_VM_IMAGE_VERSION | latest | Image version |
+| RUNNER_VM_OS_DISK_SIZE_GB | 128 | OS disk size |
+| RUNNER_VM_OS_DISK_TYPE | Premium_LRS | OS disk type |
+| RUNNER_VM_DATA_DISK_SIZE_GB | 256 | Data disk for share |
+| RUNNER_VM_DATA_DISK_TYPE | Premium_LRS | Data disk storage type |
+| RUNNER_VM_VNET_NAME | [CHANGE-ME] | VNet to deploy into |
+| RUNNER_VM_VNET_RG | [CHANGE-ME] | VNet resource group |
+| RUNNER_VM_SUBNET_NAME | [CHANGE-ME] | Subnet name |
+| RUNNER_VM_PRIVATE_IP | [CHANGE-ME] | Static private IP (maps to RUNNER_IP_ADDRESS) |
+| RUNNER_VM_ENABLE_PUBLIC_IP | false | Assign a public IP |
+| RUNNER_VM_NSG_NAME | [CHANGE-ME] | Network security group name |
+| RUNNER_VM_ADMIN_USERNAME | azureadmin | VM local admin username |
+| RUNNER_VM_ADMIN_PWD_SECRET | runner-vm-password | Key Vault secret for VM admin password |
+| RUNNER_VM_TAG_ROLE | ztp-runner | Azure tag: role |
+| RUNNER_VM_TAG_ENVIRONMENT | prod | Azure tag: environment |
+
+### 12.6 Existing Server Access
+
+Used when `RUNNER_DEPLOYMENT_MODE = existing_azure_vm` or `existing_onprem`.
+
+| Variable Name | Value | Description |
+|---------------|-------|-------------|
+| RUNNER_EXISTING_ADMIN_USERNAME | azureadmin | Admin username for remote access |
+| RUNNER_EXISTING_ADMIN_PWD_SECRET | runner-admin-password | Key Vault secret for admin password |
+| RUNNER_EXISTING_WINRM_ENABLED | true | WinRM available for remote configuration |
+| RUNNER_EXISTING_WINRM_PORT | 5986 | WinRM HTTPS port |
+| RUNNER_EXISTING_SSH_ENABLED | false | SSH available |
+| RUNNER_EXISTING_DOMAIN_JOIN | false | Pipeline should domain-join the server |
+| RUNNER_EXISTING_WINDOWS_UPDATE | true | Run Windows Update before setup |
+| RUNNER_EXISTING_AZURE_RESOURCE_ID | | Azure resource ID (existing_azure_vm only, blank for on-prem) |
+
+---
+
+---
+**Version Control**
+- This is a TEMPLATE — actual cluster-config.md is generated by Pipeline 1
+- Tags: azure-local, configuration, template, ztp, github-runner

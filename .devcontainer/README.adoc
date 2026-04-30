@@ -1,0 +1,7 @@
+# Dev Container Configuration
+# This directory contains VS Code dev container configurations
+
+# Benefits:
+# - Consistent development environment
+# - Pre-installed tools and dependencies
+# - Isolated development setup

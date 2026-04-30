@@ -1,0 +1,66 @@
+site_name: Azure Local ZTP
+site_description: Automation for Azure Local "Simplified machine provisioning" — drives BMC/Redfish-based bring-up that bypasses manual USB media creation.
+site_url: https://azurelocal.github.io/azurelocal-ztp/
+repo_url: https://github.com/AzureLocal/azurelocal-ztp
+repo_name: AzureLocal/azurelocal-ztp
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+  icon:
+    repo: fontawesome/brands/github
+
+nav:
+  - Home: index.md
+  - Server preparation: server-preparation.md
+  - Azure portal provisioning: azure-portal-provisioning.md
+  - Single-node S2D deployment: single-node-s2d-deployment.md
+  - Automation pipelines: automation-pipelines.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/AzureLocal/azurelocal-ztp
+      name: GitHub Repository
+  homepage: https://azurelocal.cloud
+
+copyright: >-
+  Copyright &copy; 2026 AzureLocal.

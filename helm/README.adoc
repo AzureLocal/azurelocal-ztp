@@ -1,0 +1,7 @@
+# Helm Charts Directory
+# This directory contains Kubernetes Helm charts for deploying applications
+
+# Use this for:
+# - Application deployments on Kubernetes
+# - Infrastructure components
+# - Service meshes and ingress controllers

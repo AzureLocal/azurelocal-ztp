@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Microsoft Learn — Simplified machine provisioning
+    url: https://learn.microsoft.com/en-us/azure/azure-local/deploy/simplified-machine-provisioning
+    about: Canonical Microsoft documentation for the public-preview feature this repo automates.
+  - name: AzureLocal organization
+    url: https://github.com/AzureLocal
+    about: Other repositories in the AzureLocal portfolio.
