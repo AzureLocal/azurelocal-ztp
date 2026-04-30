@@ -1,7 +1,0 @@
-# Docker Directory
-# This directory contains Docker files and container configurations
-
-# Examples:
-# - Dockerfile for CI/CD agents
-# - Docker Compose files for local development
-# - Container images for tools

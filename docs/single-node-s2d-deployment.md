@@ -1,19 +1,17 @@
-# Single-Node Storage Spaces Direct Deployment Guide — Dell AX-760
+# Single-Node Storage Spaces Direct Deployment Guide
 
 ## Overview
 
-Complete deployment guide for transforming Dell AX-760 (node04/tplabs-01-n04) into single-node Storage Spaces Direct cluster.
+Complete deployment guide for transforming a server into a single-node Storage Spaces Direct cluster.
 
-**Server Details:**
+**Server Details (fill in before starting):**
 
-- New hostname: `tplabs-s2d-n01`
-- New IP: `192.168.211.15`
-- Cluster name: `tplabs-s2d-clus`
-- Cluster IP: `192.168.211.30`
+- New hostname: `{node_hostname}`
+- New IP: `{node_management_ip}`
+- Cluster name: `{cluster_name}`
+- Cluster IP: `{cluster_ip}`
 
 This guide provides detailed PowerShell commands for all deployment phases.
-
-<<<
 
 ## Operating System & Initial Configuration
 
@@ -25,7 +23,7 @@ Boot from installation media and install Windows Server 2025 Datacenter.
 
 ```powershell
 # Set computer name
-Rename-Computer -NewName "tplabs-s2d-n01" -Force
+Rename-Computer -NewName "{node_hostname}" -Force
 
 # Set timezone
 Set-TimeZone -Id "Eastern Standard Time"
@@ -63,7 +61,7 @@ Network ATC (Network Intents) will configure the final networking — vSwitch, R
 
 ### Verify Physical Adapter Mapping
 
-Verify the physical slot/port layout matches expectations before configuring. The Dell AX-760 has Mellanox ConnectX-6 Lx (2× 100 Gbps) in Slots 3 and 6, plus Broadcom NetXtreme (2× 1 Gbps) embedded.
+Verify the physical slot/port layout matches expectations before configuring. Adapter names vary by server model — run the commands below to discover what the OS sees, then substitute the correct adapter names throughout this guide.
 
 ```powershell
 # List all physical adapters with slot info and link speed
@@ -93,10 +91,10 @@ Assign a temporary management IP directly on a physical adapter so we can join t
 
 ```powershell
 # Assign temporary management IP on Slot 3 Port 1
-New-NetIPAddress -InterfaceAlias "Slot 3 Port 1" -IPAddress 192.168.211.15 `
-    -PrefixLength 24 -DefaultGateway 192.168.211.1
+New-NetIPAddress -InterfaceAlias "Slot 3 Port 1" -IPAddress {node_management_ip} `
+    -PrefixLength 24 -DefaultGateway {default_gateway}
 Set-DnsClientServerAddress -InterfaceAlias "Slot 3 Port 1" `
-    -ServerAddresses 10.250.1.36, 10.250.1.37
+    -ServerAddresses {dns_server_1}, {dns_server_2}
 ```
 
 IMPORTANT: This is a temporary configuration. When Network ATC creates the vSwitch (Configure Network Intents section), it will consume `Slot 3 Port 1` and `Slot 6 Port 1` into the SET team. The management IP will migrate to the virtual adapter automatically.
@@ -124,19 +122,19 @@ Run these commands from a domain controller or a management machine with `RSAT-A
 
 # Create S2D OU under Clusters (skip if it already exists)
 New-ADOrganizationalUnit -Name "S2D" `
-    -Path "OU=Clusters,OU=Servers,OU=MGMT,DC=azrl,DC=mgmt" -ProtectedFromAccidentalDeletion $true
+    -Path "{clusters_ou}" -ProtectedFromAccidentalDeletion $true
 
 # Create cluster-specific OU under S2D
-New-ADOrganizationalUnit -Name "tplabs-s2d-clus" `
-    -Path "OU=S2D,OU=Clusters,OU=Servers,OU=MGMT,DC=azrl,DC=mgmt" -ProtectedFromAccidentalDeletion $true
+New-ADOrganizationalUnit -Name "{cluster_name}" `
+    -Path "{s2d_ou}" -ProtectedFromAccidentalDeletion $true
 ```
 
 The resulting OU structure:
 
 ```
-OU=Clusters,OU=Servers,OU=MGMT,DC=azrl,DC=mgmt
+{clusters_ou}
   └── OU=S2D
-        └── OU=tplabs-s2d-clus    ← node, CNO, and deployment account live here
+        └── OU={cluster_name}    ← node, CNO, and deployment account live here
 ```
 
 ### Create S2D Admins Security Group
@@ -147,12 +145,12 @@ Ensure the `S2D Admins` security group exists before domain-joining the node. Th
 # Run from a domain controller or machine with RSAT-AD-PowerShell:
 
 # Check if the group already exists; create it if not
-if (-not (Get-ADGroup -Filter 'Name -eq "S2D Admins"' -SearchBase "OU=Security Groups,OU=MGMT,DC=azrl,DC=mgmt" -ErrorAction SilentlyContinue)) {
+if (-not (Get-ADGroup -Filter 'Name -eq "S2D Admins"' -SearchBase "{security_groups_ou}" -ErrorAction SilentlyContinue)) {
     New-ADGroup -Name "S2D Admins" `
         -SamAccountName "S2D Admins" `
         -GroupCategory Security `
         -GroupScope DomainLocal `
-        -Path "OU=Security Groups,OU=MGMT,DC=azrl,DC=mgmt" `
+        -Path "{security_groups_ou}" `
         -Description "Local administrators for S2D cluster nodes"
     Write-Host "Created 'S2D Admins' security group." -ForegroundColor Green
 } else {
@@ -167,10 +165,10 @@ NOTE: Add the appropriate user accounts to this group after creation. Members of
 Domain join places the node computer object directly into the cluster OU. This must happen before CNO pre-staging so the node account exists when we set ACL permissions.
 
 ```powershell
-# Join to domain azrl.mgmt — place the computer object in the cluster OU
+# Join to domain {domain_fqdn} — place the computer object in the cluster OU
 $cred = Get-Credential -Message "Enter Domain Administrator credentials"
-Add-Computer -DomainName "azrl.mgmt" -Credential $cred `
-    -OUPath "OU=tplabs-s2d-clus,OU=S2D,OU=Clusters,OU=Servers,OU=MGMT,DC=azrl,DC=mgmt" -Restart
+Add-Computer -DomainName "{domain_fqdn}" -Credential $cred `
+    -OUPath "{cluster_objects_ou}" -Restart
 ```
 
 ### Pre-Stage Cluster Name Object (CNO) & Deployment Account
@@ -180,15 +178,15 @@ Run these commands from a domain controller or management machine. The node must
 ```powershell
 # Run from a domain controller or machine with RSAT-AD-PowerShell:
 
-$clusterOU = "OU=tplabs-s2d-clus,OU=S2D,OU=Clusters,OU=Servers,OU=MGMT,DC=azrl,DC=mgmt"
+$clusterOU = "{cluster_objects_ou}"
 
 # Pre-stage the CNO in the cluster OU (disabled until cluster creation activates it)
-New-ADComputer -Name "tplabs-s2d-clus" -SamAccountName "tplabs-s2d-clus$" `
+New-ADComputer -Name "{cluster_name}" -SamAccountName "{cluster_name}$" `
     -Path $clusterOU -Enabled $false
 
 # Grant the node's computer account Full Control on the CNO
-$cno = Get-ADComputer -Identity "tplabs-s2d-clus"
-$node = Get-ADComputer -Identity "tplabs-s2d-n01"
+$cno = Get-ADComputer -Identity "{cluster_name}"
+$node = Get-ADComputer -Identity "{node_hostname}"
 $acl = Get-Acl "AD:\$($cno.DistinguishedName)"
 $ace = New-Object System.DirectoryServices.ActiveDirectoryAccessRule `
     $node.SID, "GenericAll", "Allow"
@@ -197,21 +195,21 @@ Set-Acl "AD:\$($cno.DistinguishedName)" $acl
 
 # Create the lifecycle management (deployment) account in the same OU
 # (must be created BEFORE granting it CNO permissions below)
-$lcmPassword = Read-Host -AsSecureString -Prompt "Enter password for lcm-s2d-clus01"
-New-ADUser -Name "lcm-s2d-clus01" `
-    -SamAccountName "lcm-s2d-clus01" `
-    -UserPrincipalName "lcm-s2d-clus01@azrl.mgmt" `
+$lcmPassword = Read-Host -AsSecureString -Prompt "Enter password for {lifecycle_account}"
+New-ADUser -Name "{lifecycle_account}" `
+    -SamAccountName "{lifecycle_account}" `
+    -UserPrincipalName "{lifecycle_account}@{domain_fqdn}" `
     -Path $clusterOU `
     -AccountPassword $lcmPassword `
     -Enabled $true `
     -PasswordNeverExpires $true `
     -CannotChangePassword $true `
-    -Description "Lifecycle management account for tplabs-s2d-clus"
+    -Description "Lifecycle management account for {cluster_name}"
 
 # Grant the deployment account Full Control on the CNO
-# (required if lcm-s2d-clus01 will run New-Cluster — the account creating the cluster
+# (required if {lifecycle_account} will run New-Cluster — the account creating the cluster
 # must have permission to activate the pre-staged CNO)
-$lcm = Get-ADUser -Identity "lcm-s2d-clus01"
+$lcm = Get-ADUser -Identity "{lifecycle_account}"
 $acl = Get-Acl "AD:\$($cno.DistinguishedName)"
 $ace = New-Object System.DirectoryServices.ActiveDirectoryAccessRule `
     $lcm.SID, "GenericAll", "Allow"
@@ -221,12 +219,12 @@ Set-Acl "AD:\$($cno.DistinguishedName)" $acl
 
 ### Add Local Administrators
 
-Now that the S2D Admins group and `lcm-s2d-clus01` deployment account exist in AD, add them to the local Administrators group on the node.
+Now that the S2D Admins group and `{lifecycle_account}` deployment account exist in AD, add them to the local Administrators group on the node.
 
 ```powershell
-# Run on the cluster node (tplabs-s2d-n01)
-Add-LocalGroupMember -Group "Administrators" -Member "MGMT\S2D Admins"
-Add-LocalGroupMember -Group "Administrators" -Member "MGMT\lcm-s2d-clus01"
+# Run on the cluster node ({node_hostname})
+Add-LocalGroupMember -Group "Administrators" -Member "{domain_netbios}\S2D Admins"
+Add-LocalGroupMember -Group "Administrators" -Member "{domain_netbios}\{lifecycle_account}"
 ```
 
 ## Create Failover Cluster
@@ -236,12 +234,12 @@ Add-LocalGroupMember -Group "Administrators" -Member "MGMT\lcm-s2d-clus01"
 New-Item -ItemType Directory -Path "C:\Temp" -Force
 
 # Validate cluster configuration
-Test-Cluster -Node "tplabs-s2d-n01" -Include "Storage Spaces Direct", Inventory, Network `
+Test-Cluster -Node "{node_hostname}" -Include "Storage Spaces Direct", Inventory, Network `
     -ReportName "C:\Temp\ClusterValidation"
 
 # Create cluster
-New-Cluster -Name "tplabs-s2d-clus" -Node "tplabs-s2d-n01" `
-    -StaticAddress 192.168.211.30 -NoStorage
+New-Cluster -Name "{cluster_name}" -Node "{node_hostname}" `
+    -StaticAddress {cluster_ip} -NoStorage
 ```
 
 NOTE: A cloud witness is not configured for this cluster. With only one node, a quorum witness provides no benefit — if the single node goes down, the witness alone cannot maintain quorum. If this cluster is later expanded to two or more nodes, add a cloud witness at that time with `Set-ClusterQuorum -CloudWitness`.
@@ -272,10 +270,10 @@ This intent configures RDMA (RoCEv2), DCB/QoS, and jumbo frames on `Slot 3 Port 
 Add-NetIntent -Name "Storage" `
     -Storage `
     -AdapterName "Slot 3 Port 2", "Slot 6 Port 2" `
-    -StorageVlans 712, 713
+    -StorageVlans {storage_a_vlan}, {storage_b_vlan}
 ```
 
-NOTE: Each VLAN maps to the adapter in the same position: VLAN 712 → Slot 3 Port 2 (Storage A), VLAN 713 → Slot 6 Port 2 (Storage B). Network ATC auto-assigns storage IPs from the 10.71.1.0/24 and 10.71.2.0/24 subnets.
+NOTE: Each VLAN maps to the adapter in the same position: `{storage_a_vlan}` → Slot 3 Port 2 (Storage A), `{storage_b_vlan}` → Slot 6 Port 2 (Storage B). Network ATC auto-assigns storage IPs from the `{storage_a_subnet}` and `{storage_b_subnet}` subnets.
 
 ### Verify Intent Status
 
@@ -311,11 +309,11 @@ Get-ClusterNetwork | Format-Table Name, Address, Role -AutoSize
 (Get-ClusterNetwork -Name "Unused:Cluster Network 3").Role = 0  # None
 
 # Storage networks: cluster-internal only (heartbeat + CSV/S2D traffic)
-(Get-ClusterNetwork | Where-Object {$_.Address -eq "10.71.1.0"}).Role = 1  # ClusterOnly
-(Get-ClusterNetwork | Where-Object {$_.Address -eq "10.71.2.0"}).Role = 1  # ClusterOnly
+(Get-ClusterNetwork | Where-Object {$_.Address -eq "{storage_a_network}"}).Role = 1  # ClusterOnly
+(Get-ClusterNetwork | Where-Object {$_.Address -eq "{storage_b_network}"}).Role = 1  # ClusterOnly
 
 # Management network: cluster + client access
-(Get-ClusterNetwork | Where-Object {$_.Address -eq "192.168.211.0"}).Role = 3  # ClusterAndClient
+(Get-ClusterNetwork | Where-Object {$_.Address -eq "{mgmt_network}"}).Role = 3  # ClusterAndClient
 ```
 
 NOTE: The iDRAC NDIS adapter has no IP address assigned and appears as `Unused:Cluster Network 3`. If the name differs on your system, identify it from the `Get-ClusterNetwork` output — it will be the network with a blank or missing Address — and set its Role to 0 by whatever name it has.
@@ -328,7 +326,7 @@ Enable-ClusterStorageSpacesDirect -SkipEligibilityChecks -CacheState Disabled -C
 
 # Create volume (Fixed provisioning — ~14TB usable from 4× Dell NVMe 3.84TB)
 New-Volume -FriendlyName "VMs" -FileSystem CSVFS_ReFS `
-    -StoragePoolFriendlyName "S2D on tplabs-s2d-clus" `
+    -StoragePoolFriendlyName "S2D on {cluster_name}" `
     -Size 13.5TB -ResiliencySettingName "Simple" -ProvisioningType Fixed
 
 # Verify
@@ -341,7 +339,7 @@ Get-VirtualDisk | Select-Object FriendlyName, HealthStatus
 ```powershell
 # Grant the deployment account full control on the CSV volume
 # The CSV mounts using the volume FriendlyName, not "Volume1"
-icacls "C:\ClusterStorage\VMs" /grant "MGMT\lcm-s2d-clus01:(OI)(CI)F"
+icacls "C:\ClusterStorage\VMs" /grant "{domain_netbios}\{lifecycle_account}:(OI)(CI)F"
 
 # Create folder structure (must exist before Set-VMHost will accept the paths)
 New-Item -Path "C:\ClusterStorage\VMs\Templates" -ItemType Directory -Force
@@ -416,8 +414,8 @@ msiexec /i "$env:TEMP\AzureConnectedMachineAgent.msi" /qn
 
 # Register with Azure Arc
 & "$env:ProgramFiles\AzureConnectedMachineAgent\azcmagent.exe" connect `
-    --resource-group "rg-azl-arc-mgmt-tplabs-eus-01" `
-    --tenant-id "a9b67171-3fbb-45bf-8394-eb56d02a86e4" `
+    --resource-group "{arc_resource_group}" `
+    --tenant-id "{tenant_id}" `
     --location "eastus" `
     --subscription-id "{mgmt_subscription_id}"
 ```
@@ -497,19 +495,19 @@ Get-NetAdapterRdma | Select-Object Name, Enabled, Operational | Format-Table
 
 **Server Details:**
 
-- Hostname: `tplabs-s2d-n01`
-- Management IP: `192.168.211.15`
-- Cluster Name: `tplabs-s2d-clus`
-- Cluster IP: `192.168.211.30`
-- Domain: `azrl.mgmt`
+- Hostname: `{node_hostname}`
+- Management IP: `{node_management_ip}`
+- Cluster Name: `{cluster_name}`
+- Cluster IP: `{cluster_ip}`
+- Domain: `{domain_fqdn}`
 
 **Network Configuration:**
 
-- Management: VLAN 711 (192.168.211.0/24)
-- Storage A: VLAN 712 — 10.71.1.0/24 (Slot 3 Port 2)
-- Storage B: VLAN 713 — 10.71.2.0/24 (Slot 6 Port 2)
-- Tenant 1: VLAN 718 (192.168.221.0/24)
-- Tenant 2: VLAN 719 (192.168.222.0/24)
+- Management: VLAN {mgmt_vlan} ({mgmt_subnet})
+- Storage A: VLAN {storage_a_vlan} — {storage_a_subnet} (Slot 3 Port 2)
+- Storage B: VLAN {storage_b_vlan} — {storage_b_subnet} (Slot 6 Port 2)
+- Tenant 1: VLAN {tenant1_vlan} ({tenant1_subnet})
+- Tenant 2: VLAN {tenant2_vlan} ({tenant2_subnet})
 
 **Storage Paths:**
 

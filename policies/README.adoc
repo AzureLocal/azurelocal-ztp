@@ -1,8 +1,0 @@
-# Policies Directory
-# This directory contains Azure policies, compliance rules, and governance templates
-
-# Examples:
-# - Azure Policy definitions
-# - Compliance frameworks
-# - Security policies
-# - Governance rules
