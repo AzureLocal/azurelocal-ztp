@@ -1,7 +1,7 @@
 # Azure Local ZTP Portal Provisioning Guide
 
 !!! note "Note"
-    This guide covers the Azure Portal provisioning phase of Zero-Touch Provisioning (ZTP) for Azure Local. It picks up after the servers have been bootstrapped into the maintenance environment using the [Server Preparation Guide](ztp-server-preparation-guide.md).
+    This guide covers the Azure Portal provisioning phase of Zero-Touch Provisioning (ZTP) for Azure Local. It picks up after the servers have been bootstrapped into the maintenance environment using the [Server Preparation Guide](server-preparation.md).
 
 ## Overview
 
@@ -9,7 +9,7 @@ This guide covers Phase 2 of Azure Local Zero-Touch Provisioning (ZTP). After co
 
 The complete ZTP workflow consists of three main phases:
 
-1. **Server Preparation** ([Server Preparation Guide](ztp-server-preparation-guide.md)) - Configure environment and prepare servers ✅
+1. **Server Preparation** ([Server Preparation Guide](server-preparation.md)) - Configure environment and prepare servers ✅
 2. **Azure Portal Provisioning** (This guide) - Collect vouchers, create sites, and provision machines via Azure
 3. **Cluster Deployment** - Deploy Azure Local instance via Azure portal or ARM template
 
@@ -27,7 +27,7 @@ The complete ZTP workflow consists of three main phases:
 Before beginning this phase, ensure the following:
 
 - **Server Preparation Complete:**
-    - All servers are running the maintenance environment (completed via [Server Preparation Guide](ztp-server-preparation-guide.md))
+    - All servers are running the maintenance environment (completed via [Server Preparation Guide](server-preparation.md))
     - Console shows "Maintenance environment setup completed successfully" on each server
     - Virtual media has been unmounted (cleanup step)
 
@@ -295,6 +295,6 @@ curl -fsSL "https://aka.ms/ztp/cleanup.sh" | bash -s -- \
 
 ## Document References
 
-- [Azure Local ZTP Server Preparation Guide](ztp-server-preparation-guide.md) — Phase 1: Server preparation and bootstrap
-- [ZTP Pipeline Execution Checklist](ztp-pipeline-execution.md) — CI/CD pipeline reference
-- [Microsoft ZTP Private Preview Documentation](../resources/microsoft/ZTP-for-Azure-Local-Private-Preview.md) — Official Microsoft reference
+- [Server Preparation Guide](server-preparation.md) — Phase 1: Server preparation and bootstrap
+- [Automation Pipelines](automation-pipelines.md) — Workflow documentation and design
+- [Microsoft Simplified Machine Provisioning](https://learn.microsoft.com/en-us/azure/azure-local/deploy/simplified-machine-provisioning) — Official Microsoft documentation
