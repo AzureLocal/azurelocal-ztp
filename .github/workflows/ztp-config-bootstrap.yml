@@ -1,0 +1,18 @@
+name: ZTP Config Bootstrap
+
+# PLACEHOLDER — see repo-management/automation.md ("ztp-config-bootstrap.yml")
+# for the intended implementation.
+#
+# Intent: manual workflow_dispatch that bootstraps the cluster configuration
+# files (config/cluster/cluster-config.md → config/environment.{json,yaml})
+# from a runtime template and validates the result.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder
+        run: echo "ztp-config-bootstrap.yml is a placeholder. See repo-management/automation.md."

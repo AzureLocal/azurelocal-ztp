@@ -1,0 +1,7 @@
+# Templates Directory
+# This directory contains reusable templates and boilerplates
+
+# Examples:
+# - IaC template starters
+# - Documentation templates
+# - Configuration templates

@@ -1,0 +1,24 @@
+{
+  "name": "AZL ZTP Development",
+  "dockerComposeFile": [
+    "docker-compose.yml"
+  ],
+  "service": "dev-env",
+  "workspaceFolder": "/workspaces",
+  "shutdownAction": "stopCompose",
+
+  "extensions": [
+    "ms-vscode.vscode-json",
+    "ms-vscode.powershell",
+    "ms-azuretools.vscode-bicep",
+    "hashicorp.terraform",
+    "ms-vscode.vscode-yaml",
+    "asciidoctor.asciidoctor-vscode"
+  ],
+
+  "settings": {
+    "terminal.integrated.shell.linux": "/bin/bash"
+  },
+
+  "postCreateCommand": "echo 'Development environment is ready!'"
+}

@@ -1,0 +1,4 @@
+# Examples Directory
+# This directory contains example deployments and configurations
+
+# Add example deployments here to demonstrate usage patterns

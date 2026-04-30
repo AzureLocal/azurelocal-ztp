@@ -1,0 +1,15 @@
+name: Validate Repo Structure
+
+# PLACEHOLDER — see repo-management/automation.md for the intended implementation.
+# When wired up, this should be a slim caller for:
+#   uses: AzureLocal/.github/.github/workflows/reusable-validate-structure.yml@main
+
+on:
+  workflow_dispatch:
+
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder
+        run: echo "validate-repo-structure.yml is a placeholder. See repo-management/automation.md."

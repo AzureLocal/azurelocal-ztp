@@ -1,0 +1,17 @@
+name: Deploy Docs
+
+# PLACEHOLDER — see repo-management/automation.md for the intended implementation.
+# When wired up, this should:
+#   - Build the MkDocs site from docs/
+#   - Publish to GitHub Pages on push to main touching docs/** or mkdocs.yml
+# Pattern: see azurelocal-toolkit/.github/workflows/deploy-docs.yml
+
+on:
+  workflow_dispatch:
+
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder
+        run: echo "deploy-docs.yml is a placeholder. See repo-management/automation.md."

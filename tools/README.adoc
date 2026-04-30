@@ -1,0 +1,8 @@
+# Tools Directory
+# This directory contains tool configurations and custom tools
+
+# Examples:
+# - Custom linting rules
+# - Code generation tools
+# - Validation tools
+# - CI/CD helper tools

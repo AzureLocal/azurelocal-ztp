@@ -1,0 +1,19 @@
+name: Add to Project
+
+# PLACEHOLDER — see repo-management/automation.md for the intended implementation.
+# When wired up, this should be a slim caller for:
+#   uses: AzureLocal/.github/.github/workflows/reusable-add-to-project.yml@main
+#   with:
+#     id-prefix: ZTP
+#     solution-option-id: '<solution/ztp option id>'
+# Requires ADD_TO_PROJECT_PAT secret.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder
+        run: echo "add-to-project.yml is a placeholder. See repo-management/automation.md."

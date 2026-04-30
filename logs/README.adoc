@@ -1,0 +1,9 @@
+# Logs Directory
+# This directory is for storing sample logs and log analysis tools
+
+# Note: Actual runtime logs should not be committed to the repository.
+# This directory is for:
+# - Sample log files for documentation
+# - Log parsing and analysis scripts
+# - Log format definitions
+# - Troubleshooting guides based on logs

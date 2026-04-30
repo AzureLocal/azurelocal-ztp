@@ -1,0 +1,10 @@
+version: '3.0'
+services:
+  dev-env:
+    build: .
+    volumes:
+      - ..:/workspaces:cached
+    working_dir: /workspaces
+    command: sleep infinity
+
+  # Add other services as needed

@@ -1,0 +1,22 @@
+name: ZTP Runner Setup
+
+# PLACEHOLDER — see repo-management/automation.md ("ztp-runner-setup.yml") for
+# the intended implementation.
+#
+# Intent (carried over from private-preview design):
+#   Manual workflow_dispatch that prepares a self-hosted GitHub runner with the
+#   prerequisites needed to drive iDRAC/Redfish operations against an
+#   on-premises management network.
+#
+# Open question: this may be unnecessary if all BMC operations can be driven
+# from a workstation. Decide before implementing.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Placeholder
+        run: echo "ztp-runner-setup.yml is a placeholder. See repo-management/automation.md."
