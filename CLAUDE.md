@@ -1,87 +1,157 @@
-# CLAUDE.md — azurelocal-ztp
-
-This file gives Claude Code session context for this repository. Read it before doing non-trivial work here.
+# azurelocal-ztp — Claude Code Context
 
 ## What this repo is
 
-Automation for Microsoft's [Simplified machine provisioning](https://learn.microsoft.com/en-us/azure/azure-local/deploy/simplified-machine-provisioning) feature (public preview, azloc-2604).
+> Automation for Microsoft's [Simplified machine provisioning](https://learn.microsoft.com/en-us/azure/azure-local/deploy/simplified-machine-provisioning) feature on Azure Local — bypasses the manual USB-media step using BMC/Redfish.
 
-The repo's *unique* value is the BMC/Redfish automation that bypasses the manual USB-media step the Microsoft documentation requires. The Azure-side provisioning (voucher claim, site config, cluster deploy) is documented and supported by Microsoft — this repo does not duplicate it, it *gets servers ready* so it can happen.
+---
 
-## Where the value lives
+## ADO project details
 
-| Path | Contains | Why it matters |
-|------|----------|----------------|
-| `scripts/common/utilities/tools/` | iDRAC/Redfish operations: `Mount-AzureLocalISO.ps1`, `Set-ServerBootSource.ps1`, `Restart-Servers.ps1`, `Verify-ISOMount.ps1` | The differentiator. This is what bypasses USB. |
-| `scripts/common/discovery/` | Hardware inventory from BMC: `Get-DellServerInventory-FromiDRAC.ps1`, `Inventory-AzureTenant.ps1`, `Compare-Discovery.ps1` | Pre-flight checks |
-| `scripts/common/service-principals/` | Azure SP creation: `New-PipelineSP.ps1`, `New-ArcOnboardingSP.ps1`, `Assign-AzureLocalRBAC.ps1` | Azure-side prep |
-| `scripts/common/AzureLocalConfig.psm1`, `RedfishUtils.psm1` | Shared modules | Used by everything in `scripts/` |
-| `config/environment.{yaml,json}` | Centralized config (subscription IDs, node specs, network) | Single source of truth |
-| `docs/` | MkDocs documentation source | User-facing |
+- **ADO org:** https://dev.azure.com/hybridcloudsolutions
+- **ADO project:** Azure Local
+- **Area path:** Platform Engineering\Onboarding
+- **Work item format:** `AB#<id>` in commit messages and PR descriptions
 
-## Conventions
+---
 
-### Placeholders, not real values
+## Standards
 
-This is a public-facing repo. Do **not** commit:
+This repo follows all HCS platform standards defined in the Platform Engineering repo:
 
-- Real Azure subscription IDs, tenant IDs, or resource group names
-- Real hostnames, IPs, or BMC credentials
-- Real serial numbers / service tags
+| Standard | Reference |
+|---|---|
+| Governance | [docs/standards/governance.md](https://dev.azure.com/hybridcloudsolutions/Platform%20Engineering/_git/Platform%20Engineering?path=/docs/standards/governance.md) |
+| Scripting (PowerShell 7) | [docs/standards/scripting.md](https://dev.azure.com/hybridcloudsolutions/Platform%20Engineering/_git/Platform%20Engineering?path=/docs/standards/scripting.md) |
+| Automation | [docs/standards/automation.md](https://dev.azure.com/hybridcloudsolutions/Platform%20Engineering/_git/Platform%20Engineering?path=/docs/standards/automation.md) |
+| Variables and naming | [docs/standards/variables.md](https://dev.azure.com/hybridcloudsolutions/Platform%20Engineering/_git/Platform%20Engineering?path=/docs/standards/variables.md) |
+| Documentation | [docs/standards/documentation.md](https://dev.azure.com/hybridcloudsolutions/Platform%20Engineering/_git/Platform%20Engineering?path=/docs/standards/documentation.md) |
+| Claude Code | [docs/standards/claude-code.md](https://dev.azure.com/hybridcloudsolutions/Platform%20Engineering/_git/Platform%20Engineering?path=/docs/standards/claude-code.md) |
 
-Use `{placeholder_name}` form in docs and templates. Real values come from `config/environment.{yaml,json}` (which is `.gitignore`'d for the user-specific instance) or environment-specific overrides.
+Key rules:
+- All scripts: PowerShell 7+ only. `#Requires -Version 7.0`, `Set-StrictMode -Version Latest`, ` $ErrorActionPreference = 'Stop'`.
+- All docs: Markdown only. No Word documents in any repo.
+- Commit format: `type(scope): short description` — types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`
+- No secrets, tokens, or credentials committed to any file.
 
-### Hardware vendor scope
+---
 
-The Microsoft-validated hardware list for Simplified machine provisioning is the source of truth. Don't add automation for hardware not on that list without checking first. Currently:
+## Key facts
 
-- Dell AX-650, AX-750 (iDRAC 9 / iDRAC 10) — **validated**
-- Lenovo MX650 V3, V4 (XCC2) — **planned**
-- HPE DL360 Gen11 (iLO 6) — **planned**
+| Fact | Value |
+|---|---|
+| Primary language | Markdown / Python (MkDocs) |
+| GitHub org | AzureLocal |
+| Azure login | kris@hybridsolutions.cloud |
+| Key Vault | kv-hcs-vault-01 |
 
-Avoid Dell AX-760 references — it was on the private-preview list but **isn't supported** in public preview.
+### Environment variables expected
 
-### PowerShell style
+| Variable | Source | Purpose |
+|---|---|---|
+| `GITHUB_TOKEN` | kv-hcs-vault-01 via Load-HCSEnvironment.ps1 | GitHub CLI and git operations |
+| `AZURE_DEVOPS_EXT_PAT` | kv-hcs-vault-01 via Load-HCSEnvironment.ps1 | ADO CLI (`az boards`, `az devops`) |
+Load before starting a session:
+```powershell
+. E:\git\platform\scripts\Load-HCSEnvironment.ps1
+```
 
-- Approved verbs, `[CmdletBinding()]`, `param()` blocks
-- `Write-Verbose` for diagnostic output
-- Guard destructive ops with `-WhatIf` / `-Confirm`
-- No hardcoded values — pull from `config/` or accept as parameters
+### Build and test commands
 
-### Documentation
+```
+mkdocs build
+mkdocs serve  # http://127.0.0.1:8000
+```
 
-- Source format is **Markdown** for MkDocs Material rendering
-- Admonitions use `!!! note "Title"` (mkdocs admonition syntax), not GitHub-flavored alerts
-- Do not author in AsciiDoc — the repo migrated off `.adoc` in v0.1.0
+---
 
-## Workflows
+## Repo structure
 
-All `.github/workflows/*.yml` files in this repo are currently **placeholder stubs**. They document the intended surface but contain no real CI/CD logic. See `repo-management/automation.md` for the planned implementation per workflow.
+```
+azurelocal-ztp/
+├── .claude/
+    └── settings.json
+├── .devcontainer/
+    ├── devcontainer.json
+    ├── docker-compose.yml
+    ├── Dockerfile
+    └── README.adoc
+├── .github/
+    ├── ISSUE_TEMPLATE/
+    ├── workflows/
+    ├── CODEOWNERS
+    ├── dependabot.yml
+    └── pull_request_template.md
+├── config/
+    ├── cluster/
+    ├── cluster-reference.env.template
+    ├── README.adoc
+    └── README.md
+├── docs/
+    ├── images/
+    ├── automation-pipelines.md
+    ├── azure-portal-provisioning.md
+    ├── index.md
+    └── server-preparation.md
+├── examples/
+    └── README.adoc
+├── logs/
+    └── README.adoc
+├── repo-management/
+    ├── automation.md
+    ├── README.md
+    └── setup.md
+├── scripts/
+    ├── common/
+    ├── examples/
+    ├── tools/
+    ├── README.adoc
+    └── README.md
+├── .azurelocal-platform.yml
+├── .gitignore
+├── .release-please-manifest.json
+├── CHANGELOG.md
+├── CLAUDE.md
+├── CONTRIBUTING.md
+├── LICENSE
+├── mkdocs.yml
+├── README.md
+└── ...
+```
 
-Do **not** implement workflow logic without explicit user direction — the user has chosen to land placeholders only at this stage.
+---
 
-## Org standards
+## Claude Code actions
 
-This repo follows the org-wide AzureLocal standards. Canonical reference: [azurelocal.cloud/standards](https://azurelocal.cloud/standards/). See `STANDARDS.md` for the pointer.
+**Run autonomously:**
+- Read, search, and grep any file in this repo
+- Write and edit files in this repo
+- `git add`, `git commit`, `git push`
+- `gh issue`, `gh pr`, `gh run` CLI commands
+- `mkdocs build` and `mkdocs serve`
+- `pip install` for MkDocs plugins
 
-Key standards that affect day-to-day editing here:
+**Always confirm before:**
+- Creating or deleting Azure resources
+- Any `az` CLI write operation that modifies Azure state
+- Running destructive operations
+- Making API calls to external services
 
-- Conventional Commits (`feat:`, `fix:`, `docs:`, `infra:`, `chore:`, `refactor:`)
-- release-please manages `CHANGELOG.md` — never edit it manually
-- Issues use `type/*`, `priority/*`, `solution/*` labels (synced from the org)
 
-## Working scope
+---
 
-The user actively works on this repo from `e:\git\azurelocal\azurelocal-ztp\` (note the extra `azurelocal\` parent — sibling repos will move to that parent over time, but currently other repos are at `e:\git\azurelocal-<name>`).
+## Subagents available in this repo
 
-## Status (2026-04-30)
+- `azurelocal-ztp-engineer` (model: sonnet) — Expert in `azurelocal-ztp`: deep knowledge of this repo's structure, conventions, and development workflow.
 
-Repository is **mid-migration** from private-preview ZTP to public-preview Simplified machine provisioning. State:
+User-level agents (available in every repo session): `triage-lookup`, `markdown-prose-editor`, `azurelocal-domain-expert`, `mkdocs-material-doctor`, `turner-module-scaffold-engineer`, `mms-2026-demo-presenter`.
 
-- ✅ Sensitive content scrubbed (subscription IDs, private-preview docs)
-- ✅ AzureLocal org baseline files in place
-- ✅ Docs converted from AsciiDoc to MkDocs (manual table cleanup still pending)
-- ✅ Workflows replaced with placeholder stubs
-- ⏳ Public-preview language updates in guides (ROE → maintenance environment, hardware list, RP list)
-- ⏳ README rewrite around the BMC-automation differentiator
-- ⏳ Empty IaC scaffolding (`helm/`, `docker/`, `policies/`, etc.) pending decision on whether to keep
+---
+
+## Owner
+
+**Kristopher Turner**
+kris@hybridsolutions.cloud
+Senior Product Technology Architect, TierPoint | Microsoft MVP (Azure) | MCT
+Owner, Hybrid Cloud Solutions LLC — hybridsolutions.cloud
+Country Cloud Boy — thisismydemo.cloud
