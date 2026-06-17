@@ -74,3 +74,5 @@ config/cluster/cluster-config.md
 
 # Docker
 .dockerignore
+.claude/logs/
+.claude/settings.local.json
