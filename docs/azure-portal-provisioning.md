@@ -1,8 +1,9 @@
 # Azure Local ZTP Portal Provisioning Guide
 
-!!! note "Note"
-    This guide covers the Azure Portal provisioning phase of Zero-Touch Provisioning (ZTP) for Azure Local. It picks up after the servers have been bootstrapped into the maintenance environment using the [Server Preparation Guide](server-preparation.md).
-
+> [!NOTE]
+> **Note**
+> This guide covers the Azure Portal provisioning phase of Zero-Touch Provisioning (ZTP) for Azure Local. It picks up after the servers have been bootstrapped into the maintenance environment using the [Server Preparation Guide](server-preparation.md).
+>
 ## Overview
 
 This guide covers Phase 2 of Azure Local Zero-Touch Provisioning (ZTP). After completing the server preparation phase, the servers are running the maintenance environment and are ready to be provisioned from Azure.
@@ -51,18 +52,20 @@ Before beginning this phase, ensure the following:
     - Resource Group: `{cluster_resource_group}`
     - Key Vault: `{keyvault_azure_local_name}`
 
-!!! warning "Important"
-    In this preview release, only the **East US** region is supported. Ensure that Resource group, Azure Site, Azure Site Configuration, Azure Arc resources, and Azure Onboarding Service resources are all created under the **East US** region.
-
+> [!WARNING]
+> **Important**
+> In this preview release, only the **East US** region is supported. Ensure that Resource group, Azure Site, Azure Site Configuration, Azure Arc resources, and Azure Onboarding Service resources are all created under the **East US** region.
+>
 ## Step 1: Collect Ownership Vouchers
 
 After the servers have been bootstrapped into the maintenance environment, collect the ownership voucher for each machine. The ownership voucher is a `.pem` file generated during the bootstrap process that proves device identity.
 
 ### Option A: Download Voucher via Configurator App
 
-!!! warning "Important"
-    Download the Configurator App from the Azure preview portal before starting. Go to **Azure Arc > Operations > Provisioning (preview)**, then click **View Downloads** on the **Get started** page.
-
+> [!WARNING]
+> **Important**
+> Download the Configurator App from the Azure preview portal before starting. Go to **Azure Arc > Operations > Provisioning (preview)**, then click **View Downloads** on the **Get started** page.
+>
 1. Open the Start menu, type **Configurator App**, select **Configurator App for Azure Local V2**, and then select **Run as administrator**.
 
 1. Connect to the device using either:
@@ -94,14 +97,16 @@ If you used the USB preparation method during server bootstrap:
 
 1. The `.pem` files are small enough (a few KBs) that you can email them or use any other trusted transfer mechanism. Consider zipping multiple files together for convenience.
 
-!!! tip "Tip"
-    **Recommendation:** After collecting the vouchers, disable USB in BIOS. Enter the BIOS/UEFI interface, locate USB Configuration, and set the options to disabled. Menu names may vary by device and BIOS/UEFI version.
-
+> [!TIP]
+> **Tip**
+> **Recommendation:** After collecting the vouchers, disable USB in BIOS. Enter the BIOS/UEFI interface, locate USB Configuration, and set the options to disabled. Menu names may vary by device and BIOS/UEFI version.
+>
 ## Step 2: Create Azure Site
 
-!!! warning "Important"
-    Use the Azure preview portal URL to access ZTP features: https://portal.azure.com
-
+> [!WARNING]
+> **Important**
+> Use the Azure preview portal URL to access ZTP features: https://portal.azure.com
+>
 1. Navigate to **Azure Arc > Operations > Provisioning (preview)** in the Azure portal.
 
 1. On the **Get started** page, click **Provision > Azure Local** to begin provisioning.
@@ -121,9 +126,10 @@ After creating the site, configure the provisioning settings. These settings app
 | Description / Configuration |
 | --- |
 
-!!! note "Note"
-    Support for Azure Arc gateway (which enables minimal endpoint connections to Azure Arc) is not supported in this preview. You will be notified when it becomes available.
-
+> [!NOTE]
+> **Note**
+> Support for Azure Arc gateway (which enables minimal endpoint connections to Azure Arc) is not supported in this preview. You will be notified when it becomes available.
+>
 ## Step 4: Provision Machines
 
 With the site configured, add the servers for provisioning.
@@ -155,9 +161,10 @@ With the site configured, add the servers for provisioning.
 
 Use the Configurator App to track installation progress from your Windows 11 PC. This app is user-friendly, designed for low-tech staff at remote sites.
 
-!!! warning "Important"
-    Skip this step if not using a static IP or not tracking server installation remotely. Start these steps a few minutes after powering on the server and connecting it to the local network.
-
+> [!WARNING]
+> **Important**
+> Skip this step if not using a static IP or not tracking server installation remotely. Start these steps a few minutes after powering on the server and connecting it to the local network.
+>
 1. Open the Start menu, type **Configurator App**, select **Configurator App for Azure Local V2**.
 
 1. Connect using the device serial number or IP address.
@@ -281,9 +288,10 @@ curl -fsSL "https://aka.ms/ztp/collect-armjson.sh" | bash -s -- \
 
 After evaluation is complete, clean up all entities. Delete the resource group directly or run the cleanup script for a full clean-up.
 
-!!! warning "Important"
-    For this preview, delete the resource group after running the cleanup script. This removes all resources under the resource group.
-
+> [!WARNING]
+> **Important**
+> For this preview, delete the resource group after running the cleanup script. This removes all resources under the resource group.
+>
 Launch Azure Cloud Shell using Bash and run:
 
 ```bash

@@ -1,8 +1,9 @@
 # Azure Local ZTP Server Preparation Guide
 
-!!! note "Note"
-    This guide provides detailed instructions for preparing servers for Zero-Touch Provisioning (ZTP) of Azure Local. It combines manual steps with automated scripts and references the official Azure Local ZTP documentation.
-
+> [!NOTE]
+> **Note**
+> This guide provides detailed instructions for preparing servers for Zero-Touch Provisioning (ZTP) of Azure Local. It combines manual steps with automated scripts and references the official Azure Local ZTP documentation.
+>
 **📁 Working Directory Assumption:** All commands in this guide assume you are working from the root directory of your cloned repository.
 
 ## Overview
@@ -384,9 +385,10 @@ The **Configurator App for Azure Local V2** is used to download ownership vouche
 
 The script downloads the Configurator App to the same directory as the maintenance environment tools (`ztp.download_directory` from config).
 
-!!! tip "Tip"
-    You can also download the Configurator App from the Azure Portal: https://portal.azure.com → **Azure Arc > Operations > Provisioning (preview)** → **Get started** → **View Downloads**.
-
+> [!TIP]
+> **Tip**
+> You can also download the Configurator App from the Azure Portal: https://portal.azure.com → **Azure Arc > Operations > Provisioning (preview)** → **Get started** → **View Downloads**.
+>
 **The Configurator App is used for:**
 
 - Downloading ownership vouchers from prepared servers (Step 2, Option A)
