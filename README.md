@@ -101,7 +101,7 @@ This repo's BMC automation has been validated against:
 | Lenovo | ThinkAgile MX650 V3, V4 | XCC2 | Planned |
 | HPE | ProLiant DL360 Gen11 | iLO 6 | Planned |
 
-The Microsoft-validated hardware list for Simplified machine provisioning is the source of truth: [Hardware prerequisites](https://learn.microsoft.com/en-us/azure/azure-local/deploy/simplified-machine-provisioning#hardware-prerequisites). **AX-760 is not on the public-preview list** — don't use it for Simplified machine provisioning even though it appeared in preview.
+The Microsoft-validated hardware list for Simplified machine provisioning is the source of truth: [Hardware prerequisites](https://learn.microsoft.com/en-us/azure/azure-local/deploy/simplified-machine-provisioning#hardware-prerequisites). **AX-760 is not on the validated list** — don't use it for Simplified machine provisioning.
 
 ## Azure prerequisites
 

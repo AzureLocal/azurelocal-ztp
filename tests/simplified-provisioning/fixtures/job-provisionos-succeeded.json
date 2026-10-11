@@ -35,7 +35,7 @@
         "operationType": "Provision",
         "osImageLocation": "https://aka.ms/aep/hci/2609",
         "osType": "HCI",
-        "vsrVersion": "12.2699.1000.1"
+        "vsrVersion": "12.2609.1003.7"
       },
       "target": "HCI",
       "userDetails": [

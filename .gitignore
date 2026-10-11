@@ -42,8 +42,12 @@ docs/build/
 # MkDocs build output
 site/
 
-# Test results
+# Test results (Pester and other runners)
 test-results/
+testResults.xml
+TestResults*.xml
+coverage.xml
+*.trx
 coverage/
 
 # Logs (but keep sample logs)

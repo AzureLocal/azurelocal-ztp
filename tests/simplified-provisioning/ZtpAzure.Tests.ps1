@@ -130,7 +130,7 @@ Describe 'ZTP Azure half' {
     }
 
     Describe 'OS image catalog (Get-ZtpOsImage.ps1)' {
-        It 'lists newest first and marks the 12.26NN build as preview' {
+        It 'lists newest first and marks the 12.2699 build as preview' {
             $rows = @(& (Join-Path $script:scripts 'Get-ZtpOsImage.ps1') -SubscriptionId $global:ztpZeroSub -Location eastus)
             $rows.VsrVersion | Should -Be @('12.2699.1000.1', '12.2609.1003.7', '12.2608.1003.9', '12.2607.1003.73')
             $rows[0].IsPreview | Should -BeTrue
@@ -210,7 +210,7 @@ Describe 'ZTP Azure half' {
             $body = Get-ZtpProvisionOsRetryBody -Machine $machine
             $body.properties.jobType | Should -Be 'ProvisionOs'
             $body.properties.provisioningRequest.target | Should -Be 'HCI'
-            $body.properties.provisioningRequest.osProfile.vsrVersion | Should -Be '12.2699.1000.1'
+            $body.properties.provisioningRequest.osProfile.vsrVersion | Should -Be '12.2609.1003.7'
             $body.properties.provisioningRequest.userDetails[0].secretLocation | Should -Match '/secrets/provisioning-admin$'
         }
 

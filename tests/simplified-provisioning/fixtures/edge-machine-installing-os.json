@@ -135,7 +135,7 @@
     "provisioningDetails": {
       "osProfile": {
         "osType": "HCI",
-        "vsrVersion": "12.2699.1000.1"
+        "vsrVersion": "12.2609.1003.7"
       },
       "userDetails": [
         {

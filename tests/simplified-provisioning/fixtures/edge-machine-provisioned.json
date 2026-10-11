@@ -141,7 +141,7 @@
     "provisioningDetails": {
       "osProfile": {
         "osType": "HCI",
-        "vsrVersion": "12.2699.1000.1"
+        "vsrVersion": "12.2609.1003.7"
       },
       "userDetails": [
         {
@@ -204,7 +204,7 @@
         "bootType": "UEFI",
         "osSku": "Azure Stack HCI",
         "osType": "windows",
-        "osVersion": "10.0.26100.33158"
+        "osVersion": "10.0.26100.33438"
       },
       "sbeDeploymentPackageInfo": {
         "code": "WarningNoSbePackage",

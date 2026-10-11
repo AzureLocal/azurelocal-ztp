@@ -94,7 +94,8 @@ function Invoke-ZtpArm {
 function Test-ZtpPreviewOsVersion {
     <#
     .SYNOPSIS
-    True when the release part of a 12.YYMM.x.y version is not a calendar month (for example 12.26NN = a preview build).
+    True when the release part of a 12.YYMM.x.y version is not a calendar month (a preview build: a non-calendar month in
+    12.YYMM, for example 12.26NN with NN above 12).
     #>
     [CmdletBinding()]
     [OutputType([bool])]

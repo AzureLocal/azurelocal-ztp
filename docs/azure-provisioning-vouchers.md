@@ -60,7 +60,7 @@ The subscription and resource group are script parameters, not file values. Vouc
 
 The default run goes through **Prereqs, Validate and Plan**: tools present, template builds, parameters file complete, then read-only checks of the OS image catalog, the site, the configuration, existing edge machines, the voucher files and the administrator secret (by name), and finally an ARM **what-if**. If a voucher is missing the what-if covers the site and configuration only.
 
-- `-OsVersion` defaults to `latest` (the newest release build; preview builds with a non-calendar month such as `12.26NN` are skipped). Use `latest-preview`, a validated solution recipe version such as `12.2609.1003.7`, or a composed image version. `Get-ZtpOsImage.ps1` lists the catalog.
+- `-OsVersion` defaults to `latest` (the newest release build; preview builds, which carry a non-calendar month in `12.YYMM` (for example `12.26NN` with `NN` above 12), are skipped). Use `latest-preview`, a validated solution recipe version such as `12.2609.1003.7`, or a composed image version. `Get-ZtpOsImage.ps1` lists the catalog.
 - `-SiteMode Auto` (default) creates only the site and configuration that are missing; `Reuse` requires both to exist; `Create` always PUTs them.
 - An edge machine that already exists is **never re-PUT**; only the other nodes are claimed. `-Node` limits the run.
 
