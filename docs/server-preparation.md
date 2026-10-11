@@ -118,7 +118,7 @@ Launch Azure Cloud Shell and run the following commands to check and enable requ
 # Check feature flag status
 curl -fsSL "https://aka.ms/ztp/checkfeature.sh" -o checkfeature.sh && chmod +x checkfeature.sh && ./checkfeature.sh
 
-# Enable Hybrid Connectivity feature if not registered
+# Register the simplified machine provisioning feature (Microsoft Learn prerequisite)
 az feature register --namespace Microsoft.DeviceOnboarding --name AzureLocalZTP
 ```
 
