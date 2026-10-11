@@ -1,0 +1,207 @@
+{
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.AzureStackHCI/edgeMachines/node-02/jobs/ProvisionOs",
+  "name": "ProvisionOs",
+  "properties": {
+    "deploymentMode": "Deploy",
+    "endTimeUtc": "0001-01-01T00:00:00Z",
+    "jobId": "00000000-0000-0000-0000-000000000000",
+    "jobType": "ProvisionOs",
+    "provisioningRequest": {
+      "deviceConfiguration": {
+        "hostName": "node-02",
+        "network": {
+          "networkAdapters": [
+            {
+              "dnsAddressArray": [],
+              "ipAssignmentType": "Automatic",
+              "vlanId": "0"
+            }
+          ]
+        },
+        "time": {
+          "primaryTimeServer": "",
+          "secondaryTimeServer": "",
+          "timeZone": "Eastern Standard Time"
+        }
+      },
+      "onboardingConfiguration": {
+        "arcVirtualMachineId": "00000000-0000-0000-0000-000000000000",
+        "location": "eastus",
+        "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1",
+        "tenantId": "00000000-0000-0000-0000-000000000000",
+        "type": "HybridComputeMachine"
+      },
+      "osProfile": {
+        "operationType": "Provision",
+        "osImageLocation": "https://aka.ms/aep/hci/2609",
+        "osType": "HCI",
+        "vsrVersion": "12.2699.1000.1"
+      },
+      "target": "HCI",
+      "userDetails": [
+        {
+          "secretType": "KeyVault",
+          "userName": "administrator"
+        }
+      ]
+    },
+    "provisioningState": "InProgress",
+    "reportedProperties": {
+      "deploymentStatus": {
+        "status": "InProgress",
+        "steps": [
+          {
+            "description": "Creating the intended ARC machine resource",
+            "endTimeUtc": "2026-10-10T17:53:36.378304Z",
+            "name": "CreatedTargetArcMachine",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:53:31.9180353Z",
+            "status": "Success"
+          },
+          {
+            "description": "Copied necessary networking and other settings from the site if required",
+            "endTimeUtc": "2026-10-10T17:53:38.7953426Z",
+            "name": "CopiedSiteSettings",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:53:31.9180353Z",
+            "status": "Success"
+          },
+          {
+            "description": "Setting up permissions on the existing ARC machine for Administrator operations",
+            "endTimeUtc": "2026-10-10T17:53:45.5102491Z",
+            "name": "SetupPermissions",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:53:31.9180353Z",
+            "status": "Success"
+          },
+          {
+            "description": "Sent the notification to the ARC Machine",
+            "endTimeUtc": "2026-10-10T17:53:48.4373268Z",
+            "name": "ArcNotificationSent",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:53:31.9180353Z",
+            "status": "Success"
+          },
+          {
+            "description": "Initialization completed.",
+            "endTimeUtc": "2026-10-10T17:53:56.7938337Z",
+            "name": "Initialize",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:53:56.7275549Z",
+            "status": "Success"
+          },
+          {
+            "description": "ResolveConfiguration",
+            "endTimeUtc": "0001-01-01T00:00:00Z",
+            "name": "ResolveConfiguration",
+            "percentComplete": 0,
+            "startTimeUtc": "0001-01-01T00:00:00Z",
+            "status": "NotStarted"
+          },
+          {
+            "description": "OS artifacts downloaded successfully.",
+            "endTimeUtc": "2026-10-10T17:55:53.2837361Z",
+            "name": "DownloadOSArtifacts",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:53:56.8803267Z",
+            "status": "Success"
+          },
+          {
+            "description": "PerformSBEDiscoveryDownload completed successfully.",
+            "endTimeUtc": "2026-10-10T17:55:58.4334826Z",
+            "name": "SBEDiscoveryDownload",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:55:53.3465083Z",
+            "status": "Success"
+          },
+          {
+            "description": "Hybrid Compute RP setup completed.",
+            "endTimeUtc": "2026-10-10T17:56:00.5833402Z",
+            "name": "SetupHybridComputeRP",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:55:58.4921685Z",
+            "status": "Success"
+          },
+          {
+            "description": "Preparation for target OS provisioning completed.",
+            "endTimeUtc": "2026-10-10T17:56:23.3196733Z",
+            "name": "PrepareTargetOSProvisioning",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:56:00.6420178Z",
+            "status": "Success"
+          },
+          {
+            "description": "Target OS provisioning initiated.",
+            "endTimeUtc": "2026-10-10T17:57:38.9475233Z",
+            "name": "InitiateTargetOSProvisioning",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:56:23.3914835Z",
+            "status": "Success"
+          },
+          {
+            "description": "K3s shutdown skipped \ufffd not an update operation.",
+            "endTimeUtc": "2026-10-10T17:57:39.0075671Z",
+            "name": "PrepareK3sShutdown",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:57:39.0075671Z",
+            "status": "Success"
+          },
+          {
+            "description": "Awaiting boot into target OS.",
+            "endTimeUtc": "0001-01-01T00:00:00Z",
+            "name": "BootIntoTargetOS",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:57:39.066445Z",
+            "status": "InProgress"
+          },
+          {
+            "description": "ValidateStagedArtifacts",
+            "endTimeUtc": "0001-01-01T00:00:00Z",
+            "name": "ValidateStagedArtifacts",
+            "percentComplete": 0,
+            "startTimeUtc": "0001-01-01T00:00:00Z",
+            "status": "NotStarted"
+          },
+          {
+            "description": "InvokeTPAUpdate",
+            "endTimeUtc": "0001-01-01T00:00:00Z",
+            "name": "InvokeTPAUpdate",
+            "percentComplete": 0,
+            "startTimeUtc": "0001-01-01T00:00:00Z",
+            "status": "NotStarted"
+          },
+          {
+            "description": "ReportUpdateStatus",
+            "endTimeUtc": "0001-01-01T00:00:00Z",
+            "name": "ReportUpdateStatus",
+            "percentComplete": 0,
+            "startTimeUtc": "0001-01-01T00:00:00Z",
+            "status": "NotStarted"
+          },
+          {
+            "description": "Initialization of Job Type ProvisionOs is done successfully",
+            "endTimeUtc": "10/10/2026 17:53:53",
+            "fullStepIndex": "0",
+            "name": "ProvisionOs",
+            "percentComplete": 0,
+            "startTimeUtc": "10/10/2026 17:53:53",
+            "status": "Success"
+          }
+        ]
+      },
+      "percentComplete": 50,
+      "validationStatus": {}
+    },
+    "startTimeUtc": "2026-10-10T17:53:31.9180353Z",
+    "status": "DeploymentInProgress"
+  },
+  "systemData": {
+    "createdAt": "2026-10-10T17:53:31.7530851Z",
+    "createdBy": "00000000-0000-0000-0000-000000000000",
+    "createdByType": "Application",
+    "lastModifiedAt": "2026-10-10T17:53:31.7530851Z",
+    "lastModifiedBy": "00000000-0000-0000-0000-000000000000",
+    "lastModifiedByType": "Application"
+  },
+  "type": "microsoft.azurestackhci/edgemachines/jobs"
+}

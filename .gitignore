@@ -76,3 +76,16 @@ config/cluster/cluster-config.md
 .dockerignore
 .claude/logs/
 .claude/settings.local.json
+
+# Simplified provisioning: real node lists, parameters, vouchers and images stay local (the *.example.* files are committed)
+/nodes.json
+config/simplified-provisioning/*.json
+!config/simplified-provisioning/*.example.json
+scripts/simplified-provisioning/bicep/*.parameters.json
+!scripts/simplified-provisioning/bicep/*.example.parameters.json
+*.pem
+*.img
+
+# Invoke-ZtpProvisioning.ps1 run state (local progress only)
+*.state.json
+*.state.json.tmp

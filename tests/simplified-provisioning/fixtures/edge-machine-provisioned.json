@@ -1,0 +1,254 @@
+{
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.AzureStackHCI/edgeMachines/node-01",
+  "identity": {
+    "principalId": "00000000-0000-0000-0000-000000000000",
+    "tenantId": "00000000-0000-0000-0000-000000000000",
+    "type": "SystemAssigned"
+  },
+  "location": "eastus",
+  "name": "node-01",
+  "properties": {
+    "arcMachineResourceGroupId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/AzLocal-ManagedResources-rg-example-0000",
+    "arcMachineResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1",
+    "cloudId": "00000000-0000-0000-0000-000000000000",
+    "connectivityStatus": "Connected",
+    "lastSyncTimestamp": "2026-10-10T18:09:26.2608708Z",
+    "lifecycleDetails": {
+      "lifecycleStages": [
+        {
+          "description": "Provision machine",
+          "endTimeUtc": "2026-10-10T17:41:28.7879739Z",
+          "lastUpdatedUtc": "2026-10-10T17:41:28.7879739Z",
+          "name": "ProvisionMachine",
+          "startTimeUtc": "2026-10-10T17:32:45.7105875Z",
+          "status": "Completed",
+          "subStages": [
+            {
+              "description": "Register machine with onboarding service",
+              "endTimeUtc": "2026-10-10T17:32:45.7105875Z",
+              "lastUpdatedUtc": "2026-10-10T17:32:45.7105875Z",
+              "name": "RegisterMachine",
+              "startTimeUtc": "2026-10-10T17:32:45.7105875Z",
+              "status": "Completed"
+            },
+            {
+              "description": "Arc enable maintenance environment",
+              "endTimeUtc": "2026-10-10T17:32:45.7105875Z",
+              "lastUpdatedUtc": "2026-10-10T17:32:45.7105875Z",
+              "name": "ArcEnableMaintenanceEnvironment",
+              "startTimeUtc": "2026-10-10T17:32:45.7105875Z",
+              "status": "Completed"
+            },
+            {
+              "description": "Install required Arc extensions",
+              "endTimeUtc": "2026-10-10T17:41:28.7879739Z",
+              "lastUpdatedUtc": "2026-10-10T17:41:28.7879739Z",
+              "name": "InstallExtensions",
+              "startTimeUtc": "2026-10-10T17:33:21.0871141Z",
+              "status": "Completed"
+            }
+          ]
+        },
+        {
+          "description": "Install OS",
+          "endTimeUtc": "2026-10-10T18:12:07.5338828Z",
+          "lastUpdatedUtc": "2026-10-10T18:12:07.5338828Z",
+          "name": "InstallOs",
+          "startTimeUtc": "2026-10-10T17:43:22.2151939Z",
+          "status": "Completed",
+          "subStages": [
+            {
+              "description": "Initialize Resource",
+              "endTimeUtc": "2026-10-10T17:43:37.6245093Z",
+              "lastUpdatedUtc": "2026-10-10T17:43:37.6245093Z",
+              "name": "Initialize",
+              "startTimeUtc": "2026-10-10T17:43:22.2151939Z",
+              "status": "Completed"
+            },
+            {
+              "description": "Download OS",
+              "endTimeUtc": "2026-10-10T17:47:15.7022383Z",
+              "lastUpdatedUtc": "2026-10-10T17:47:15.7022383Z",
+              "name": "DownloadOs",
+              "startTimeUtc": "2026-10-10T17:43:37.6245093Z",
+              "status": "Completed"
+            },
+            {
+              "description": "Prepare OS",
+              "endTimeUtc": "2026-10-10T17:47:15.7022383Z",
+              "lastUpdatedUtc": "2026-10-10T17:47:15.7022383Z",
+              "name": "PrepareOs",
+              "startTimeUtc": "2026-10-10T17:47:15.7022383Z",
+              "status": "Completed"
+            },
+            {
+              "description": "Reboot into OS",
+              "endTimeUtc": "2026-10-10T18:04:43.9530664Z",
+              "lastUpdatedUtc": "2026-10-10T18:04:43.9530664Z",
+              "name": "RebootOs",
+              "startTimeUtc": "2026-10-10T17:47:15.7022383Z",
+              "status": "Completed"
+            },
+            {
+              "description": "Install required Arc extensions",
+              "endTimeUtc": "2026-10-10T18:11:58.3423095Z",
+              "lastUpdatedUtc": "2026-10-10T18:11:58.3423095Z",
+              "name": "InstallExtensions",
+              "startTimeUtc": "2026-10-10T18:04:45.5657603Z",
+              "status": "Completed"
+            },
+            {
+              "description": "Finalize system configuration",
+              "endTimeUtc": "2026-10-10T18:12:07.5338828Z",
+              "lastUpdatedUtc": "2026-10-10T18:12:07.5338828Z",
+              "name": "Finalize",
+              "startTimeUtc": "2026-10-10T18:11:58.3423095Z",
+              "status": "Completed"
+            }
+          ]
+        }
+      ],
+      "lifecycleStatus": {
+        "lastUpdatedUtc": "2026-10-10T18:12:07.5338828Z",
+        "message": "Machine has been successfully provisioned.",
+        "status": "Provisioned"
+      }
+    },
+    "machineState": "Purposed",
+    "operationDetails": [
+      {
+        "description": "ProvisionOs",
+        "id": "00000000-0000-0000-0000-000000000000",
+        "name": "ProvisionOs",
+        "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.AzureStackHCI/edgeMachines/node-01/jobs/ProvisionOs",
+        "status": "Succeeded",
+        "type": "ProvisionOs"
+      }
+    ],
+    "ownershipVoucherDetails": {
+      "ownerKeyType": "MicrosoftManaged",
+      "validationDetails": {
+        "architecture": "amd64",
+        "azureMachineId": "00000000-0000-0000-0000-000000000000",
+        "id": "00000000-0000-0000-0000-000000000000",
+        "manufacturer": "Dell Inc.",
+        "modelName": "Example-Model",
+        "serialNumber": "SERIAL01",
+        "validationStatus": "Valid",
+        "version": "2.0"
+      }
+    },
+    "provisioningDetails": {
+      "osProfile": {
+        "osType": "HCI",
+        "vsrVersion": "12.2699.1000.1"
+      },
+      "userDetails": [
+        {
+          "secretType": "KeyVault",
+          "userName": "administrator",
+          "secretLocation": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example-sec/providers/Microsoft.KeyVault/vaults/kv-example/secrets/provisioning-admin"
+        }
+      ]
+    },
+    "provisioningState": "Succeeded",
+    "reportedProperties": {
+      "extensionProfile": {
+        "extensions": [
+          {
+            "extensionName": "LcmController",
+            "extensionResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1/extensions/AzureEdgeLifecycleManager",
+            "managedBy": "Azure",
+            "state": "Succeeded",
+            "typeHandlerVersion": "30.2607.0.1310"
+          },
+          {
+            "extensionName": "EdgeRemoteSupport",
+            "extensionResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1/extensions/AzureEdgeRemoteSupport",
+            "managedBy": "Azure",
+            "state": "Succeeded",
+            "typeHandlerVersion": "1.0.13.2"
+          },
+          {
+            "extensionName": "DeviceManagementExtension",
+            "extensionResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1/extensions/AzureEdgeDeviceManagement",
+            "managedBy": "Azure",
+            "state": "Succeeded",
+            "typeHandlerVersion": "1.2607.2.3111"
+          },
+          {
+            "extensionName": "TelemetryAndDiagnostics",
+            "extensionResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1/extensions/AzureEdgeTelemetryAndDiagnostics",
+            "managedBy": "Azure",
+            "state": "Succeeded",
+            "typeHandlerVersion": "2.0.50.0"
+          }
+        ]
+      },
+      "hardwareProfile": {
+        "architecture": "amd64",
+        "cpuCores": 64,
+        "cpuSockets": 2,
+        "manufacturer": "Dell Inc.",
+        "memoryCapacityInGb": 256,
+        "model": "Example-Model",
+        "processorType": "IntelTDX"
+      },
+      "lastUpdated": "2026-10-10T18:09:26.2613282Z",
+      "networkProfile": {
+        "nicDetails": [],
+        "switchDetails": []
+      },
+      "osProfile": {
+        "assemblyVersion": "12.2609.1003",
+        "bootType": "UEFI",
+        "osSku": "Azure Stack HCI",
+        "osType": "windows",
+        "osVersion": "10.0.26100.33158"
+      },
+      "sbeDeploymentPackageInfo": {
+        "code": "WarningNoSbePackage",
+        "message": "No SBE packages were discovered at path: C:\\SBE. A valid SBE package must contain a signed discovery manifest XML file, a signed metadata XML file, and a zip file referenced by the discovery manifest.",
+        "sbeManifest": ""
+      },
+      "storageInitiators": [],
+      "storageProfile": {
+        "poolableDisksCount": 5
+      },
+      "workloadInventory": [],
+      "workloadInventoryLastUpdated": "2026-10-10T18:09:25.5013643Z"
+    },
+    "siteDetails": {
+      "deviceConfiguration": {
+        "hostName": "node-01",
+        "network": {
+          "networkAdapters": [
+            {
+              "dnsAddressArray": [],
+              "ipAssignmentType": "Automatic",
+              "vlanId": "0"
+            }
+          ]
+        },
+        "time": {
+          "primaryTimeServer": "",
+          "secondaryTimeServer": "",
+          "timeZone": "Eastern Standard Time"
+        }
+      },
+      "siteResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.Edge/sites/site-example"
+    }
+  },
+  "systemData": {
+    "createdAt": "2026-10-10T17:25:07.1154498Z",
+    "createdBy": "operator@example.com",
+    "createdByType": "User",
+    "lastModifiedAt": "2026-10-10T18:12:08.8335381Z",
+    "lastModifiedBy": "00000000-0000-0000-0000-000000000000",
+    "lastModifiedByType": "Application"
+  },
+  "tags": {
+    "project": "example"
+  },
+  "type": "microsoft.azurestackhci/edgemachines"
+}

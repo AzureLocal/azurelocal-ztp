@@ -1,0 +1,22 @@
+{
+  "NodesFile": "./config/simplified-provisioning/nodes.json",
+  "SourcePath": "D:/Media/maintenance/provision-os.iso",
+  "ImageDirectory": "D:/ZtpVirtualUsb",
+  "ImageNamePrefix": "ztp-usb-",
+  "ShareHost": "192.0.2.10",
+  "ShareName": "ztp-virtual-usb",
+  "VoucherDirectory": "D:/ZtpVouchers",
+  "VoucherWaitMinutes": 120,
+  "RfsWriteAttribute": false,
+  "SkipCertificateCheck": true,
+  "SubscriptionId": "00000000-0000-0000-0000-000000000000",
+  "ResourceGroupName": "rg-example",
+  "ParameterFile": "./scripts/simplified-provisioning/bicep/main.parameters.json",
+  "OsVersion": "latest",
+  "SiteMode": "Auto",
+  "DeploymentName": "ztp-provisioning",
+  "ArcMachineNameMapPath": "./config/simplified-provisioning/arc-machine-names.json",
+  "ReadyTimeoutMinutes": 180,
+  "PollIntervalSeconds": 60,
+  "StatePath": "./ztp-provisioning.state.json"
+}

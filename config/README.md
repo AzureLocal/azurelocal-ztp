@@ -18,6 +18,10 @@ This directory contains the centralized configuration system for Azure Local ZTP
 
 Both formats contain identical data and are automatically detected by the configuration module.
 
+## Simplified-provisioning inputs
+
+The simplified-provisioning scripts do not read `environment.yaml`. Their inputs are explicit parameters plus two documented files with neutral examples: `config/simplified-provisioning/nodes.example.json` (node `name`, `service_tag` and `bmc_address`; copy to `nodes.json`) and `scripts/simplified-provisioning/bicep/main.example.parameters.json` (Azure parameters). Real copies are git-ignored. The stage orchestrator `scripts/simplified-provisioning/Invoke-ZtpProvisioning.ps1` also reads its settings from `config/simplified-provisioning/ztp-provisioning.example.json` (copy to `ztp-provisioning.json`; keys are the script's parameter names, no secrets: the BMC credential and passwords stay parameters).
+
 ## Usage
 
 ### Basic Usage

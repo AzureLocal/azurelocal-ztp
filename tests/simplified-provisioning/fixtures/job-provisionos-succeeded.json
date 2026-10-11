@@ -1,0 +1,231 @@
+{
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.AzureStackHCI/edgeMachines/node-01/jobs/ProvisionOs",
+  "name": "ProvisionOs",
+  "properties": {
+    "deploymentMode": "Deploy",
+    "endTimeUtc": "2026-10-10T18:12:08.5603206Z",
+    "jobId": "00000000-0000-0000-0000-000000000000",
+    "jobType": "ProvisionOs",
+    "provisioningRequest": {
+      "deviceConfiguration": {
+        "hostName": "node-01",
+        "network": {
+          "networkAdapters": [
+            {
+              "dnsAddressArray": [],
+              "ipAssignmentType": "Automatic",
+              "vlanId": "0"
+            }
+          ]
+        },
+        "time": {
+          "primaryTimeServer": "",
+          "secondaryTimeServer": "",
+          "timeZone": "Eastern Standard Time"
+        }
+      },
+      "onboardingConfiguration": {
+        "arcVirtualMachineId": "00000000-0000-0000-0000-000000000000",
+        "location": "eastus",
+        "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1",
+        "tenantId": "00000000-0000-0000-0000-000000000000",
+        "type": "HybridComputeMachine"
+      },
+      "osProfile": {
+        "operationType": "Provision",
+        "osImageLocation": "https://aka.ms/aep/hci/2609",
+        "osType": "HCI",
+        "vsrVersion": "12.2699.1000.1"
+      },
+      "target": "HCI",
+      "userDetails": [
+        {
+          "secretType": "KeyVault",
+          "userName": "administrator"
+        }
+      ]
+    },
+    "provisioningState": "Succeeded",
+    "reportedProperties": {
+      "deploymentStatus": {
+        "status": "Succeeded",
+        "steps": [
+          {
+            "description": "Creating the intended ARC machine resource",
+            "endTimeUtc": "2026-10-10T17:43:25.6918836Z",
+            "name": "CreatedTargetArcMachine",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:43:21.3380075Z",
+            "status": "Success"
+          },
+          {
+            "description": "Copied necessary networking and other settings from the site if required",
+            "endTimeUtc": "2026-10-10T17:43:27.6053295Z",
+            "name": "CopiedSiteSettings",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:43:21.3380075Z",
+            "status": "Success"
+          },
+          {
+            "description": "Setting up permissions on the existing ARC machine for Administrator operations",
+            "endTimeUtc": "2026-10-10T17:43:35.2095633Z",
+            "name": "SetupPermissions",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:43:21.3380075Z",
+            "status": "Success"
+          },
+          {
+            "description": "Sent the notification to the ARC Machine",
+            "endTimeUtc": "2026-10-10T17:43:37.1490407Z",
+            "name": "ArcNotificationSent",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:43:21.3380075Z",
+            "status": "Success"
+          },
+          {
+            "description": "Initialization completed.",
+            "endTimeUtc": "2026-10-10T17:43:44.6330401Z",
+            "name": "Initialize",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:43:44.5682289Z",
+            "status": "Success"
+          },
+          {
+            "description": "ResolveConfiguration",
+            "endTimeUtc": "2026-10-10T18:04:44.7345102Z",
+            "name": "ResolveConfiguration",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:43:21.3380075Z",
+            "status": "Success"
+          },
+          {
+            "description": "OS artifacts downloaded successfully.",
+            "endTimeUtc": "2026-10-10T17:45:05.1656754Z",
+            "name": "DownloadOSArtifacts",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:43:44.7190083Z",
+            "status": "Success"
+          },
+          {
+            "description": "PerformSBEDiscoveryDownload completed successfully.",
+            "endTimeUtc": "2026-10-10T17:45:10.329213Z",
+            "name": "SBEDiscoveryDownload",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:45:05.2465757Z",
+            "status": "Success"
+          },
+          {
+            "description": "Hybrid Compute RP setup completed.",
+            "endTimeUtc": "2026-10-10T17:45:12.7304064Z",
+            "name": "SetupHybridComputeRP",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:45:10.3871153Z",
+            "status": "Success"
+          },
+          {
+            "description": "Preparation for target OS provisioning completed.",
+            "endTimeUtc": "2026-10-10T17:45:30.3770518Z",
+            "name": "PrepareTargetOSProvisioning",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:45:12.7877743Z",
+            "status": "Success"
+          },
+          {
+            "description": "Target OS provisioning initiated.",
+            "endTimeUtc": "2026-10-10T17:46:48.8454246Z",
+            "name": "InitiateTargetOSProvisioning",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:45:30.4488362Z",
+            "status": "Success"
+          },
+          {
+            "description": "K3s shutdown skipped \ufffd not an update operation.",
+            "endTimeUtc": "2026-10-10T17:46:48.904021Z",
+            "name": "PrepareK3sShutdown",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:46:48.904021Z",
+            "status": "Success"
+          },
+          {
+            "description": "Awaiting boot into target OS.",
+            "endTimeUtc": "2026-10-10T18:04:44.7349921Z",
+            "name": "BootIntoTargetOS",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:43:21.3380075Z",
+            "status": "Success"
+          },
+          {
+            "description": "ValidateStagedArtifacts",
+            "endTimeUtc": "2026-10-10T18:04:44.7350997Z",
+            "name": "ValidateStagedArtifacts",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:43:21.3380075Z",
+            "status": "Success"
+          },
+          {
+            "description": "InvokeTPAUpdate",
+            "endTimeUtc": "2026-10-10T18:04:44.7352059Z",
+            "name": "InvokeTPAUpdate",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:43:21.3380075Z",
+            "status": "Success"
+          },
+          {
+            "description": "ReportUpdateStatus",
+            "endTimeUtc": "2026-10-10T18:04:44.7353276Z",
+            "name": "ReportUpdateStatus",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:43:21.3380075Z",
+            "status": "Success"
+          },
+          {
+            "description": "Initialization of Job Type ProvisionOs is done successfully",
+            "endTimeUtc": "10/10/2026 17:43:42",
+            "fullStepIndex": "0",
+            "name": "ProvisionOs",
+            "percentComplete": 0,
+            "startTimeUtc": "10/10/2026 17:43:42",
+            "status": "Success"
+          },
+          {
+            "description": "Installing extensions on the Target Arc Machine",
+            "endTimeUtc": "2026-10-10T18:11:56.5763188Z",
+            "name": "InstallExtensions",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:43:21.3380075Z",
+            "status": "Success"
+          },
+          {
+            "description": "Deleting the role assignments for the Unused Arc Machine",
+            "endTimeUtc": "2026-10-10T18:12:03.6792232Z",
+            "name": "DeleteUnusedRoleAssignments",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:43:21.3380075Z",
+            "status": "Success"
+          },
+          {
+            "description": "Deleting the Unused Arc Machine",
+            "endTimeUtc": "2026-10-10T18:12:05.8039196Z",
+            "name": "DeleteUnusedArcMachine",
+            "percentComplete": 0,
+            "startTimeUtc": "2026-10-10T17:43:21.3380075Z",
+            "status": "Success"
+          }
+        ]
+      },
+      "percentComplete": 50,
+      "validationStatus": {}
+    },
+    "startTimeUtc": "2026-10-10T17:43:21.3380075Z",
+    "status": "DeploymentSuccess"
+  },
+  "systemData": {
+    "createdAt": "2026-10-10T17:43:21.155843Z",
+    "createdBy": "00000000-0000-0000-0000-000000000000",
+    "createdByType": "Application",
+    "lastModifiedAt": "2026-10-10T17:43:21.155843Z",
+    "lastModifiedBy": "00000000-0000-0000-0000-000000000000",
+    "lastModifiedByType": "Application"
+  },
+  "type": "microsoft.azurestackhci/edgemachines/jobs"
+}

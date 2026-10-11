@@ -1,0 +1,8 @@
+{
+  "value": [
+    { "properties": { "validatedSolutionRecipeVersion": "12.2699.1000.1", "composedImageVersion": "12.2699.0.1000", "composedImageIsoUrl": "https://example.invalid/12.2699.0.1000.iso", "composedImageIsoHash": "0000000000000000000000000000000000000000000000000000000000002699" } },
+    { "properties": { "validatedSolutionRecipeVersion": "12.2609.1003.7", "composedImageVersion": "12.2609.0.3009", "composedImageIsoUrl": "https://example.invalid/12.2609.0.3009.iso", "composedImageIsoHash": "3940326C8CD53092C281E0FDD8DE6D1397F70E3EC4AD486690E9B588BFF94514" } },
+    { "properties": { "validatedSolutionRecipeVersion": "12.2608.1003.9", "composedImageVersion": "12.2608.0.3020", "composedImageIsoUrl": "https://example.invalid/12.2608.0.3020.iso", "composedImageIsoHash": "0CA66A7A3EB6938E852915751C4E02176C3D4099C2DEBB20D53A8A63EA9A9167" } },
+    { "properties": { "validatedSolutionRecipeVersion": "12.2607.1003.73", "composedImageVersion": "12.2607.0.3096", "composedImageIsoUrl": "https://example.invalid/12.2607.0.3096.iso", "composedImageIsoHash": "DE0158617BE91BC0390262A05363C50CDE1BD15D334A3AB15253FF8DD5100F02" } }
+  ]
+}

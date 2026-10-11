@@ -45,6 +45,26 @@ Copy-Item config\cluster-reference.env.template config\cluster-reference.env
 
 For the long-form walkthrough, see [docs/server-preparation.md](docs/server-preparation.md).
 
+### Simplified-provisioning scripts (virtual USB, vouchers, Azure)
+
+`scripts/simplified-provisioning/` holds the stage scripts that take nodes from bare metal to Arc-connected machines ready to cluster. Every script is a plan by default and changes hardware or Azure only with an explicit `-Execute`.
+
+```powershell
+# Everything in order, resumable (plan by default; settings: config/simplified-provisioning/ztp-provisioning.example.json)
+./scripts/simplified-provisioning/Invoke-ZtpProvisioning.ps1 -ConfigPath ./config/simplified-provisioning/ztp-provisioning.json
+./scripts/simplified-provisioning/Invoke-ZtpProvisioning.ps1 -ConfigPath ./config/simplified-provisioning/ztp-provisioning.json -BmcCredential $bmc -AdminPassword $admin -ConfirmNotClustered -Execute
+
+# Or stage by stage. Media: one image per node, boot over the BMC, read the vouchers back (no USB stick)
+./scripts/simplified-provisioning/New-ZtpVirtualUsbImage.ps1 -SourcePath D:\Media\provision-os.iso -NodeName node-01, node-02 -OutputDirectory D:\ZtpVirtualUsb
+./scripts/simplified-provisioning/Start-MaintenanceBoot.ps1 -ImageDirectory D:\ZtpVirtualUsb -ShareHost 192.0.2.10 -NodeName node-01, node-02 -NodesFile ./nodes.json
+./scripts/simplified-provisioning/Wait-ZtpVoucher.ps1 -NodeName node-01, node-02 -NodesFile ./nodes.json -ImageDirectory D:\ZtpVirtualUsb -OutputDirectory D:\ZtpVouchers
+
+# Azure: site, configuration and edge machines from the vouchers, then wait for ready
+./scripts/simplified-provisioning/Invoke-ZtpAzureProvisioning.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example -ParameterFile ./scripts/simplified-provisioning/bicep/main.parameters.json -VoucherPath D:\ZtpVouchers
+```
+
+Read [Redfish virtual USB and voucher read-back](docs/redfish-virtual-usb-vouchers.md) and [Azure provisioning from vouchers](docs/azure-provisioning-vouchers.md) first: they state what is proven on hardware (USB-stick-slot `.img` boot on Dell 16G, a portal-equivalent Azure deployment) and what is not yet proven live (voucher write-back by the maintenance environment, the scripted Azure submit end to end, the `ProvisionOs` retry). Neutral examples: [config/simplified-provisioning/nodes.example.json](config/simplified-provisioning/nodes.example.json) and [scripts/simplified-provisioning/bicep/main.example.parameters.json](scripts/simplified-provisioning/bicep/main.example.parameters.json). Tests: `Invoke-Pester tests/simplified-provisioning`.
+
 ## Repository layout
 
 ```text
@@ -57,8 +77,11 @@ For the long-form walkthrough, see [docs/server-preparation.md](docs/server-prep
 │   │   ├── discovery/          # Hardware inventory
 │   │   ├── service-principals/ # Azure SP creation
 │   │   └── utilities/          # Standalone tools (mount, boot, restart, etc.)
+│   ├── simplified-provisioning/ # Virtual USB images, Redfish boot, voucher read-back, Azure provisioning, Bicep
 │   └── Trigger-ZTPDeployment.ps1
+├── tests/simplified-provisioning/ # Pester 5 tests and recorded-response fixtures (no hardware, no Azure)
 ├── config/
+│   ├── simplified-provisioning/nodes.example.json  # Node list example (copy to nodes.json, git-ignored)
 │   ├── environment.yaml        # Generated, .gitignore'd — your cluster's values
 │   ├── environment.json        # Generated, .gitignore'd
 │   ├── cluster-reference.env.template   # Template — edit this, then generate
@@ -114,6 +137,8 @@ Key pages:
 
 - [Server preparation](docs/server-preparation.md) — the BMC-automation walkthrough
 - [Azure portal provisioning](docs/azure-portal-provisioning.md) — voucher claim, site config
+- [Redfish virtual USB and voucher read-back](docs/redfish-virtual-usb-vouchers.md) — per-node images, BMC boot, vouchers from the image
+- [Azure provisioning from vouchers](docs/azure-provisioning-vouchers.md) — site, configuration, edge machines, wait for ready, Arc machine names
 - [Single-node S2D deployment](docs/single-node-s2d-deployment.md)
 - [Automation pipelines](docs/automation-pipelines.md) — planned CI/CD surface (currently stubs)
 

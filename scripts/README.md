@@ -21,6 +21,10 @@ scripts/
 └── Trigger-ZTPDeployment.ps1  # Manual workflow trigger script
 ```
 
+## Simplified provisioning (virtual USB, vouchers, Azure)
+
+`scripts/simplified-provisioning/` holds the stage scripts for Microsoft's Simplified machine provisioning without a physical USB stick: per-node virtual USB images, Redfish boot, voucher read-back, the Bicep-based Azure deployment and the wait-for-ready poller. Every script is a plan by default and changes hardware or Azure only with `-Execute`. See [simplified-provisioning/README.md](simplified-provisioning/README.md).
+
 ## Key Scripts
 
 ### Trigger-ZTPDeployment.ps1

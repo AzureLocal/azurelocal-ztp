@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": { "value": "eastus" },
+    "tags": { "value": { "workload": "example" } },
+    "azl_rp_app_object_id": { "value": "00000000-0000-0000-0000-000000000000" },
+    "key_vault_name": { "value": "kv-example" },
+    "key_vault_resource_group": { "value": "rg-example-sec" },
+    "site_name": { "value": "site-example" },
+    "site_display_name": { "value": "Example site" },
+    "configuration_name": { "value": "default" },
+    "admin_username": { "value": "azladmin" },
+    "admin_secret_name": { "value": "provisioning-admin" },
+    "time_zone": { "value": "UTC" },
+    "nodes": {
+      "value": [
+        { "name": "node-01", "service_tag": "EXAMPLE1" },
+        { "name": "node-02", "service_tag": "EXAMPLE2" }
+      ]
+    },
+    "apply_site_settings": { "value": true },
+    "use_key_vault_configuration": { "value": true },
+    "assign_provisioning_roles": { "value": true },
+    "assign_hci_rp_role": { "value": true },
+    "managed_resource_group_name": { "value": "" },
+    "network_kind": { "value": "LAN" },
+    "ip_assignment_type": { "value": "Automatic" },
+    "ipv4": { "value": {} },
+    "ntp_configuration_choice": { "value": "Automatic" },
+    "ntp_server": { "value": "" },
+    "alternate_ntp_server": { "value": "" },
+    "connectivity_type": { "value": "Public" }
+  }
+}
