@@ -1,0 +1,21 @@
+{
+  "oem": "Lenovo",
+  "displayName": "Lenovo ThinkAgile MX (XClarity Controller)",
+  "publisher": "Lenovo",
+  "sbe": {
+    "discoveryManifestUrl": "https://aka.ms/AzureStackSBEUpdate/Lenovo",
+    "releaseNotesUrl": null,
+    "downloadMethod": "vendor-connector",
+    "note": "Discovery manifest resolves (verified); package URIs are empty like Dell's."
+  },
+  "bmc": {
+    "kind": "xcc",
+    "managerId": "1",
+    "systemId": "1",
+    "virtualMediaSlot": "RemovableDisk",
+    "logServices": [ { "id": "ActiveLog", "path": "/redfish/v1/Systems/1/LogServices/ActiveLog/Entries" } ],
+    "signals": { "bootedFromMedia": [], "completion": [] },
+    "signalsStatus": "unverified: layout only, nothing here has run on Lenovo hardware"
+  },
+  "models": { "validatedBySimplifiedProvisioning": [ "ThinkAgile MX650 V3", "ThinkAgile MX650 V4" ] }
+}

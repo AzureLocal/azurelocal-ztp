@@ -1,0 +1,30 @@
+{
+  "oem": "Dell",
+  "displayName": "Dell Technologies (PowerEdge and AX nodes, iDRAC)",
+  "publisher": "Dell",
+  "sbe": {
+    "discoveryManifestUrl": "https://aka.ms/AzureStackSBEUpdate/DellEMC",
+    "releaseNotesUrl": "https://www.dell.com/support/kbdoc/en-us/000224407",
+    "downloadMethod": "vendor-connector",
+    "note": "The Dell discovery manifest lists every SBE with its SHA256 and size but leaves the package URI empty (download connector or vendor support account). The package is supplied at deployment or update time, not on the maintenance media."
+  },
+  "bmc": {
+    "kind": "idrac",
+    "managerId": "iDRAC.Embedded.1",
+    "systemId": "System.Embedded.1",
+    "virtualMediaSlot": "RemovableDisk",
+    "logServices": [
+      { "id": "Lclog", "path": "/redfish/v1/Managers/iDRAC.Embedded.1/LogServices/Lclog/Entries" },
+      { "id": "Sel", "path": "/redfish/v1/Managers/iDRAC.Embedded.1/LogServices/Sel/Entries" }
+    ],
+    "signals": {
+      "bootedFromMedia": [ "virtual (media|disk|usb)", "boot(ed)? from" ],
+      "completion": [ "maintenance environment setup completed" ],
+      "reset": [ "power (cycle|off)", "system reset" ]
+    },
+    "signalsStatus": "unverified: log paths and message patterns are Dell iDRAC conventions, not proven against the maintenance environment"
+  },
+  "models": {
+    "validatedBySimplifiedProvisioning": [ "AX-650", "AX-750" ]
+  }
+}

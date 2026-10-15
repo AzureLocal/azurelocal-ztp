@@ -1,0 +1,21 @@
+{
+  "oem": "Supermicro",
+  "displayName": "Supermicro (BMC)",
+  "publisher": "Supermicro",
+  "sbe": {
+    "discoveryManifestUrl": null,
+    "releaseNotesUrl": null,
+    "downloadMethod": "none",
+    "note": "No Microsoft SBE discovery short link was found for Supermicro; Get-ZtpSbe reports that and stages nothing."
+  },
+  "bmc": {
+    "kind": "supermicro",
+    "managerId": "1",
+    "systemId": "1",
+    "virtualMediaSlot": "RemovableDisk",
+    "logServices": [],
+    "signals": { "bootedFromMedia": [], "completion": [] },
+    "signalsStatus": "unverified: layout only, nothing here has run on Supermicro hardware"
+  },
+  "models": { "validatedBySimplifiedProvisioning": [] }
+}

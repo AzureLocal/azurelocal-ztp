@@ -1,0 +1,21 @@
+{
+  "oem": "HPE",
+  "displayName": "HPE ProLiant (iLO)",
+  "publisher": "HPE",
+  "sbe": {
+    "discoveryManifestUrl": "https://aka.ms/AzureStackSBEUpdate/HPE",
+    "releaseNotesUrl": null,
+    "downloadMethod": "vendor-connector",
+    "note": "Discovery manifest resolves (verified); package URIs are empty."
+  },
+  "bmc": {
+    "kind": "ilo",
+    "managerId": "1",
+    "systemId": "1",
+    "virtualMediaSlot": "RemovableDisk",
+    "logServices": [ { "id": "IML", "path": "/redfish/v1/Systems/1/LogServices/IML/Entries" } ],
+    "signals": { "bootedFromMedia": [], "completion": [] },
+    "signalsStatus": "unverified: layout only, nothing here has run on HPE hardware"
+  },
+  "models": { "validatedBySimplifiedProvisioning": [ "ProLiant DL360 Gen11" ] }
+}
