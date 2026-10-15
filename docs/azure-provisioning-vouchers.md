@@ -1,5 +1,7 @@
 # Azure provisioning from vouchers
 
+> API versions of `bicep/main.bicep` (reviewed against Microsoft Learn on 15 Oct 2026): `Microsoft.AzureStackHCI/edgeMachines@2026-10-01` (stable; the live-proven version is `2025-12-01-preview` with the same properties), `Microsoft.Edge/sites@2025-06-01` (stable), the Edge configuration resources at `2025-12-01-preview` (the portal's shape; the stable documents list no properties for them). The stable versions have built and linted clean but have **not** been through a what-if or a deployment yet; run Plan and claim one node first (see [Automated bootstrap](automated-bootstrap.md)).
+
 > Create the site, the site configuration and one edge machine per node from the ownership vouchers, wait until every node is ready to cluster, and record the Arc machine names.
 
 This is the Azure half of simplified machine provisioning. It starts where [Redfish virtual USB and voucher read-back](redfish-virtual-usb-vouchers.md) ends: one `<serial>.pem` voucher per node. It does the same work as the portal's **Machine provisioning (preview) > Provision** wizard, from a template and a parameters file, so it is repeatable and reviewable.

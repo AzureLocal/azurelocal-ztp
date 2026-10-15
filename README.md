@@ -50,7 +50,8 @@ For the long-form walkthrough, see [docs/server-preparation.md](docs/server-prep
 `scripts/simplified-provisioning/` holds the stage scripts that take nodes from bare metal to Arc-connected machines ready to cluster. Every script is a plan by default and changes hardware or Azure only with an explicit `-Execute`.
 
 ```powershell
-# Everything in order, resumable (plan by default; settings: config/simplified-provisioning/ztp-provisioning.example.json)
+# Everything in order, from the newest maintenance ISO to the cluster handoff, resumable (plan by default;
+# settings: config/simplified-provisioning/ztp-provisioning.example.json; the path: docs/automated-bootstrap.md)
 ./scripts/simplified-provisioning/Invoke-ZtpProvisioning.ps1 -ConfigPath ./config/simplified-provisioning/ztp-provisioning.json
 ./scripts/simplified-provisioning/Invoke-ZtpProvisioning.ps1 -ConfigPath ./config/simplified-provisioning/ztp-provisioning.json -BmcCredential $bmc -AdminPassword $admin -ConfirmNotClustered -Execute
 

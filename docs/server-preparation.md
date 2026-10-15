@@ -358,7 +358,7 @@ Write-Host "Creating download directory..." -ForegroundColor Cyan
 New-Item -ItemType Directory -Path $downloadDir -Force
 
 Write-Host "Downloading maintenance environment from Microsoft..." -ForegroundColor Cyan
-$downloadUrl = "https://aka.ms/aep/installeros/$maintenanceVer"
+$downloadUrl = "https://aka.ms/aep/installeros/$maintenanceVer"   # newest published train: scripts/simplified-provisioning/Get-ZtpBootstrapIso.ps1
 $zipFile = Join-Path $downloadDir "maintenance-env.zip"
 
 Invoke-WebRequest -Uri $downloadUrl -OutFile $zipFile

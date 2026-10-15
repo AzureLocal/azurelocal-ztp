@@ -16,6 +16,8 @@ All scripts live in `scripts/simplified-provisioning/`. Every script is a plan b
 | The maintenance environment **writing the voucher back** into the read-write image | **Not yet proven live.** The scripts, the reader and the validation are built for it. If the voucher does not appear, use the Configurator App fallback below. |
 | Booting the same content as an **ISO on the iDRAC CD slot** | **Failed** (`sr0` medium errors). Use the USB-stick slot image. |
 
+The media can be built from the newest maintenance ISO automatically and the boot can be watched end to end: see [Automated bootstrap](automated-bootstrap.md) and [Bootstrap media and the OEM SBE](bootstrap-media-and-sbe.md). A maintenance ISO of the 2610 train (`10.2610.0.3061`) was downloaded, turned into a per-node image and read-back checked on 15 Oct 2026 without hardware; booting it is not yet proven.
+
 ## How it works
 
 1. `New-ZtpVirtualUsbImage.ps1` writes one raw disk image per node. It copies the contents of the maintenance ISO onto a GPT disk with **one FAT32 partition labelled `CDROM`**, the same layout Microsoft's `usb_prep.exe` produces. Optionally it adds the `edgeuser` password hash.

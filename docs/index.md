@@ -29,6 +29,7 @@ This is **not** a replacement for the Microsoft documentation. It is the *automa
 |------|------|
 | Bring up servers via BMC automation (the differentiator) | [Server preparation](server-preparation.md) |
 | Claim machines and configure the Azure side | [Azure portal provisioning](azure-portal-provisioning.md) |
+| Run the whole path with one command: newest ISO and SBE, virtual USB, boot, watch, vouchers, Azure, ready, handoff to cluster deployment | [Automated bootstrap](automated-bootstrap.md) and [Bootstrap media and the OEM SBE](bootstrap-media-and-sbe.md) |
 | Boot nodes from a per-node virtual USB over Redfish and read the ownership vouchers back from the image | [Redfish virtual USB and voucher read-back](redfish-virtual-usb-vouchers.md) |
 | Create the site, configuration and edge machines from vouchers with a template, wait for ready and map the Arc machine names | [Azure provisioning from vouchers](azure-provisioning-vouchers.md) |
 | Deploy a single-node Azure Local instance | [Single-node S2D deployment](single-node-s2d-deployment.md) |
