@@ -93,3 +93,11 @@ scripts/simplified-provisioning/bicep/*.parameters.json
 # Invoke-ZtpProvisioning.ps1 run state (local progress only)
 *.state.json
 *.state.json.tmp
+
+# Run outputs of the automated bootstrap (events, handoff, generated Sonar config, downloads): local only
+ztp-events.jsonl
+ztp-handoff.json
+ztp-cluster-inputs.yaml
+ztp-cluster-inputs.json
+ztp-sonar.config.json
+ZtpDownloads/
