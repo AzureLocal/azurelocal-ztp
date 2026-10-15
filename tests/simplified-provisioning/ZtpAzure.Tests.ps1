@@ -98,10 +98,10 @@ Describe 'ZTP Azure half' {
     Describe 'Bicep template' {
         It 'reproduces the portal resources at the portal api-versions' {
             $text = Get-Content (Join-Path $script:scripts 'bicep/main.bicep') -Raw
-            foreach ($type in "Microsoft.Edge/sites@2025-03-01-preview", "Microsoft.Edge/configurations@2025-12-01-preview",
+            foreach ($type in "Microsoft.Edge/sites@2025-06-01", "Microsoft.Edge/configurations@2025-12-01-preview",
                 "Microsoft.Edge/configurations/networkConfigurations@2025-12-01-preview", "Microsoft.Edge/configurations/timeServerConfigurations@2025-12-01-preview",
                 "Microsoft.Edge/configurations/connectivityConfigurations@2025-12-01-preview", "Microsoft.Edge/configurations/securityConfigurations@2025-12-01-preview",
-                "Microsoft.Edge/configurationReferences@2025-12-01-preview", "Microsoft.AzureStackHCI/edgeMachines@2025-12-01-preview") {
+                "Microsoft.Edge/configurationReferences@2025-12-01-preview", "Microsoft.AzureStackHCI/edgeMachines@2026-10-01") {
                 $text | Should -Match ([regex]::Escape("'$type'"))
             }
             $text | Should -Match "guid\(azl_rp_app_object_id, 'Management', resourceGroup\(\)\.name, subscription\(\)\.id\)"

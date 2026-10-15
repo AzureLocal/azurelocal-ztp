@@ -10,6 +10,16 @@
 // holds it (the service rejects the https secret URI).
 // Deployed at resource-group scope by scripts/simplified-provisioning/Invoke-ZtpAzureProvisioning.ps1. Parameter example:
 // main.example.parameters.json.
+// API versions (reviewed against Microsoft Learn on 15 Oct 2026):
+//   Microsoft.AzureStackHCI/edgeMachines  2026-10-01 (stable). Live-proven so far: 2025-12-01-preview, whose properties used here are unchanged in 2026-10-01
+//                                         (siteDetails, ownershipVoucherDetails, provisioningDetails.osProfile and userDetails). To go back: change this one version.
+//   Microsoft.Edge/sites                  2025-06-01 (stable; same displayName property as the 2025-03-01-preview used before).
+//   Microsoft.Edge/configurations and its network, time, connectivity and security children, and configurationReferences:
+//                                         2025-12-01-preview, the portal's shape. The stable 2025-06-01 and 2025-08-01 documents list no properties for them, so
+//                                         they are not used. No published Bicep types: BCP081 is disabled on those resources.
+//   Microsoft.Authorization/roleAssignments 2022-04-01 (stable, current).
+//   2026-10-15-preview of edgeMachines exists; not used (a preview is only adopted when a property here needs it).
+
 targetScope = 'resourceGroup'
 
 // ------------------------------------------------------------------ inputs (main.example.parameters.json)
@@ -110,14 +120,14 @@ var rbacAdministratorRoleId = 'f58310d9-a9f6-439a-9e8d-f62e7b41a168' // Role Bas
 var connectedMachineResourceAdministratorRoleId = 'cd570a14-e51a-42ad-bac8-bafd67325302' // Azure Connected Machine Resource Administrator
 
 // ------------------------------------------------------------------ site and site configuration
-resource siteNew 'Microsoft.Edge/sites@2025-03-01-preview' = if (create_site) {
+resource siteNew 'Microsoft.Edge/sites@2025-06-01' = if (create_site) {
   name: siteName
   properties: {
     displayName: empty(site_display_name) ? siteName : site_display_name
   }
 }
 
-resource site 'Microsoft.Edge/sites@2025-03-01-preview' existing = {
+resource site 'Microsoft.Edge/sites@2025-06-01' existing = {
   name: siteName
 }
 
@@ -241,7 +251,7 @@ resource hciRpRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (as
 }
 
 // ------------------------------------------------------------------ edge machines (claim with the ownership voucher)
-resource edgeMachines 'Microsoft.AzureStackHCI/edgeMachines@2025-12-01-preview' = [
+resource edgeMachines 'Microsoft.AzureStackHCI/edgeMachines@2026-10-01' = [
   for node in selectedNodes: {
     name: node.name
     location: location

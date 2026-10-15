@@ -97,7 +97,7 @@ if ($Stage -eq 'All' -and -not $Execute) { Write-ZtpLog 'Plan only (default): th
 
 $bicepDir = Join-Path $PSScriptRoot 'bicep'
 $templateFile = Join-Path $bicepDir 'main.bicep'
-$siteApiVersion = '2025-03-01-preview'
+$siteApiVersion = '2025-06-01'
 $stages = if ($Stage -eq 'All') { @('Prereqs', 'Validate', 'Plan') + $(if ($Execute) { @('Execute', 'Watch') } else { @() }) } else { @($Stage) }
 $script:ztpInputs = $null
 
