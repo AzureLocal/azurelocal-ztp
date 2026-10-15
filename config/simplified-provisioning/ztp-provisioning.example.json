@@ -1,6 +1,12 @@
 {
+  "$schema": "./ztp-provisioning.schema.json",
+  "BootstrapCacheDirectory": "D:/ZtpDownloads",
+  "BootstrapVersion": "latest",
+  "IncludePreview": false,
+  "Oem": "Dell",
+  "SbeModel": "AX760",
+  "SbeSolutionVersion": "latest",
   "NodesFile": "./config/simplified-provisioning/nodes.json",
-  "SourcePath": "D:/Media/maintenance/provision-os.iso",
   "ImageDirectory": "D:/ZtpVirtualUsb",
   "ImageNamePrefix": "ztp-usb-",
   "ShareHost": "192.0.2.10",
@@ -9,6 +15,11 @@
   "VoucherWaitMinutes": 120,
   "RfsWriteAttribute": false,
   "SkipCertificateCheck": true,
+  "EventLogPath": "./ztp-events.jsonl",
+  "BootstrapTimeoutMinutes": 120,
+  "BootstrapVoucherTimeoutMinutes": 90,
+  "SkipAzureCheck": false,
+  "Location": "eastus",
   "SubscriptionId": "00000000-0000-0000-0000-000000000000",
   "ResourceGroupName": "rg-example",
   "ParameterFile": "./scripts/simplified-provisioning/bicep/main.parameters.json",
@@ -18,5 +29,7 @@
   "ArcMachineNameMapPath": "./config/simplified-provisioning/arc-machine-names.json",
   "ReadyTimeoutMinutes": 180,
   "PollIntervalSeconds": 60,
+  "HandoffPath": "./ztp-handoff.json",
+  "ClusterInputsPath": "./ztp-cluster-inputs.yaml",
   "StatePath": "./ztp-provisioning.state.json"
 }

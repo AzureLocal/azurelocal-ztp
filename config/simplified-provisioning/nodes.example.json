@@ -1,6 +1,6 @@
 {
   "nodes": [
-    { "name": "node-01", "service_tag": "EXAMPLE1", "bmc_address": "198.51.100.11" },
-    { "name": "node-02", "service_tag": "EXAMPLE2", "bmc_address": "198.51.100.12" }
+    { "name": "node-01", "service_tag": "EXAMPLE1", "bmc_address": "198.51.100.11", "management_ip": "192.0.2.11" },
+    { "name": "node-02", "service_tag": "EXAMPLE2", "bmc_address": "198.51.100.12", "management_ip": "192.0.2.12" }
   ]
 }
