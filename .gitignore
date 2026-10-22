@@ -85,6 +85,7 @@ config/cluster/cluster-config.md
 /nodes.json
 config/simplified-provisioning/*.json
 !config/simplified-provisioning/*.example.json
+!config/simplified-provisioning/*.schema.json
 scripts/simplified-provisioning/bicep/*.parameters.json
 !scripts/simplified-provisioning/bicep/*.example.parameters.json
 *.pem
