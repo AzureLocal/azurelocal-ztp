@@ -86,7 +86,7 @@ Learn's portal steps say to "Provide the machine name as the Azure Arc resource 
 
 **Why it matters.** Learn: "Inbox drivers are not supported for use with Azure Local" ([host network requirements](https://learn.microsoft.com/azure/azure-local/concepts/host-network-requirements#driver-requirements)). Cloud deployment validation fails if it finds more than one physical adapter with a default gateway ([decision 8](https://learn.microsoft.com/azure/azure-local/plan/cloud-deployment-network-considerations#decision-8-determine-management-ips-and-infrastructure-network)). Learn says to install the OEM's drivers and put the SBE in `C:\SBE` before deployment ([install drivers and firmware](https://learn.microsoft.com/azure/azure-local/deploy/deployment-install-os#install-drivers-and-firmware)). Dell says its SBE can't install drivers or firmware during deployment, so they're installed before it.
 
-**What the run does.** Prepare fixes all of it before Validate. See [the Prepare gates](architecture.md#the-prepare-gates). If Prepare warns "No SBE driver for <adapter>", that adapter stays on its current driver and Validate may reject it. Check that you downloaded the right SBE family for the model.
+**What the run does.** Prepare fixes all of it before Validate. See [the Prepare gates](architecture.md#the-prepare-gates). If Prepare warns "No SBE driver for &lt;adapter&gt;", that adapter stays on its current driver and Validate may reject it. Check that you downloaded the right SBE family for the model.
 
 If gate 4 fails with "default gateway on ..." or "DHCP still on ...", run `-From Prepare` again. If it fails again, look at the adapters on the node from the BMC console.
 
@@ -108,9 +108,9 @@ After a `ProvisionOs` resubmit, Azure keeps the earlier attempt's error on the j
 
 | Message | Check |
 | --- | --- |
-| "No sign-in to <ip> with the ZTP administrator secret" | The node answers on `cluster_nodes[].ip_address` (DHCP reservation for the management MAC). TCP 5985 is open from the host. The node addresses are in the host's WinRM TrustedHosts list ([Learn](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_remote_troubleshooting#how-to-use-an-ip-address-in-a-remote-command)). The secret in `ztp.admin_secret` is the one the claim used. |
-| "No adapter on <node> has the environment file's MAC" | `cluster_nodes[].mac_address` is the management adapter's MAC. |
-| "<node> reported no result within 30 minutes" | Look at the node from the BMC console. The task's result is in `C:\ProgramData\AzureLocalZtp\result.json`. |
+| "No sign-in to &lt;ip&gt; with the ZTP administrator secret" | The node answers on `cluster_nodes[].ip_address` (DHCP reservation for the management MAC). TCP 5985 is open from the host. The node addresses are in the host's WinRM TrustedHosts list ([Learn](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_remote_troubleshooting#how-to-use-an-ip-address-in-a-remote-command)). The secret in `ztp.admin_secret` is the one the claim used. |
+| "No adapter on &lt;node&gt; has the environment file's MAC" | `cluster_nodes[].mac_address` is the management adapter's MAC. |
+| "&lt;node&gt; reported no result within 30 minutes" | Look at the node from the BMC console. The task's result is in `C:\ProgramData\AzureLocalZtp\result.json`. |
 
 ## Other Learn troubleshooting
 
