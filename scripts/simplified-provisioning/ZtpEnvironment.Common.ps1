@@ -163,6 +163,8 @@ function Test-ZtpEnvironment {
         & $check $Environment 'ztp.azl_rp_object_id' 'ztp.azl_rp_object_id' 'guid' -Optional
         $tags = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.tags'
         if ($null -ne $tags -and $tags -isnot [System.Collections.IDictionary]) { $problems.Add('ztp.tags must be a mapping of tag names to values.') }
+        $allow = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.node_preparation.allow_unvalidated_sbe'
+        if ($null -ne $allow -and $allow -isnot [bool]) { $problems.Add("ztp.node_preparation.allow_unvalidated_sbe must be true or false, not '$allow'.") }
     }
     return $problems.ToArray()
 }

@@ -126,6 +126,46 @@ Set-AzKeyVaultSecret -VaultName <vault-name> -Name <provisioning-admin-secret-na
 Set-AzKeyVaultSecret -VaultName <vault-name> -Name <deployment-admin-secret-name> -SecretValue (Read-Host -AsSecureString 'Deployment admin password')
 ```
 
+### Pin the OS version
+
+`ztp.os_version` decides which Azure Local build the machines install. **Pin an exact version** so every run installs the same build, and a run fails instead of silently taking a newer one.
+
+1. List the builds your subscription can install. The list comes from the subscription's own provisioning catalog, so a preview build your subscription is entitled to appears here too:
+
+   ```powershell
+   Connect-AzAccount -Tenant <tenant-id>
+   ./scripts/simplified-provisioning/Get-ZtpOsImage.ps1 -SubscriptionId <subscription-id> -Location eastus
+   ```
+
+   Each entry shows `VsrVersion`, the solution version to pin (for example `12.2610.1004.50`), and `IsPreview`.
+
+2. Set it in the environment file:
+
+   ```yaml
+   ztp:
+     os_version: "12.2610.1004.50"
+   ```
+
+   | Value | Installs |
+   |-------|----------|
+   | An exact `VsrVersion` | That build, or the run fails. Recommended |
+   | `latest` | The newest general-availability build in the catalog at the time of the run |
+   | `latest-preview` | The newest build including preview builds |
+
+3. Pick the SBE for that version in [Step 2](#step-2-download-the-oem-sbe). The run checks that the OEM's manifest lists your SBE as validated with the pinned version, and stops at the Resolve stage if it doesn't:
+
+   ```text
+   No Dell SBE for model AX760 is validated with solution 12.2610.1004.50 in https://aka.ms/AzureStackSBEUpdate/DellEMC.
+   ```
+
+   That means the OEM hasn't published an SBE for that build yet. Pin a version the OEM supports, or wait for the OEM.
+
+4. Run the [plan](#step-3-run-the-plan). It shows the pinned version in the Azure stage (`-OsVersion`) and the SBE check in Resolve, before anything changes.
+
+**Testing a build before the OEM supports it.** To test a new build with an SBE the OEM hasn't validated for it, set `ztp.node_preparation.allow_unvalidated_sbe: true`. The run still uses the SBE in `sbe_bundle` and still checks its hash; it only skips the OEM's compatibility check, warns, and records `compatibilityChecked: false` in the handoff. The OEM doesn't support that combination, and cluster Validate or Deploy may refuse it. Use it for tests only. See the [environment file reference](environment-file.md#media-and-share).
+
+To change the build of machines that are already provisioned, provision them again from `Boot`: delete their provisioned machines first, because a voucher can claim a machine only once. See [Resume a stopped run](#resume-a-stopped-run).
+
 ## Step 2: Download the OEM SBE
 
 Prepare installs the network drivers from the OEM's Solution Builder Extension (SBE) and copies the SBE to `C:\SBE` on each node. The OEM's discovery manifest publishes the package's hash but no download address, so you download the package yourself. For Dell, that needs a Dell support account.
