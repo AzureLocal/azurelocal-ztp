@@ -10,7 +10,7 @@ For the operator steps, see the [Operator guide](operator-guide.md). To run it f
 
 ![Azure Local ZTP: from the environment file to machines ready to join a cluster](./diagrams/ztp-flow.png)
 
-The diagram source is [`diagrams/ztp-flow.drawio`](./diagrams/ztp-flow.drawio). It has four lanes: the operator, the management host, Azure, and the machine with its BMC. The operator supplies two inputs, the environment file and the OEM's Solution Builder Extension (SBE). Then the operator runs one command: `Invoke-ZtpEnvironment.ps1 -InfrastructureFile <file>`, first as a plan, then with `-Execute`.
+The diagram source is [`diagrams/ztp-flow.drawio`](https://github.com/AzureLocal/azurelocal-ztp/blob/main/docs/diagrams/ztp-flow.drawio). It has four lanes: the operator, the management host, Azure, and the machine with its BMC. The operator supplies two inputs, the environment file and the OEM's Solution Builder Extension (SBE). Then the operator runs one command: `Invoke-ZtpEnvironment.ps1 -InfrastructureFile <file>`, first as a plan, then with `-Execute`.
 
 ## Entry point and layers
 

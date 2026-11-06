@@ -1,43 +1,70 @@
-# Azure Local ZTP
+---
+layout: home
 
-> Zero-touch provisioning for Azure Local: from bare machines to nodes that are ready for cluster Validate, with one command and no USB stick.
+hero:
+  name: Azure Local ZTP
+  text: Zero-touch provisioning for Azure Local
+  tagline: From bare machines to nodes that are ready for cluster Validate, with one command, an environment file and the OEM's SBE. No USB stick, no one in the rack.
+  image:
+    src: /assets/images/azurelocal-ztp-icon.svg
+    alt: Azure Local ZTP
+  actions:
+    - theme: brand
+      text: Operator guide
+      link: /operator-guide
+    - theme: alt
+      text: How it works
+      link: /architecture
+    - theme: alt
+      text: View on GitHub
+      link: https://github.com/AzureLocal/azurelocal-ztp
 
-## What this repo does
+features:
+  - icon: 🧾
+    title: Two inputs
+    details: Fill in the environment file and point it at the OEM's Solution Builder Extension. Everything else is automated, behind gates that check each step is ready.
+    link: /environment-file
+    linkText: Environment file reference
+  - icon: 🔌
+    title: Boot over the BMC
+    details: Builds one virtual USB image per machine and boots every machine from it at once over Redfish. The ownership voucher is read back from the image.
+    link: /redfish-virtual-usb-vouchers
+    linkText: Virtual USB and vouchers
+  - icon: ☁️
+    title: Claimed in Azure
+    details: A Bicep template creates the site and claims the machines with their vouchers. The run waits for Ready to cluster and resubmits a failed OS install once.
+    link: /azure-provisioning-vouchers
+    linkText: Azure provisioning
+  - icon: 🧰
+    title: Ready for Validate
+    details: Installs the OEM network drivers from the SBE, puts the SBE in C:\SBE, sets one static management address and one gateway, and checks every machine.
+    link: /architecture#the-prepare-gates
+    linkText: The Prepare gates
+  - icon: 🚦
+    title: Management host or pipeline
+    details: Runs from a Windows management host, or from a self-hosted Windows runner with an approval before the destructive Boot stage. Resume with -From.
+    link: /automation-pipelines
+    linkText: Running from a pipeline
+  - icon: 🩺
+    title: Known issues, handled
+    details: Proven live on Dell AX-760 with iDRAC 7.30. The issues found on those runs, and Microsoft Learn's recovery steps, are written down.
+    link: /troubleshooting
+    linkText: Troubleshooting
+---
 
-Microsoft's [simplified machine provisioning (preview)](https://learn.microsoft.com/azure/azure-local/deploy/simplified-machine-provisioning) has an operator write a USB stick, plug it into each machine, collect each voucher, and claim the machines in the portal. This repo automates the whole flow from a management host or a pipeline:
+## How a run flows
 
-1. Downloads and checks the maintenance ISO, and builds one virtual USB image per node.
-2. Boots each node from its image over the BMC (Redfish virtual media). No one needs to be in the rack.
-3. Reads each node's ownership voucher back from its image.
-4. Claims the machines in Azure with a Bicep template, waits for the OS install and Arc, and resubmits a failed OS install once.
-5. Installs the OEM's network drivers from the SBE, copies the SBE to `C:\SBE`, creates the deployment admin and sets one static management address.
-6. Writes a handoff with each machine's `arcMachineResourceId` for the cluster deployment.
+![From the environment file to machines ready to join a cluster](./diagrams/ztp-flow.png)
 
-You supply two things: an environment file and the OEM's SBE. Then you run `Invoke-ZtpEnvironment.ps1`, first as a plan, then with `-Execute`.
-
-![Azure Local ZTP flow](./diagrams/ztp-flow.png)
-
-## Status
-
-| Item | State |
+| You supply | You get |
 | --- | --- |
-| Microsoft feature | Preview. Provisioning resources in East US only. Arc gateway not supported ([Learn](https://learn.microsoft.com/azure/azure-local/deploy/simplified-machine-provisioning)). |
-| End-to-end flow | **Proven on Dell AX-760 / iDRAC 7.30**, two nodes, Azure Local build `12.2690.1003.15`, maintenance image `10.2610.0.3063`. AX-760 isn't on Learn's validated list for this flow, so it's not supported by Microsoft. |
-| Other OEMs | The BMC handling and Prepare are proven on Dell iDRAC only. Lenovo, HPE and Supermicro have OEM files with the SBE manifest address only. |
-| Scope | Ends at "ready for Validate". Active Directory preparation, Validate and Deploy are separate. |
+| The environment file: machines, BMC addresses, network, Azure subscription, resource group, site, OS build, and Key Vault references | Every machine provisioned on the pinned Azure Local build, Arc connected, and ready for cluster Validate |
+| The folder with the OEM's SBE files | The OEM network drivers installed, the SBE in `C:\SBE`, and a handoff with each machine's `arcMachineResourceId` |
 
-## Where to start
+::: warning Preview
+Microsoft's simplified machine provisioning is in preview, in East US only, and doesn't support Arc gateway. Read the [overview](/overview) for the current status and limits before you start.
+:::
 
-| If you want to... | Read |
-| --- | --- |
-| Understand the stages, gates, data flow and limits | [Design and architecture](architecture.md) |
-| Run it from a management host | [Operator guide](operator-guide.md) |
-| Fill in the environment file | [Environment file reference](environment-file.md) |
-| Run it from Azure DevOps, GitHub Actions or GitLab CI | [Running from a pipeline](automation-pipelines.md) |
-| Fix a failed or slow run | [Troubleshooting and known issues](troubleshooting.md) |
-| Drive the orchestrator directly, or read the event format | [Orchestrator reference](automated-bootstrap.md) |
-| Know how the ISO and SBE are found and checked | [Bootstrap media and the OEM SBE](bootstrap-media-and-sbe.md) |
-| Know how the virtual USB boot and voucher read-back work | [Redfish virtual USB and voucher read-back](redfish-virtual-usb-vouchers.md) |
-| Know what the Azure template creates | [Azure provisioning from vouchers](azure-provisioning-vouchers.md) |
+## Part of the Azure Local tools
 
-The [Server preparation](server-preparation.md) and [Azure portal provisioning](azure-portal-provisioning.md) guides describe an earlier, manual route. They're kept for reference and are superseded by the operator guide.
+Check the network with [Beacon](https://azurelocal.cloud/azurelocal-beacon/) before you start, watch the run with [Sonar](https://azurelocal.cloud/azurelocal-sonar/), and document the result with [Ranger](https://azurelocal.cloud/azurelocal-ranger/). More at [azurelocal.cloud](https://azurelocal.cloud/).
