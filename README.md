@@ -1,151 +1,97 @@
 # azurelocal-ztp
 
-> Automation for Microsoft's [Simplified machine provisioning](https://learn.microsoft.com/en-us/azure/azure-local/deploy/simplified-machine-provisioning) feature on Azure Local — bypasses the manual USB-media step using BMC/Redfish.
+> Zero-touch provisioning for Azure Local. Automates Microsoft's [simplified machine provisioning (preview)](https://learn.microsoft.com/azure/azure-local/deploy/simplified-machine-provisioning) end to end, from bare machines to nodes that are ready for cluster Validate, with no USB stick and no one in the rack.
 
-## What this gets you
+## What it does
 
-Microsoft's official Simplified machine provisioning workflow requires an operator to physically:
+You supply an environment file and the OEM's Solution Builder Extension (SBE). One command then:
 
-1. Create a USB stick from the maintenance-environment ISO.
-2. Plug it into each server.
-3. Boot the server, wait, repeat for every node.
+1. Downloads and checks the maintenance ISO, and builds one virtual USB image per node.
+2. Boots each node from its image over the BMC (Redfish virtual media, USB-stick slot), all nodes in parallel.
+3. Reads each node's ownership voucher back from its image.
+4. Claims the machines in Azure with a Bicep template, waits for "Ready to cluster", and resubmits a failed OS install once.
+5. Writes a handoff with each machine's `arcMachineResourceId`.
+6. Prepares each node for Validate: the SBE's network drivers, the SBE in `C:\SBE`, the deployment admin, one static management address and one default gateway.
 
-**This repo bypasses that.** It uses BMC/Redfish (iDRAC, XCC, iLO) to mount the maintenance-environment ISO as virtual media, set the boot source, and reboot — all without anyone in the rack and without USB media.
+Each stage starts only when the gate before it passes, and a rerun resumes where the last run stopped.
 
-The end result is identical to the manual flow: each server boots into the maintenance environment, generates an FDO ownership voucher, and is ready to be claimed from the Azure portal. But you can drive it from anywhere with reachability to the BMC network.
+![Azure Local ZTP flow](docs/diagrams/ztp-flow.png)
 
 ## Status
 
-- **Microsoft feature:** Public preview as of azloc-2604 (East US only).
-- **This repo:** Active development. CI/CD pipelines are placeholder stubs pending real implementation. Documentation is mid-conversion from AsciiDoc to MkDocs — table layouts may need cleanup.
+| Item | State |
+| --- | --- |
+| Microsoft feature | Preview. Provisioning resources in **East US** only. Arc gateway not supported. |
+| End-to-end flow | **Proven on Dell AX-760 / iDRAC 7.30**: two nodes, Azure Local build `12.2690.1003.15`, maintenance image `10.2610.0.3063`. |
+| Microsoft support | AX-760 isn't on Learn's [validated hardware list](https://learn.microsoft.com/azure/azure-local/deploy/simplified-machine-provisioning#hardware-prerequisites) for this flow (Dell AX-650 and AX-750, Lenovo ThinkAgile MX650 V3 and V4, HPE ProLiant DL360 Gen11). It works, but Microsoft doesn't support it. |
+| Other OEMs | BMC handling and node preparation are proven on Dell iDRAC only. |
+| Scope | Ends at "ready for Validate". Active Directory preparation, Validate and Deploy are separate. |
 
 ## Quickstart
 
+On a Windows management host that reaches the BMCs, in an elevated PowerShell 7 session:
+
 ```powershell
-# 1. Clone
 git clone https://github.com/AzureLocal/azurelocal-ztp.git
 cd azurelocal-ztp
 
-# 2. Generate a per-cluster config from the reference template
-Copy-Item config\cluster-reference.env.template config\cluster-reference.env
-# ...edit config\cluster-reference.env with your values...
-.\scripts\common\utilities\tools\Generate-ConfigFromReference.ps1
+# 1. Copy the example environment file outside the repo and fill it in (no secrets: Key Vault references only)
+Copy-Item ./examples/infrastructure.example.yml D:\ztp\infrastructure.yml
 
-# 3. Discover the BMCs and inventory the hardware
-.\scripts\common\utilities\tools\Discover-Servers.ps1
+# 2. Download the OEM SBE (zip, its xml, SBE_Discovery_<OEM>.xml) and set ztp.node_preparation.sbe_bundle to that folder
 
-# 4. Mount the maintenance-environment ISO and reboot
-.\scripts\common\utilities\tools\Mount-AzureLocalISO.ps1
-.\scripts\common\utilities\tools\Set-ServerBootSource.ps1 -BootSource Cd
-.\scripts\common\utilities\tools\Restart-Servers.ps1
+# 3. Plan: changes nothing in Azure, on the BMCs or on the nodes
+Connect-AzAccount -Tenant <tenant-id>
+./scripts/simplified-provisioning/Invoke-ZtpEnvironment.ps1 -InfrastructureFile D:\ztp\infrastructure.yml
 
-# 5. Collect ownership vouchers, then claim machines from the Azure portal
-#    (see docs/azure-portal-provisioning.md)
+# 4. Execute: REINSTALLS the nodes; rerun the same command to resume
+./scripts/simplified-provisioning/Invoke-ZtpEnvironment.ps1 -InfrastructureFile D:\ztp\infrastructure.yml -Execute
 ```
 
-For the long-form walkthrough, see [docs/server-preparation.md](docs/server-preparation.md).
+Read the [Operator guide](docs/operator-guide.md) before you run it. It lists the Azure, hardware, BMC, network and host prerequisites.
 
-### Simplified-provisioning scripts (virtual USB, vouchers, Azure)
+## Documentation
 
-`scripts/simplified-provisioning/` holds the stage scripts that take nodes from bare metal to Arc-connected machines ready to cluster. Every script is a plan by default and changes hardware or Azure only with an explicit `-Execute`.
+| Page | What it covers |
+| --- | --- |
+| [Design and architecture](docs/architecture.md) | Stages and gates, what runs where, data flow, resume, parallelism, limits |
+| [Operator guide](docs/operator-guide.md) | Prerequisites, inputs, plan and execute runs, watching, resume, the handoff |
+| [Environment file reference](docs/environment-file.md) | Every key the scripts read |
+| [Running from a pipeline](docs/automation-pipelines.md) | Self-hosted runner, identity, secrets, approval; examples for Azure DevOps, GitHub Actions and GitLab CI |
+| [Troubleshooting and known issues](docs/troubleshooting.md) | 5901 and the resubmit, registration delay, iDRAC quirks, Arc names, node state after install |
+| [Orchestrator reference](docs/automated-bootstrap.md) | Driving `Invoke-ZtpProvisioning.ps1` directly; events and handoff format |
+| [Bootstrap media and the OEM SBE](docs/bootstrap-media-and-sbe.md) | How the ISO and SBE are found and checked |
+| [Redfish virtual USB and vouchers](docs/redfish-virtual-usb-vouchers.md) | The virtual USB boot and voucher read-back, script by script |
+| [Azure provisioning from vouchers](docs/azure-provisioning-vouchers.md) | The Bicep template, the claim and the wait for ready |
+
+The docs site is built with VitePress from `docs/`:
 
 ```powershell
-# Everything in order, from the newest maintenance ISO to the cluster handoff, resumable (plan by default;
-# settings: config/simplified-provisioning/ztp-provisioning.example.json; the path: docs/automated-bootstrap.md)
-./scripts/simplified-provisioning/Invoke-ZtpProvisioning.ps1 -ConfigPath ./config/simplified-provisioning/ztp-provisioning.json
-./scripts/simplified-provisioning/Invoke-ZtpProvisioning.ps1 -ConfigPath ./config/simplified-provisioning/ztp-provisioning.json -BmcCredential $bmc -AdminPassword $admin -ConfirmNotClustered -Execute
-
-# Or stage by stage. Media: one image per node, boot over the BMC, read the vouchers back (no USB stick)
-./scripts/simplified-provisioning/New-ZtpVirtualUsbImage.ps1 -SourcePath D:\Media\provision-os.iso -NodeName node-01, node-02 -OutputDirectory D:\ZtpVirtualUsb
-./scripts/simplified-provisioning/Start-MaintenanceBoot.ps1 -ImageDirectory D:\ZtpVirtualUsb -ShareHost 192.0.2.10 -NodeName node-01, node-02 -NodesFile ./nodes.json
-./scripts/simplified-provisioning/Wait-ZtpVoucher.ps1 -NodeName node-01, node-02 -NodesFile ./nodes.json -ImageDirectory D:\ZtpVirtualUsb -OutputDirectory D:\ZtpVouchers
-
-# Azure: site, configuration and edge machines from the vouchers, then wait for ready
-./scripts/simplified-provisioning/Invoke-ZtpAzureProvisioning.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example -ParameterFile ./scripts/simplified-provisioning/bicep/main.parameters.json -VoucherPath D:\ZtpVouchers
+cd docs
+npm install
+npm run docs:dev
 ```
-
-Read [Redfish virtual USB and voucher read-back](docs/redfish-virtual-usb-vouchers.md) and [Azure provisioning from vouchers](docs/azure-provisioning-vouchers.md) first: they state what is proven on hardware (USB-stick-slot `.img` boot on Dell 16G, a portal-equivalent Azure deployment) and what is not yet proven live (voucher write-back by the maintenance environment, the scripted Azure submit end to end, the `ProvisionOs` retry). Neutral examples: [config/simplified-provisioning/nodes.example.json](config/simplified-provisioning/nodes.example.json) and [scripts/simplified-provisioning/bicep/main.example.parameters.json](scripts/simplified-provisioning/bicep/main.example.parameters.json). Tests: `Invoke-Pester tests/simplified-provisioning`.
 
 ## Repository layout
 
 ```text
 .
-├── docs/                       # MkDocs documentation source (mkdocs.yml at root)
+├── docs/                          # VitePress documentation; diagrams/ holds the draw.io flow chart and its PNG
+├── examples/                      # Example environment file and pipelines (placeholders only)
 ├── scripts/
-│   ├── common/
-│   │   ├── AzureLocalConfig.psm1
-│   │   ├── RedfishUtils.psm1   # BMC/Redfish operations — the differentiator
-│   │   ├── discovery/          # Hardware inventory
-│   │   ├── service-principals/ # Azure SP creation
-│   │   └── utilities/          # Standalone tools (mount, boot, restart, etc.)
-│   ├── simplified-provisioning/ # Virtual USB images, Redfish boot, voucher read-back, Azure provisioning, Bicep
-│   └── Trigger-ZTPDeployment.ps1
-├── tests/simplified-provisioning/ # Pester 5 tests and recorded-response fixtures (no hardware, no Azure)
+│   ├── simplified-provisioning/   # Entry point, orchestrator, stage scripts, node preparation, Bicep
+│   └── common/                    # Earlier BMC, discovery and utility scripts
 ├── config/
-│   ├── simplified-provisioning/nodes.example.json  # Node list example (copy to nodes.json, git-ignored)
-│   ├── environment.yaml        # Generated, .gitignore'd — your cluster's values
-│   ├── environment.json        # Generated, .gitignore'd
-│   ├── cluster-reference.env.template   # Template — edit this, then generate
-│   └── cluster/cluster-config.md        # Generated/local-only, .gitignore'd
-├── .github/                    # CODEOWNERS, ISSUE_TEMPLATE, workflows (stubs)
-├── repo-management/            # Repo operations docs (org standard)
-└── CLAUDE.md                   # Context for Claude Code sessions
+│   ├── oem/                       # OEM definitions: SBE manifest, driver folders, BMC log patterns
+│   └── simplified-provisioning/   # Example and schema of the orchestrator inputs (generated files are git-ignored)
+└── tests/simplified-provisioning/ # Pester 5 tests with recorded fixtures (no hardware, no Azure)
 ```
 
-## Hardware support
-
-This repo's BMC automation has been validated against:
-
-| Vendor | Model | BMC | Status |
-| ------ | ----- | --- | ------ |
-| Dell | AX-650, AX-750 | iDRAC 9 / iDRAC 10 | Validated |
-| Lenovo | ThinkAgile MX650 V3, V4 | XCC2 | Planned |
-| HPE | ProLiant DL360 Gen11 | iLO 6 | Planned |
-
-The Microsoft-validated hardware list for Simplified machine provisioning is the source of truth: [Hardware prerequisites](https://learn.microsoft.com/en-us/azure/azure-local/deploy/simplified-machine-provisioning#hardware-prerequisites). **AX-760 is not on the validated list** — don't use it for Simplified machine provisioning.
-
-## Azure prerequisites
-
-```bash
-# Register the feature
-az feature register --subscription <subId> \
-  --namespace Microsoft.DeviceOnboarding --name AzureLocalZTP
-
-# Register the resource providers
-for rp in Microsoft.HybridCompute Microsoft.AzureStackHCI \
-          Microsoft.DeviceOnboarding Microsoft.Edge Microsoft.GuestConfiguration \
-          Microsoft.HybridConnectivity Microsoft.KeyVault Microsoft.ManagedIdentity \
-          Microsoft.PolicyInsights Microsoft.Storage Microsoft.Insights; do
-  az provider register --namespace $rp
-done
-```
-
-You also need:
-
-- Resource group **Owner**, or **Contributor** + **Role Based Access Control Administrator** on the target RG.
-- A region that supports the feature — currently **East US only**.
-
-## Documentation
-
-Documentation is built with MkDocs (`mkdocs.yml`). To run locally:
-
-```bash
-pip install mkdocs mkdocs-material
-mkdocs serve
-```
-
-Key pages:
-
-- [Server preparation](docs/server-preparation.md) — the BMC-automation walkthrough
-- [Azure portal provisioning](docs/azure-portal-provisioning.md) — voucher claim, site config
-- [Redfish virtual USB and voucher read-back](docs/redfish-virtual-usb-vouchers.md) — per-node images, BMC boot, vouchers from the image
-- [Azure provisioning from vouchers](docs/azure-provisioning-vouchers.md) — site, configuration, edge machines, wait for ready, Arc machine names
-- [Single-node S2D deployment](docs/single-node-s2d-deployment.md)
-- [Automation pipelines](docs/automation-pipelines.md) — planned CI/CD surface (currently stubs)
+Run the tests with `Invoke-Pester ./tests/simplified-provisioning`.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). This repo follows the org-wide [AzureLocal standards](https://azurelocal.cloud/standards/) — see [STANDARDS.md](STANDARDS.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md). This repo follows the org-wide [AzureLocal standards](https://azurelocal.cloud/standards/); see [STANDARDS.md](STANDARDS.md).
 
 ## License
 

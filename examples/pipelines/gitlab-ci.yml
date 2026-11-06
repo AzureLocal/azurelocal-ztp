@@ -1,0 +1,63 @@
+# GitLab CI: zero-touch provisioning of Azure Local machines.
+# Plan, then a manual job, then Execute. See docs/automation-pipelines.md.
+# Copy to .gitlab-ci.yml (or include it) to use it. Run it from Build > Pipelines > Run pipeline, and set the variables there.
+#
+# Before you use it:
+# - A self-hosted Windows runner on the management network with shell = "pwsh", running as a service under a local
+#   administrator account, with the prerequisites in docs/operator-guide.md. Give it the tags "windows" and "ztp".
+# - In the runner's config.toml, [runners.custom_build_dir] enabled = true, so GIT_CLONE_PATH below is allowed. A fixed
+#   clone path keeps the run's state in the same _media folder on every job and every run.
+# - The runner host has a managed identity (Azure VM or Azure Arc-enabled server) with the roles in
+#   docs/automation-pipelines.md. No secret is stored in GitLab: the environment file references Key Vault.
+# - If your tier has them, protect the environment azurelocal-ztp-execute and require deployment approvals.
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web"
+
+variables:
+  INFRASTRUCTURE_FILE:
+    value: 'D:\ztp\environments\example\infrastructure.yml'
+    description: Environment file path on the runner
+  ZTP_NODES:
+    value: all
+    description: Nodes, comma-separated, or all
+  ZTP_FROM:
+    value: none
+    description: Run this stage and every later one (none = continue where the last run stopped)
+    options: [none, Resolve, Media, Boot, Bootstrap, Vouchers, Azure, Ready, Handoff, Prepare]
+  GIT_CLONE_PATH: $CI_BUILDS_DIR/azurelocal-ztp/repo
+
+stages:
+  - plan
+  - execute
+
+default:
+  tags: [windows, ztp]
+
+plan:
+  stage: plan
+  timeout: 30m
+  script:
+    - |
+      $p = @{ InfrastructureFile = $env:INFRASTRUCTURE_FILE; UseManagedIdentity = $true }
+      if ($env:ZTP_NODES -ne 'all') { $p.Node = @($env:ZTP_NODES -split ',' | ForEach-Object Trim | Where-Object { $_ }) }
+      ./scripts/simplified-provisioning/Invoke-ZtpEnvironment.ps1 @p
+
+execute:
+  stage: execute
+  needs: [plan]
+  # Manual: someone reviews the plan job's output and starts this job. It reinstalls the nodes.
+  when: manual
+  allow_failure: false
+  environment:
+    name: azurelocal-ztp-execute
+  # One run at a time: the share, the BMCs and the state file serve one run.
+  resource_group: azurelocal-ztp
+  timeout: 8h
+  script:
+    - |
+      $p = @{ InfrastructureFile = $env:INFRASTRUCTURE_FILE; UseManagedIdentity = $true; Execute = $true }
+      if ($env:ZTP_NODES -ne 'all') { $p.Node = @($env:ZTP_NODES -split ',' | ForEach-Object Trim | Where-Object { $_ }) }
+      if ($env:ZTP_FROM -ne 'none') { $p.From = $env:ZTP_FROM }
+      ./scripts/simplified-provisioning/Invoke-ZtpEnvironment.ps1 @p

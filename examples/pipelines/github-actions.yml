@@ -1,0 +1,74 @@
+# GitHub Actions: zero-touch provisioning of Azure Local machines.
+# Plan, then a manual approval, then Execute. See docs/automation-pipelines.md.
+# Copy to .github/workflows/ to use it.
+#
+# Before you use it:
+# - A self-hosted Windows runner on the management network, running as a service under a local administrator account,
+#   with the prerequisites in docs/operator-guide.md. Give it the label "ztp".
+# - The runner host has a managed identity (Azure VM or Azure Arc-enabled server) with the roles in
+#   docs/automation-pipelines.md. No secret is stored in GitHub: the environment file references Key Vault.
+# - An environment named azurelocal-ztp-execute with required reviewers.
+
+name: azurelocal-ztp
+
+on:
+  workflow_dispatch:
+    inputs:
+      infrastructure_file:
+        description: Environment file path on the runner
+        required: true
+        default: 'D:\ztp\environments\example\infrastructure.yml'
+      nodes:
+        description: Nodes, comma-separated, or all
+        required: true
+        default: all
+      from:
+        description: Run this stage and every later one (none = continue where the last run stopped)
+        required: true
+        default: none
+        type: choice
+        options: [none, Resolve, Media, Boot, Bootstrap, Vouchers, Azure, Ready, Handoff, Prepare]
+
+# One run per environment file at a time: the share, the BMCs and the state file serve one run.
+concurrency:
+  group: azurelocal-ztp-${{ inputs.infrastructure_file }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # Inputs reach the script through environment variables, never pasted into the script text.
+  INFRASTRUCTURE_FILE: ${{ inputs.infrastructure_file }}
+  ZTP_NODES: ${{ inputs.nodes }}
+  ZTP_FROM: ${{ inputs.from }}
+
+jobs:
+  plan:
+    name: Plan (changes nothing)
+    runs-on: [self-hosted, windows, ztp]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Invoke-ZtpEnvironment.ps1 (plan)
+        shell: pwsh
+        run: |
+          $p = @{ InfrastructureFile = $env:INFRASTRUCTURE_FILE; UseManagedIdentity = $true }
+          if ($env:ZTP_NODES -ne 'all') { $p.Node = @($env:ZTP_NODES -split ',' | ForEach-Object Trim | Where-Object { $_ }) }
+          ./scripts/simplified-provisioning/Invoke-ZtpEnvironment.ps1 @p
+
+  execute:
+    name: Execute (reinstalls the nodes)
+    needs: plan
+    runs-on: [self-hosted, windows, ztp]
+    environment: azurelocal-ztp-execute
+    timeout-minutes: 480
+    steps:
+      - uses: actions/checkout@v4
+      - name: Invoke-ZtpEnvironment.ps1 -Execute
+        shell: pwsh
+        run: |
+          $p = @{ InfrastructureFile = $env:INFRASTRUCTURE_FILE; UseManagedIdentity = $true; Execute = $true }
+          if ($env:ZTP_NODES -ne 'all') { $p.Node = @($env:ZTP_NODES -split ',' | ForEach-Object Trim | Where-Object { $_ }) }
+          if ($env:ZTP_FROM -ne 'none') { $p.From = $env:ZTP_FROM }
+          ./scripts/simplified-provisioning/Invoke-ZtpEnvironment.ps1 @p

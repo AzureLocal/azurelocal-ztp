@@ -1,7 +1,5 @@
 # Azure provisioning from vouchers
 
-> API versions of `bicep/main.bicep` (reviewed against Microsoft Learn on 15 Oct 2026): `Microsoft.AzureStackHCI/edgeMachines@2026-10-01` (stable; the live-proven version is `2025-12-01-preview` with the same properties), `Microsoft.Edge/sites@2025-06-01` (stable), the Edge configuration resources at `2025-12-01-preview` (the portal's shape; the stable documents list no properties for them). The stable versions have built and linted clean but have **not** been through a what-if or a deployment yet; run Plan and claim one node first (see [Automated bootstrap](automated-bootstrap.md)).
-
 > Create the site, the site configuration and one edge machine per node from the ownership vouchers, wait until every node is ready to cluster, and record the Arc machine names.
 
 This is the Azure half of simplified machine provisioning. It starts where [Redfish virtual USB and voucher read-back](redfish-virtual-usb-vouchers.md) ends: one `<serial>.pem` voucher per node. It does the same work as the portal's **Machine provisioning (preview) > Provision** wizard, from a template and a parameters file, so it is repeatable and reviewable.
@@ -14,15 +12,17 @@ All scripts live in `scripts/simplified-provisioning/`. The orchestrator is a pl
 |------|-------|
 | The Bicep template (`bicep/main.bicep`): site, `Microsoft.Edge/configurations` with network, time, connectivity and security settings, configuration reference, Azure Local resource provider role, one `edgeMachines` per node, constrained role delegations | **Proven**: it reproduces a portal deployment that worked end to end. It builds cleanly with `az bicep build`. |
 | Response shapes and status logic (edge machine lifecycle, `ProvisionOs` job steps, ready-to-cluster check) | Verified against recorded live responses (`tests/simplified-provisioning/fixtures`). |
-| Scripted submit end to end (`Invoke-ZtpAzureProvisioning.ps1 -Execute`) | **Not yet proven live.** Covered by mocked tests only. Plan and what-if first. |
-| `ProvisionOs` retry (`-RetryProvisionOs -Execute`) | **Not yet proven live.** The body follows Microsoft's troubleshooting article. |
+| Scripted submit end to end (`Invoke-ZtpAzureProvisioning.ps1 -Execute`): what-if, claim, watch to ready | **Proven on Dell AX-760 / iDRAC 7.30**, two nodes, build `12.2690.1003.15`. |
+| `ProvisionOs` resubmit (`-RetryProvisionOs -Execute`) | **Proven on Dell AX-760 / iDRAC 7.30.** It passed the 5901 failure in about 2 minutes on every node; see [Troubleshooting](troubleshooting.md#_5901-at-setuphybridcomputerp-and-the-automatic-resubmit). The body follows Microsoft's troubleshooting article. |
+
+API versions in `bicep/main.bicep`: `Microsoft.AzureStackHCI/edgeMachines@2026-10-01`, `Microsoft.Edge/sites@2025-06-01`, and the Edge configuration resources at `2025-12-01-preview` (the portal's shape; the stable documents list no properties for them).
 
 ## Prerequisites
 
 - PowerShell 7, the Azure CLI with Bicep (`az bicep version`), and the `Az.Accounts`, `Az.Resources` and `Az.KeyVault` modules. For the ready check also `Az.ConnectedMachine`.
-- `Connect-AzAccount` as an operator with **Contributor and Role Based Access Control Administrator** (or Owner) on the target resource group.
-- The `Microsoft.DeviceOnboarding/AzureLocalZTP` feature and the resource providers registered, see the [README](https://github.com/AzureLocal/azurelocal-ztp#azure-prerequisites).
-- The target resource group and a **Key Vault** in the **East US** preview region. The administrator password secret lives in that vault. The scripts never put the password in the template; the template carries only the secret's resource ID (the service rejects the `https` secret URI).
+- `Connect-AzAccount` as an operator with **Contributor and Role Based Access Control Administrator** (or Owner) on the target resource group ([Learn](https://learn.microsoft.com/azure/azure-local/deploy/simplified-machine-provisioning#azure-prerequisites)), and the Key Vault rights in the [Operator guide](operator-guide.md#azure).
+- The `Microsoft.DeviceOnboarding/AzureLocalZTP` feature and the resource providers registered; see [Azure prerequisites](operator-guide.md#azure).
+- The target resource group, with the provisioning resources in **East US**, and a **Key Vault** that uses the Azure RBAC permission model. The vault can be in another resource group or subscription. The administrator password secret lives in that vault. The scripts never put the password in the template; the template carries only the secret's resource ID (the service rejects the `https` secret URI).
 - The object ID of the Azure Local resource provider first-party application in your tenant (the portal calls it `hciRPServiceprincipalID`).
 - One `<serial>.pem` voucher per node in a folder (`<serial>.pem` or `<serial>\*.pem`).
 
@@ -38,7 +38,7 @@ Copy-Item scripts/simplified-provisioning/bicep/main.example.parameters.json scr
 |-----|---------|
 | `location` | Provisioning region (preview: `eastus`). |
 | `azl_rp_app_object_id` | Object ID of the Azure Local resource provider application in your tenant. |
-| `key_vault_name`, `key_vault_resource_group` | The vault that holds the administrator secret. |
+| `key_vault_name`, `key_vault_resource_group`, `key_vault_subscription_id` | The vault that holds the administrator secret. The subscription defaults to the deployment's. |
 | `site_name`, `site_display_name`, `configuration_name` | The `Microsoft.Edge` site and its configuration. |
 | `admin_username`, `admin_secret_name` | Local administrator user and the **name** of its Key Vault secret. |
 | `time_zone` | For example `UTC`. |
@@ -114,7 +114,7 @@ A failed lifecycle, stage, job or step is terminal: the script throws (non-zero 
     -EdgeMachineName node-02 -RetryProvisionOs -Execute
 ```
 
-The retry re-PUTs `jobs/ProvisionOs` the way Microsoft's troubleshooting article does (the machine's own `osProfile` and `userDetails`, target `HCI`). It is sent **only with `-RetryProvisionOs` and `-Execute`**, at most `-MaxRetryCount` times per node (default 1). Without `-Execute` the retry is printed, not sent. Fix the cause first. This path is not yet proven live.
+The retry re-PUTs `jobs/ProvisionOs` the way Microsoft's troubleshooting article does (the machine's own `osProfile` and `userDetails`, target `HCI`). It is sent **only with `-RetryProvisionOs` and `-Execute`**, at most `-MaxRetryCount` times per node (default 1). Without `-Execute` the retry is printed, not sent. Learn: the service doesn't retry a failed OS install by itself, and a resubmit can take up to 30 minutes ([reattempt a failed OS provisioning](https://learn.microsoft.com/azure/azure-local/deploy/troubleshoot-simplified-machine-provisioning#reattempt-a-failed-os-provisioning)). After a resubmit, Azure keeps the earlier attempt's error on the job; read the current status, not the old error.
 
 ## Arc machine name map
 
@@ -147,15 +147,10 @@ The role definition IDs in the template are Azure built-in roles, the only liter
 ## Caveats
 
 - **Preview, East US only.** The provisioning region is `eastus` while the feature is in preview.
-- **The Arc machine is named `<device-id>-1`.** Use the edge machine's `arcMachineResourceId` for cluster deployment.
+- **The Arc machine is named `<device-id>-1`.** The service replaces the `arcMachineResourceId` set at claim time. Read it from the edge machine after it's `Provisioned` and use that for cluster deployment.
 - **Vouchers stay in memory.** They are read, base64-encoded into a secure parameter and discarded. They are never printed or written to a file by this script.
-- **Not yet proven live:** the scripted submit end to end and the `ProvisionOs` retry. Use the plan and what-if, and compare with the portal if in doubt.
+- **Expect a 5901 on the first OS install** and a late registration on some nodes. See [Troubleshooting](troubleshooting.md).
 
 ## Next steps
 
-Provisioning leaves you with Arc-connected machines with the mandatory extensions. These steps come after it and are outside this repository:
-
-- OEM solution builder extension (SBE) driver and node preparation.
-- Azure Local cluster deployment, using each edge machine's `arcMachineResourceId`.
-
-The NIC 2026 Azure Local public repository, <https://github.com/thisismydemo/nic2026_azl>, shows one worked example of those steps (it is published after the event, if it is not available yet).
+Provisioning leaves you with Arc-connected machines with the mandatory extensions. Next, the Prepare stage (`Initialize-ZtpNode.ps1`) installs the SBE's network drivers, copies the SBE to `C:\SBE`, creates the deployment admin and sets one static management address; see the [Operator guide](operator-guide.md). Cluster Validate and Deploy, with each edge machine's `arcMachineResourceId`, are outside this repository.

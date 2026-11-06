@@ -6,8 +6,44 @@ export default defineConfig({
   title: "Azure Local ZTP",
   description: "Governed centrally by HCS Platform Engineering standards",
   themeConfig: {
-    nav: [{"link":"/","text":"Home"},{"link":"/server-preparation","text":"Server preparation"},{"link":"/azure-portal-provisioning","text":"Azure portal provisioning"},{"link":"/automated-bootstrap","text":"Automated bootstrap"},{"link":"/bootstrap-media-and-sbe","text":"Bootstrap media and SBE"},{"link":"/redfish-virtual-usb-vouchers","text":"Redfish virtual USB and vouchers"},{"link":"/azure-provisioning-vouchers","text":"Azure provisioning from vouchers"},{"link":"/single-node-s2d-deployment","text":"Single-node S2D deployment"},{"link":"/automation-pipelines","text":"Automation pipelines"}],
-    sidebar: [{"link":"/","text":"Home"},{"link":"/server-preparation","text":"Server preparation"},{"link":"/azure-portal-provisioning","text":"Azure portal provisioning"},{"link":"/automated-bootstrap","text":"Automated bootstrap"},{"link":"/bootstrap-media-and-sbe","text":"Bootstrap media and SBE"},{"link":"/redfish-virtual-usb-vouchers","text":"Redfish virtual USB and vouchers"},{"link":"/azure-provisioning-vouchers","text":"Azure provisioning from vouchers"},{"link":"/single-node-s2d-deployment","text":"Single-node S2D deployment"},{"link":"/automation-pipelines","text":"Automation pipelines"}],
+    nav: [
+      { text: 'Home', link: '/' },
+      { text: 'Design', link: '/architecture' },
+      { text: 'Operator guide', link: '/operator-guide' },
+      { text: 'Pipelines', link: '/automation-pipelines' },
+      { text: 'Troubleshooting', link: '/troubleshooting' }
+    ],
+    sidebar: [
+      { text: 'Home', link: '/' },
+      {
+        text: 'Zero-touch provisioning',
+        items: [
+          { text: 'Design and architecture', link: '/architecture' },
+          { text: 'Operator guide', link: '/operator-guide' },
+          { text: 'Environment file reference', link: '/environment-file' },
+          { text: 'Running from a pipeline', link: '/automation-pipelines' },
+          { text: 'Troubleshooting and known issues', link: '/troubleshooting' }
+        ]
+      },
+      {
+        text: 'How it works',
+        items: [
+          { text: 'Orchestrator reference', link: '/automated-bootstrap' },
+          { text: 'Bootstrap media and the OEM SBE', link: '/bootstrap-media-and-sbe' },
+          { text: 'Redfish virtual USB and vouchers', link: '/redfish-virtual-usb-vouchers' },
+          { text: 'Azure provisioning from vouchers', link: '/azure-provisioning-vouchers' }
+        ]
+      },
+      {
+        text: 'Legacy and other guides',
+        collapsed: true,
+        items: [
+          { text: 'Server preparation (superseded)', link: '/server-preparation' },
+          { text: 'Azure portal provisioning (superseded)', link: '/azure-portal-provisioning' },
+          { text: 'Single-node S2D deployment', link: '/single-node-s2d-deployment' }
+        ]
+      }
+    ],
     socialLinks: [
       { icon: 'github', link: 'https://github.com/AzureLocal/azurelocal-ztp' }
     ],

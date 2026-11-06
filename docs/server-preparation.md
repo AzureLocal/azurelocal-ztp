@@ -1,5 +1,8 @@
 # Azure Local ZTP Server Preparation Guide
 
+> [!WARNING]
+> **Superseded.** This guide describes an earlier, manual route: a share for an ISO, the ISO on the iDRAC **virtual CD** slot, and a CD boot. That route failed in testing (`sr0` medium errors) and isn't how this repo provisions machines now. Use the [Operator guide](operator-guide.md): one environment file, a per-node image on the BMC's **USB-stick** slot, and the whole flow to "ready for Validate". This page is kept for reference only.
+
 > [!NOTE]
 > **Note**
 > This guide provides detailed instructions for preparing servers for Zero-Touch Provisioning (ZTP) of Azure Local. It combines manual steps with automated scripts and references the official Azure Local ZTP documentation.
