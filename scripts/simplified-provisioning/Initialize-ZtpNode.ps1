@@ -184,6 +184,35 @@ function Wait-AzureReady([string]$Name, [int]$Minutes) {
         Start-Sleep 60
     }
 }
+function Test-WinRmPort([string]$Ip) {
+    $client = [System.Net.Sockets.TcpClient]::new()
+    try { return ($client.ConnectAsync($Ip, 5985).Wait(3000) -and $client.Connected) } catch { return $false } finally { $client.Dispose() }
+}
+# Where to sign in first. The provisioned OS takes its management address from DHCP, so without a DHCP reservation the
+# node isn't on the environment file's address yet: then use the address its Arc machine reports for the management MAC.
+# The static address is set during preparation, and every later step signs in on it.
+function Resolve-ConnectAddress([string]$Name, [string]$Ip, [string]$Mac) {
+    if (-not $Execute -or (Test-WinRmPort $Ip)) { return $Ip }
+    try { return (Find-DhcpAddress $Name $Ip $Mac) }
+    catch { Write-Warning "  Couldn't read $Name's address from its Arc machine: $($_.Exception.Message)"; return $Ip }
+}
+function Find-DhcpAddress([string]$Name, [string]$Ip, [string]$Mac) {
+    $job = Invoke-ZtpArm -Method GET -Path "$rgPath/$Name/jobs/ProvisionOs" -AllowNotFound
+    $arcId = [string](Get-ZtpPathValue $job 'properties.provisioningRequest.onboardingConfiguration.resourceId')
+    if (-not $arcId) { return $Ip }
+    $arc = Invoke-ZtpArm -Method GET -Path $arcId -ApiVersion '2024-07-10' -AllowNotFound
+    foreach ($candidate in @(if ($arc) { Get-ZtpArcMachineAddress -Machine $arc -MacAddress $Mac })) {
+        if (Test-WinRmPort $candidate) {
+            Write-Step "  $Name doesn't answer on $Ip yet; its Arc machine reports $candidate (DHCP) for $Mac. Signing in there; preparation sets $Ip."
+            $trusted = [string](Get-Item WSMan:\localhost\Client\TrustedHosts -ErrorAction SilentlyContinue).Value
+            if ($trusted -ne '*' -and ($trusted -split ',' | ForEach-Object Trim) -notcontains $candidate) {
+                Write-Warning "  $candidate isn't in this server's WinRM TrustedHosts, so a sign-in by address fails (0x8009030e). Add it, then rerun."
+            }
+            return $candidate
+        }
+    }
+    return $Ip
+}
 function Wait-Session([string]$Ip, [pscredential]$Cred, [int]$Minutes) {
     $deadline = (Get-Date).AddMinutes($Minutes)
     while ($true) {
@@ -324,7 +353,7 @@ foreach ($n in $Node) {
         if (-not $az.Ready) { throw "Not Ready to cluster yet. With -Execute this waits up to $ReadyTimeoutMinutes minutes." }
         Send-PrepareEvent $n 'PrepareStarted' 'Azure reports Ready to cluster; signing in to install the OEM network drivers and set the network'
         Write-Step "  Gate 2: sign-in with the ZTP administrator secret"
-        $s = Wait-Session $ip $cred $ReachTimeoutMinutes
+        $s = Wait-Session (Resolve-ConnectAddress $n $ip $mac) $cred $ReachTimeoutMinutes
         $before = Invoke-Command -Session $s -ScriptBlock $readState -ArgumentList $mac, $zip.Name, $deployAdmin
         if (-not $before.Mgmt) { throw "No adapter on $n has the environment file's MAC $mac." }
         $plan = @(Get-DriverPlan $before)

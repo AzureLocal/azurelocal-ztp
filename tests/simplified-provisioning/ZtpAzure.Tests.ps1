@@ -223,6 +223,29 @@ Describe 'ZTP Azure half' {
         }
     }
 
+    Context 'Get-ZtpArcMachineAddress' {
+        BeforeAll {
+            # The shape an Arc machine returns in properties.networkProfile (MACs lowercase with colons).
+            $arcMachine = [pscustomobject]@{ properties = [pscustomobject]@{ networkProfile = [pscustomobject]@{ networkInterfaces = @(
+                            [pscustomobject]@{ name = 'Slot 3 Port 1'; macAddress = '00:00:5e:00:53:a0'; ipAddresses = @(
+                                    [pscustomobject]@{ address = '192.0.2.123'; ipAddressVersion = 'IPv4'; subnet = [pscustomobject]@{ addressPrefix = '192.0.2.0/24' } },
+                                    [pscustomobject]@{ address = 'fe80::1'; ipAddressVersion = 'IPv6' }) },
+                            [pscustomobject]@{ name = 'Slot 3 Port 2'; macAddress = '00:00:5e:00:53:a1'; ipAddresses = @([pscustomobject]@{ address = '169.254.10.2'; ipAddressVersion = 'IPv4' }) }
+                        ) } } }
+        }
+        It 'returns the IPv4 address of the adapter with the MAC, in either MAC format' {
+            Get-ZtpArcMachineAddress -Machine $arcMachine -MacAddress '00-00-5E-00-53-A0' | Should -Be '192.0.2.123'
+            Get-ZtpArcMachineAddress -Machine $arcMachine -MacAddress '00:00:5e:00:53:a0' | Should -Be '192.0.2.123'
+        }
+        It 'skips link-local addresses and unknown MACs' {
+            @(Get-ZtpArcMachineAddress -Machine $arcMachine -MacAddress '00:00:5E:00:53:A1').Count | Should -Be 0
+            @(Get-ZtpArcMachineAddress -Machine $arcMachine -MacAddress '00:00:5E:00:53:FF').Count | Should -Be 0
+        }
+        It 'copes with a machine that reports no network profile' {
+            @(Get-ZtpArcMachineAddress -Machine ([pscustomobject]@{ properties = [pscustomobject]@{} }) -MacAddress '00:00:5E:00:53:A0').Count | Should -Be 0
+        }
+    }
+
     Describe 'Readiness poller (Wait-ZtpMachineReady.ps1)' {
         BeforeAll {
             $script:wait = Join-Path $script:scripts 'Wait-ZtpMachineReady.ps1'
