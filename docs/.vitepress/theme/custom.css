@@ -19,3 +19,7 @@
 }
 
 .VPHero .image-src { max-width: 220px; border-radius: 38px; }
+
+/* Images open in the zoom viewer when clicked. */
+.vp-doc img { cursor: zoom-in; }
+.vp-doc a img { cursor: pointer; }

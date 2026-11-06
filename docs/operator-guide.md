@@ -15,7 +15,7 @@ Read [Design and architecture](architecture.md) first for the stages and gates. 
 5. Run [execute](#step-4-run-execute) and [watch it](#watch-the-run).
 6. Take the [handoff](#what-to-hand-to-the-cluster-deployment) to cluster deployment.
 
-On live runs, two nodes took about 1.5 to 2 hours from the start to "ready for Validate". A node that registers late can add up to about 35 minutes. That figure was **proven on Dell AX-760 / iDRAC 7.30**.
+On live runs, two nodes took about 1.5 to 2 hours from the start to "ready for Validate". A node that registers late can add up to about 45 minutes. That figure was **proven on Dell AX-760 / iDRAC 7.30**.
 
 ## Prerequisites
 
@@ -99,6 +99,15 @@ The template gives each edge machine's identity the right to assign **Key Vault 
 | Keep the generated files and the handoff out of source control. | They hold your subscription, addresses and resource IDs. |
 
 ## Step 1: Write the environment file
+
+Clone the repository onto the management host, and open an elevated PowerShell 7 session at its root. Every command on this page runs from there.
+
+```powershell
+git clone https://github.com/AzureLocal/azurelocal-ztp.git D:\git\azurelocal-ztp
+Set-Location D:\git\azurelocal-ztp
+```
+
+The run keeps its working files in `_media` at the root of the clone: downloads, images, vouchers and state. Git ignores that folder. Keep the clone where it lasts, because resuming a run depends on `_media`.
 
 Copy [`examples/infrastructure.example.yml`](https://github.com/AzureLocal/azurelocal-ztp/blob/main/examples/infrastructure.example.yml), keep it outside this repository, and fill in your values. Every key is described in the [Environment file reference](environment-file.md).
 
@@ -196,7 +205,7 @@ Connect-AzAccount -Tenant <tenant-id>
     -EventLogPath ./_media/ztp-state/ztp-events.jsonl -ClusterName <cluster-name> -Execute
 ```
 
-Two things are normal on Dell AX-760 / iDRAC 7.30: each node's first OS install fails with 5901 and the run resubmits it once, and a node can wait over half an hour at `AwaitingConnection` after the claim. See [Reading what you see](monitoring.md#reading-what-you-see), and [Troubleshooting](troubleshooting.md) for the causes.
+Two things are normal on Dell AX-760 / iDRAC 7.30: a first OS install can fail with 5901, and the run resubmits it once; and a node can wait up to about 45 minutes at `AwaitingConnection` after the claim. See [Reading what you see](monitoring.md#reading-what-you-see), and [Troubleshooting](troubleshooting.md) for the causes.
 
 ## Resume a stopped run
 

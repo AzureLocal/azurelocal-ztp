@@ -5,8 +5,8 @@ Launches AzureLocal Sonar on the ZTP provisioning: the event file of the bootstr
 Azure. Plan by default.
 .DESCRIPTION
 Builds a Sonar config (provisioningRoute simplified, the nodes of the node list, ztpEvents.path = the event file that
-Wait-ZtpBootstrapComplete.ps1 writes) and starts Start-AzlSonar.ps1 from the Sonar repository on the
-feature/ztp-provisioning branch or later (the branch that adds the ztpEvents option). Sonar then shows, in one page, the ZTP events
+Wait-ZtpBootstrapComplete.ps1 writes) and starts Start-AzlSonar.ps1 from a clone of the Sonar repository (main;
+https://github.com/AzureLocal/azurelocal-sonar, docs at https://azurelocal.cloud/azurelocal-sonar/ztp). Sonar then shows, in one page, the ZTP events
 (Mounted, Booting, MaintenanceEnvironmentRunning, VoucherWritten, ReadyForPortal) in its log pane and, once the edge machines
 exist, their ProvisionOs jobs and lifecycle stages read from Azure (read-only; sign in with Connect-AzAccount first). Sonar
 only reads; this script changes nothing but the generated config file.

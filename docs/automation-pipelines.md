@@ -58,7 +58,7 @@ Set `ztp.azl_rp_object_id` in the environment file. Otherwise the run looks the 
 
 ## Run time, approval and concurrency
 
-- **Long run.** Execute took about 1.5 to 2 hours for two nodes, plus up to about 35 minutes if a node registers late. The scripts wait up to 180 minutes at Ready and 240 minutes at Prepare's first gate. The examples set the execute job's timeout to 8 hours.
+- **Long run.** Execute took about 1.5 to 2 hours for two nodes, plus up to about 45 minutes if a node registers late. The scripts wait up to 180 minutes at Ready and 240 minutes at Prepare's first gate. The examples set the execute job's timeout to 8 hours.
 - **Execute in its own job, behind a manual approval.** The Boot stage reinstalls every node. The plan job runs first and shows exactly what execute will do. A person reviews it and approves.
 - **One run per environment at a time.** The state file is per set of nodes, and the share and the BMCs can't serve two runs. The examples serialize runs: Azure DevOps with an **Exclusive lock** check on the environment, GitHub with `concurrency`, GitLab with `resource_group`.
 - **Exit codes.** A failed gate throws, so the step fails with a non-zero exit code.
