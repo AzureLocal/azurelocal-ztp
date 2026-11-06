@@ -189,13 +189,13 @@ $orchestrator = Join-Path $PSScriptRoot 'Invoke-ZtpProvisioning.ps1'
 $prepare = Join-Path $PSScriptRoot 'Initialize-ZtpNode.ps1'
 $driverStaging = Join-Path $media 'sbe-drivers'
 if ($From -eq 'Prepare') {
-    & $prepare -InfrastructureFile $InfrastructureFile -Node $Node -DriverStagingPath $driverStaging -Execute:$Execute
+    & $prepare -InfrastructureFile $InfrastructureFile -Node $Node -DriverStagingPath $driverStaging -EventLogPath (Join-Path $state 'ztp-events.jsonl') -Execute:$Execute
     return
 }
 if (-not $Execute) {
     & $orchestrator -ConfigPath $config -NodeName $Node
     Write-Output '--- Prepare (after Ready to cluster)'
-    try { & $prepare -InfrastructureFile $InfrastructureFile -Node $Node -DriverStagingPath $driverStaging } catch { Write-Warning $_.Exception.Message }
+    try { & $prepare -InfrastructureFile $InfrastructureFile -Node $Node -DriverStagingPath $driverStaging -EventLogPath (Join-Path $state 'ztp-events.jsonl') } catch { Write-Warning $_.Exception.Message }
     return
 }
 
@@ -224,4 +224,4 @@ if ($From) { $run.From = $From }
 # A run that builds media (from the start, Resolve or Media) is a fresh provisioning, so replace this tool's own images.
 if (-not $From -or $From -in 'Resolve', 'Media') { $run.RebuildImages = $true }
 & $orchestrator @run
-& $prepare -InfrastructureFile $InfrastructureFile -Node $Node -DriverStagingPath $driverStaging -Execute
+& $prepare -InfrastructureFile $InfrastructureFile -Node $Node -DriverStagingPath $driverStaging -EventLogPath (Join-Path $state 'ztp-events.jsonl') -Execute
