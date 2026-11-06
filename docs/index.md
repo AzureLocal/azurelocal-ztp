@@ -67,4 +67,4 @@ Microsoft's simplified machine provisioning is in preview, in East US only, and 
 
 ## Part of the Azure Local tools
 
-Check the network with [Beacon](https://azurelocal.cloud/azurelocal-beacon/) before you start, watch the run with [Sonar](https://azurelocal.cloud/azurelocal-sonar/), and document the result with [Ranger](https://azurelocal.cloud/azurelocal-ranger/). More at [azurelocal.cloud](https://azurelocal.cloud/).
+Check the network with [Beacon](https://azurelocal.cloud/azurelocal-beacon/) before you start, watch the run with [Sonar](https://azurelocal.cloud/azurelocal-sonar/) (see [Monitoring a run](/monitoring)), and document the result with [Ranger](https://azurelocal.cloud/azurelocal-ranger/). More at [azurelocal.cloud](https://azurelocal.cloud/).

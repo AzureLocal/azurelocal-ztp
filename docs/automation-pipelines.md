@@ -23,7 +23,7 @@ Microsoft-hosted and Linux runners can't run this. The runner must be a **self-h
 | The BMCs read the images from an SMB share on the runner | The Boot stage shares the images with Windows SMB, a local account and a Windows Firewall rule. Each BMC connects to the runner on TCP 445. A hosted runner isn't reachable from your BMCs. |
 | The runner must reach the BMCs and the nodes | Redfish over HTTPS to each BMC, and WinRM (TCP 5985) to each node during Prepare. |
 | Elevation | The share, the local account and the firewall rule need administrator rights. Run the runner as a service under an account in local Administrators. |
-| State on disk | The images, vouchers, state file and handoff are in `_media`, next to the checkout. A resume must run on the **same runner, from the same checkout path**. |
+| State on disk | The images, vouchers, state file and handoff are in `_media` at the root of the checkout (git ignores it). A resume must run on the **same runner, from the same checkout path**. |
 
 Set the runner up once:
 

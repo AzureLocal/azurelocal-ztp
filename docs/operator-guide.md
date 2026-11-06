@@ -86,7 +86,7 @@ The template gives each edge machine's identity the right to assign **Key Vault 
 | `powershell-yaml` | `Install-Module powershell-yaml -Scope AllUsers` |
 | Pester 5 | Only to run the tests: `Install-Module Pester -MinimumVersion 5.0 -Scope AllUsers` |
 | WinRM trusted hosts | Prepare connects to each node by IP with a local account (NTLM). Add the node addresses to the client's TrustedHosts list: `Set-Item WSMan:\localhost\Client\TrustedHosts -Value '192.0.2.11,192.0.2.12' -Concatenate`. See [Learn: about_Remote_Troubleshooting](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_remote_troubleshooting#how-to-use-an-ip-address-in-a-remote-command). |
-| Disk space | About 3 GB for the maintenance download and ISO, plus 4 GiB per node for the images, in `_media` next to the clone. |
+| Disk space | About 3 GB for the maintenance download and ISO, plus 4 GiB per node for the images, in `_media` at the root of the clone (git ignores it). |
 | A session that lasts | The run takes hours. Use a session that won't end or sleep, or run it from a [pipeline](automation-pipelines.md). |
 
 ### Security
@@ -177,38 +177,26 @@ It ends with `<node> is ready for Validate` for each node, or throws with the re
 
 ## Watch the run
 
+The run checks every stage itself and stops with the reason when a check fails. You watch it to see where it is. [Monitoring a run](monitoring.md) has what each stage checks, the event file format, Sonar step by step, and how to read what you see.
+
 | Where | What you see |
 | --- | --- |
-| The console | One line per step, `[HH:mm:ssZ] [ztp] ...`, with the stage table at the start and each stage's evidence at the end. During Ready, each change of lifecycle, stage and job step is printed once. Prepare lines start with `[<node>]` when nodes run in parallel. |
-| The event file | `_media/ztp-state/ztp-events.jsonl`, one JSON object per line: `timestamp`, `node`, `state`, `evidence`, `nextAction`, `level`, `stage`. Follow it with `Get-Content -Wait _media\ztp-state\ztp-events.jsonl`. |
-| AzureLocal Sonar | `Start-ZtpMonitor.ps1` writes a Sonar config for the event file and the edge machines, and starts [azurelocal-sonar](https://github.com/AzureLocal/azurelocal-sonar). Sonar only reads. |
+| The console | `[HH:mm:ssZ] [ztp] ...` lines: the stage table at the start and each stage's evidence at the end. During Ready, each change of lifecycle, stage and job step is printed once. Prepare runs all nodes at once, and its lines start with `[<node>]`. |
+| The event file | `_media\ztp-state\ztp-events.jsonl` under the clone root, one JSON object per line. Follow it with `Get-Content -Wait -Tail 20 .\_media\ztp-state\ztp-events.jsonl`. |
+| AzureLocal Sonar | `Start-ZtpMonitor.ps1` writes a Sonar config for the event file and the edge machines, and starts [azurelocal-sonar](https://github.com/AzureLocal/azurelocal-sonar) from its `main` branch. Sonar only reads. |
 | The Azure portal | **Azure Arc** > **Operations** > **Provisioning (preview)** > **Provisioned machines**. Wait for **Ready to cluster** ([Learn: verify Arc connectivity](https://learn.microsoft.com/azure/azure-local/deploy/simplified-machine-provisioning#step-5-verify-azure-arc-connectivity)). |
 
-Start Sonar in a second window. It needs the Sonar repository on a branch with the `ztpEvents` option (`feature/ztp-provisioning` or later). Without that option, Sonar still shows the edge machines.
+Start Sonar in a second window, from the clone root:
 
 ```powershell
 Connect-AzAccount -Tenant <tenant-id>
 ./scripts/simplified-provisioning/Start-ZtpMonitor.ps1 -SonarPath D:\git\azurelocal-sonar `
     -SubscriptionId <subscription-id> -ResourceGroupName <resource-group> `
     -NodesFile ./config/simplified-provisioning/nodes.json `
-    -EventLogPath ..\_media\ztp-state\ztp-events.jsonl -Execute
+    -EventLogPath ./_media/ztp-state/ztp-events.jsonl -ClusterName <cluster-name> -Execute
 ```
 
-After a `ProvisionOs` resubmit, Azure keeps the earlier attempt's error on the job. A monitor can show that old error while the new attempt is running. Trust the job's current status and the console.
-
-### What normal looks like
-
-| Stage | What you'll see | Typical time |
-| --- | --- | --- |
-| Resolve, Media | Download (first run only), then image build | Minutes; the first download is about 1.4 GB |
-| Boot | Each node: override `Once/Floppy`, reset, 10-minute watch for an OS boot | About 10 minutes |
-| Bootstrap, Vouchers | Maintenance environment installs; voucher appears in each image | Up to about 30 minutes; Learn says up to 30 minutes with two reboots ([prepare machines](https://learn.microsoft.com/azure/azure-local/deploy/simplified-machine-provisioning#step-2-prepare-machines)) |
-| Azure | What-if, then "deployment accepted" | Minutes |
-| Ready | Lifecycle `Creating`, `AwaitingConnection`, `Provisioning`, `ReadyForOs`, `InstallingOs`, `Provisioned`. Expect one failed `ProvisionOs` (5901) and an automatic resubmit per node. | About an hour; a node can wait up to about 35 minutes at `AwaitingConnection` |
-| Handoff | Two files written | Seconds |
-| Prepare | Gates 1 to 4 per node, maybe one restart | 10 to 20 minutes |
-
-The 5901 error and the late registration are explained in [Troubleshooting](troubleshooting.md). Both were **proven on Dell AX-760 / iDRAC 7.30**.
+Two things are normal on Dell AX-760 / iDRAC 7.30: each node's first OS install fails with 5901 and the run resubmits it once, and a node can wait over half an hour at `AwaitingConnection` after the claim. See [Reading what you see](monitoring.md#reading-what-you-see), and [Troubleshooting](troubleshooting.md) for the causes.
 
 ## Resume a stopped run
 
@@ -266,7 +254,7 @@ The handoff is in `_media/ztp-state/`:
 **Use each node's `arcMachineResourceId` from the handoff**, not the host name. The service names the Arc machine `<device-id>-1`, not after the host, and replaces the `arcMachineResourceId` set at claim time. The handoff reads `arcMachineResourceId` from the edge machine after Ready, so it names that service-created machine. This was **proven on Dell AX-760 / iDRAC 7.30**.
 
 ```powershell
-(Get-Content ..\_media\ztp-state\node-01+node-02.ztp-handoff.json -Raw | ConvertFrom-Json).nodes |
+(Get-Content .\_media\ztp-state\node-01+node-02.ztp-handoff.json -Raw | ConvertFrom-Json).nodes |
     Select-Object name, arcMachineResourceId
 ```
 
