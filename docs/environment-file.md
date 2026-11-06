@@ -56,7 +56,7 @@ A complete example with placeholder values is in [`examples/infrastructure.examp
 | `ztp.resource_group` | P+P | Text | Resource group of the site and edge machines. Created if missing. |
 | `ztp.site_name` | Prov | Text | Resource name of the `Microsoft.Edge` site. Also names the ARM deployment `ztp-<site_name>`. |
 | `ztp.time_zone` | Prov | Text, for example `UTC` | Site time zone. |
-| `ztp.os_version` | Prov | `latest`, `latest-preview`, or a validated solution recipe version (`12.YYMM.x.y`) | The OS the machines install. It's also the solution version the SBE must be validated with; `latest` skips that check. Pin a version. `Get-ZtpOsImage.ps1` lists the catalog. |
+| `ztp.os_version` | Prov | `latest`, `latest-preview`, or a validated solution recipe version (`12.YYMM.x.y`) | The OS the machines install. It's also the solution version the SBE must be validated with; `latest` skips that check. Pin a version. `Get-ZtpOsImage.ps1` lists the catalog. See [Pin the OS version](operator-guide.md#pin-the-os-version). |
 | `ztp.provisioning_iso` | Prov | `latest`, a train (`2610`), a build, or a Microsoft download URL | The maintenance ISO. `latest` takes the newest published general-availability train. |
 | `ztp.azl_rp_object_id` | Prov, optional | GUID | Object ID of the Azure Local resource provider's service principal in your tenant. If you leave it out, the run looks it up, which needs directory read rights. A managed identity doesn't have those by default, so set it for pipelines. |
 | `ztp.tags` | Prov, optional | Mapping | Tags on the site configuration and the edge machines. The resource group gets them only if the run creates it. Learn: a policy that *requires* tags isn't supported ([troubleshooting](https://learn.microsoft.com/azure/azure-local/deploy/troubleshoot-simplified-machine-provisioning#when-you-provision-new-machines-you-receive-an-internal-server-error)). |
@@ -90,6 +90,7 @@ That application ID is what `Invoke-ZtpEnvironment.ps1` uses for the lookup.
 | `ztp.share_host_adapter` | Prov, one of the two | Adapter name | Instead of `share_host`: the name of the local network adapter whose IPv4 address the BMCs reach. Useful when that address changes, for example on a VPN. It wins over `share_host`. |
 | `ztp.share_name` | Prov | Text, letters, digits and hyphens | Name of the SMB share for the images. |
 | `ztp.node_preparation.sbe_bundle` | P+P | Folder path on the management host | Folder with the OEM's SBE: exactly one `SBE_*.zip`, its `SBE_*.xml`, and `SBE_Discovery_<oem>.xml`. See [Download the SBE](operator-guide.md#step-2-download-the-oem-sbe). |
+| `ztp.node_preparation.allow_unvalidated_sbe` | Prov, optional | `true` or `false` (default `false`) | **Test only.** Use the SBE in `sbe_bundle` even though the OEM's manifest doesn't list it as validated with `ztp.os_version`, for example to test a new Azure Local build before the OEM publishes a matching SBE. The SBE's hash is still checked; only the solution-compatibility check is skipped. The run warns, and the handoff records `compatibilityChecked: false`. The OEM doesn't support the combination, and cluster Validate or Deploy may still refuse it. |
 
 ## Values the entry point sets for you
 

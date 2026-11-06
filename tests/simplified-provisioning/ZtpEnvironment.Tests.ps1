@@ -152,6 +152,7 @@ Describe 'Checking the environment file' {
         @{ Case = 'the resource provider object ID is not a GUID'; Edit = { param($e) $e.ztp.azl_rp_object_id = 'x' }; Expect = 'ztp.azl_rp_object_id must be a GUID' }
         @{ Case = 'tags are a list'; Edit = { param($e) $e.ztp.tags = @('a') }; Expect = 'ztp.tags must be a mapping' }
         @{ Case = 'the location is missing'; Edit = { param($e) $e.Remove('azure_resources') }; Expect = 'azure_resources.location is required' }
+        @{ Case = 'the unvalidated-SBE switch is not true or false'; Edit = { param($e) $e.ztp.node_preparation.allow_unvalidated_sbe = 'yes' }; Expect = "allow_unvalidated_sbe must be true or false, not 'yes'" }
     ) {
         $e = Read-ZtpEnvironmentFile -Path $script:fixture
         & $Edit $e
@@ -164,6 +165,13 @@ Describe 'Checking the environment file' {
         $e.ztp.Remove('share_host'); $e.ztp.share_host_adapter = 'Ethernet 2'
         $e.ztp.Remove('tags'); $e.ztp.Remove('azl_rp_object_id'); $e.onprem.Remove('ntp_servers')
         @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
+    }
+    It 'accepts allow_unvalidated_sbe as true or false, and leaves it optional' {
+        $e = Read-ZtpEnvironmentFile -Path $script:fixture
+        foreach ($v in $true, $false) {
+            $e.ztp.node_preparation.allow_unvalidated_sbe = $v
+            @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
+        }
     }
     It 'checks only what Initialize-ZtpNode.ps1 reads for Prepare, so provisioning-only keys can be missing' {
         $e = Read-ZtpEnvironmentFile -Path $script:fixture

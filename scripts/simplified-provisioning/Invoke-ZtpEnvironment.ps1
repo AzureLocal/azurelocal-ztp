@@ -96,6 +96,12 @@ $nodeList = @($env_.cluster_nodes)
 $Node = @(Resolve-ZtpNodeSelection -Environment $env_ -Node $Node)
 # The OEM's SBE files named in the environment file: found now, so a wrong folder fails before the long stages.
 $sbeZip = (Get-ZtpSbeBundle -Path ([string]$ztp.node_preparation.sbe_bundle)).Zip.FullName
+# Opt-in only: use an SBE the OEM hasn't validated with the pinned OS build. The SBE is still the supplied package and
+# its hash is still checked; only the OEM's solution-compatibility check is skipped, and the handoff records that.
+$allowUnvalidatedSbe = (Get-ZtpEnvValue -Environment $env_ -Path 'ztp.node_preparation.allow_unvalidated_sbe') -eq $true
+if ($allowUnvalidatedSbe) {
+    Write-Warning "ztp.node_preparation.allow_unvalidated_sbe is true: the SBE in $([string]$ztp.node_preparation.sbe_bundle) is used without checking that the OEM validated it with $([string]$ztp.os_version). The OEM doesn't support this combination; the handoff records compatibilityChecked: false."
+}
 
 # Each set of nodes keeps its own state, so proving one node never disturbs another's run.
 $runName = $Node -join '+'
@@ -153,8 +159,8 @@ $bicepParameters | ConvertTo-Json -Depth 10 | Set-Content $parameters
     Oem                            = [string]$env_.hardware.vendor
     SbeModel                       = ([string]$env_.hardware.model -replace '-', '')
     # The SBE in ztp.node_preparation.sbe_bundle, so the handoff's SBE values match what Prepare copies to C:\SBE,
-    # checked for compatibility with the pinned OS build.
-    SbeSolutionVersion             = [string]$ztp.os_version
+    # checked for compatibility with the pinned OS build unless ztp.node_preparation.allow_unvalidated_sbe is true.
+    SbeSolutionVersion             = $(if ($allowUnvalidatedSbe) { 'latest' } else { [string]$ztp.os_version })
     SbePackagePath                 = $sbeZip
     NodesFile                      = $nodesFile
     ImageDirectory                 = Join-Path (Resolve-Path $media).Path 'ztp-virtual-usb'
