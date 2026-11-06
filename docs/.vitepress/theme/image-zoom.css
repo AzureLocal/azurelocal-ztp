@@ -10,6 +10,7 @@
 
 .iz-toolbar {
   display: flex;
+  background: #0a101c;
   align-items: center;
   gap: 6px;
   padding: 8px 12px;
