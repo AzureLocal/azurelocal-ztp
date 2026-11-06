@@ -86,7 +86,7 @@ One JSON object per line:
 {"timestamp":"2026-10-15T14:00:00.0000000Z","node":"node-01","state":"VoucherWritten","evidence":"valid ownership voucher read back from the image; voucher SHA256 <hash>","nextAction":"Checking that Azure is ready to claim the voucher.","level":"Info","stage":"Bootstrap"}
 ```
 
-Levels are `Info`, `Warning` and `Error`. Vouchers are never logged, only their SHA-256. `Start-ZtpMonitor.ps1` points AzureLocal Sonar at this file; see [Watch the run](operator-guide.md#watch-the-run).
+Levels are `Info`, `Warning` and `Error`. Vouchers are never logged, only their SHA-256. Every `state` value, and how to follow the file, is in [Monitoring a run](monitoring.md#the-event-file). `Start-ZtpMonitor.ps1` points AzureLocal Sonar at this file; see [Follow the run in Sonar](monitoring.md#follow-the-run-in-sonar).
 
 ## Handoff format
 

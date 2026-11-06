@@ -16,7 +16,7 @@ Unless a row cites Learn, the behavior below was **proven on Dell AX-760 / iDRAC
 | The session drops during the Prepare restart | [Restart over WinRM](#restart-over-winrm) |
 | Validate complains about inbox drivers or several default gateways | [Node state after the OS install](#node-state-after-the-os-install) |
 | Deploy fails with `ParentResourceNotFound` | [Deploy on build 2690](#deploy-fails-with-parentresourcenotfound-on-build-2690) |
-| A monitor shows an error on a job that's running again | [Stale error after a resubmit](#stale-error-after-a-resubmit) |
+| A job that's running again still carries an error | [Stale error after a resubmit](#stale-error-after-a-resubmit) |
 | The machine keeps reinstalling the maintenance environment | [USB boot loop](#usb-boot-loop) |
 | Prepare can't sign in to a node | [Prepare fails to sign in](#prepare-fails-to-sign-in) |
 
@@ -98,7 +98,9 @@ If gate 4 fails with "default gateway on ..." or "DHCP still on ...", run `-From
 
 ## Stale error after a resubmit
 
-After a `ProvisionOs` resubmit, Azure keeps the earlier attempt's error on the job. A monitor, Sonar included, can show that error as if it were current. Read the job's current status and step times, or the console, instead.
+After a `ProvisionOs` resubmit, Azure keeps the earlier attempt's error in the job's `properties.error`, while the new attempt runs and after it succeeds. A tool that reads that field alone shows the old error as if it were current. Read the job's current `status` and step times, or the console, instead.
+
+The run doesn't read `properties.error`: the Ready stage decides on the job's status, provisioning state and steps. Sonar's `main` counts the error as a failure only while the job itself reports failure; otherwise it files it under the node's `previousErrors` as an earlier attempt. See [Reading what you see](monitoring.md#reading-what-you-see).
 
 ## USB boot loop
 

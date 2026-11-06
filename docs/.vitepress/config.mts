@@ -49,6 +49,7 @@ export default defineConfig({
         items: [
           { text: 'Overview', link: '/overview' },
           { text: 'Operator guide', link: '/operator-guide' },
+          { text: 'Monitoring a run', link: '/monitoring' },
           { text: 'Environment file reference', link: '/environment-file' }
         ]
       },

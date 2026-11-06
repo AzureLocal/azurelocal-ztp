@@ -92,7 +92,7 @@ The host needs inbound TCP 445 from the BMC addresses only. `Publish-Maintenance
 | Handoff | Written after Ready. Holds each node's `arcMachineResourceId`, read from the edge machine after Ready, so it names the service-created `<device-id>-1` Arc machine. Also the site, the solution version and the SBE values. | `_media/ztp-state/<run>.ztp-handoff.json`, `<run>.ztp-cluster-inputs.yaml`, `<run>.arc-machine-names.json` |
 | Events | One JSON line per state change and per stage. | `_media/ztp-state/ztp-events.jsonl` |
 
-`_media` is a folder next to the repository clone, not inside it: `<parent of the clone>/_media`. `<run>` is the node names of the run joined with `+`, for example `node-01+node-02`.
+`_media` is a folder at the root of the repository clone, which git ignores (`-MediaPath` of `Invoke-ZtpEnvironment.ps1` changes it). `<run>` is the node names of the run joined with `+`, for example `node-01+node-02`.
 
 The entry point also writes three generated files inside the clone. They hold environment values, so keep them out of source control:
 
