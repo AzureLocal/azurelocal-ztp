@@ -121,10 +121,16 @@ One JSON object per line, UTF-8 without a BOM. The writer opens the file with re
 | `MediaRejected` | node | `Error` | The image isn't inserted after 3 minutes, or it's inserted write-protected. |
 | `VoucherMissing` | node | `Error` | No valid voucher by the voucher deadline (90 minutes). |
 | `Failed` | node | `Error` | The overall bootstrap budget (120 minutes) ran out. |
+| `PrepareStarted` | node | `Info` | Prepare: Azure reports the node ready to cluster and the run is signing in (gates 1 and 2). A new one starts a new attempt. |
+| `PrepareDriversInstalled` | node | `Info` | Prepare: the task on the node finished. The evidence lists each driver install and network change (gate 3). |
+| `PrepareRestarting` | node | `Info` | Prepare: a driver or Windows asked for a restart, and the run scheduled it. |
+| `PrepareRestarted` | node | `Info` | Prepare: the node came back with a new boot time. |
+| `ReadyForValidate` | node | `Info` | Prepare: every gate 4 check passed and Azure reports Ready again. The node is ready for cluster Validate. |
+| `PrepareFailed` | node | `Error` | Prepare: a gate failed for this node. The evidence holds the reason. |
 
 `ZtpEvents.Common.ps1` also declares the failure states `BootStalled` and `EnvironmentStalled`, but no script writes them. A stall is a `Warning` event on the current state.
 
-Node events come from the Bootstrap stage only. Boot, Vouchers, Azure, Ready and Handoff write only their stage events, and Prepare writes none: follow those on the console, in Azure or in Sonar.
+Node events come from the Bootstrap and Prepare stages (stage `Bootstrap` or `Prepare`). Boot, Vouchers, Azure, Ready and Handoff write only their stage events: follow those on the console, in Azure or in Sonar.
 
 Example lines:
 
@@ -281,6 +287,9 @@ The progress bar is Sonar's estimate, not Azure's: `Creating` 0, `AwaitingConnec
 
 Sonar shows the events of every run in the file, each at its own time. It reads the event file every 2 seconds and Azure every `pollSeconds`.
 
+### The drivers and network stage in Sonar
+
+After Azure reports a machine **Provisioned**, the run still installs the OEM network drivers, sets the static management address and gateway, maybe restarts the machine, and checks it (Prepare). Sonar shows that as a **Prepare for Validate** stage under each machine, built from the Prepare events above. A machine counts as done only when its Prepare stage passes. A `PrepareFailed` event shows the machine as failed, with the reason. The provisioning view is ready for Validate only when every machine has passed Prepare. This needs Sonar `main` from November 2026 or later, and a Sonar config with `ztpEvents.path`.
 ### After provisioning: Validate and Deploy
 
 Sonar reads `clusters/<clusterName>/deploymentSettings/default` in the same resource group on every poll. Once Azure reports validation steps, the phase becomes **Validation**; once it reports deployment steps, **Deployment**; then **Done** or **Failed**. The Provisioning panel collapses when validation starts. This needs the real cluster name in `clusterName`, and the cluster in the resource group of the edge machines. Until it exists, the state Sonar serves carries the warning that `deploymentSettings` wasn't found yet; that's expected during provisioning.
