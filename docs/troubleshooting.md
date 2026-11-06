@@ -22,7 +22,7 @@ Unless a row cites Learn, the behavior below was **proven on Dell AX-760 / iDRAC
 
 ## 5901 at `SetupHybridComputeRP` and the automatic resubmit
 
-**What you see.** On the first OS-install attempt of every node, on every run, the `ProvisionOs` job failed at the step `SetupHybridComputeRP` with error 5901: "The device could not read or update its Azure registration". The job code was `Retryable`.
+**What you see.** On the first OS-install attempt, the `ProvisionOs` job failed at the step `SetupHybridComputeRP` with error 5901: "The device could not read or update its Azure registration". The job code was `Retryable`. On the earlier runs this happened on every node. On the 2026-11-06 run, one of the two nodes passed on its first attempt and the other hit 5901, so expect it, but not on every node.
 
 **Cause, as far as it's known.** The maintenance environment's log showed HTTP 403 when it read the new Arc machine. The role that allows that read is assigned seconds after the machine is created. The most likely cause is RBAC propagation taking longer than the device's retry window, which seems to be about 20 minutes. That isn't confirmed past minute 6.
 
@@ -39,7 +39,7 @@ Unless a row cites Learn, the behavior below was **proven on Dell AX-760 / iDRAC
 
 ## Registration delay after the claim
 
-**What you see.** After the claim, one node stayed up to about 35 minutes before it registered with the onboarding service: `RegisterMachine` stayed `NotStarted` and the lifecycle stayed `AwaitingConnection`. Another node took 6 minutes. It recovered by itself.
+**What you see.** After the claim, a node can wait up to about 45 minutes before it registers with the onboarding service (42 minutes on the 2026-11-06 run): `RegisterMachine` stayed `NotStarted` and the lifecycle stayed `AwaitingConnection`. Another node in the same run can take a few minutes. It recovered by itself each time.
 
 **Cause.** Likely the device's retry gap. Not confirmed.
 

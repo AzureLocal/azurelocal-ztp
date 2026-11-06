@@ -13,7 +13,7 @@ All scripts live in `scripts/simplified-provisioning/`. The orchestrator is a pl
 | The Bicep template (`bicep/main.bicep`): site, `Microsoft.Edge/configurations` with network, time, connectivity and security settings, configuration reference, Azure Local resource provider role, one `edgeMachines` per node, constrained role delegations | **Proven**: it reproduces a portal deployment that worked end to end. It builds cleanly with `az bicep build`. |
 | Response shapes and status logic (edge machine lifecycle, `ProvisionOs` job steps, ready-to-cluster check) | Verified against recorded live responses (`tests/simplified-provisioning/fixtures`). |
 | Scripted submit end to end (`Invoke-ZtpAzureProvisioning.ps1 -Execute`): what-if, claim, watch to ready | **Proven on Dell AX-760 / iDRAC 7.30**, two nodes, build `12.2690.1003.15`. |
-| `ProvisionOs` resubmit (`-RetryProvisionOs -Execute`) | **Proven on Dell AX-760 / iDRAC 7.30.** It passed the 5901 failure in about 2 minutes on every node; see [Troubleshooting](troubleshooting.md#_5901-at-setuphybridcomputerp-and-the-automatic-resubmit). The body follows Microsoft's troubleshooting article. |
+| `ProvisionOs` resubmit (`-RetryProvisionOs -Execute`) | **Proven on Dell AX-760 / iDRAC 7.30.** It passed the 5901 failure in about 2 minutes every time it was needed; see [Troubleshooting](troubleshooting.md#_5901-at-setuphybridcomputerp-and-the-automatic-resubmit). The body follows Microsoft's troubleshooting article. |
 
 API versions in `bicep/main.bicep`: `Microsoft.AzureStackHCI/edgeMachines@2026-10-01`, `Microsoft.Edge/sites@2025-06-01`, and the Edge configuration resources at `2025-12-01-preview` (the portal's shape; the stable documents list no properties for them).
 
