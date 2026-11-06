@@ -22,7 +22,7 @@ A complete example with placeholder values is in [`examples/infrastructure.examp
 | Key | Needed by | Format | Used for |
 | --- | --- | --- | --- |
 | `cluster_nodes[].name` | P+P | Text, unique | Host name, edge machine name, image name (`ztp-usb-<name>.img`). |
-| `cluster_nodes[].ip_address` | P+P | IPv4 | The node's static management address. Prepare connects to it over WinRM **before** it sets the static address, so the node must already answer on it after the OS install. Use a DHCP reservation for the management MAC. |
+| `cluster_nodes[].ip_address` | P+P | IPv4 | The node's static management address, which Prepare sets. After the OS install the node takes its address from DHCP. Prepare signs in on this address if the node answers there (a DHCP reservation for the management MAC), and otherwise on the address the node's Arc machine reports for the management MAC. That address must be in this server's WinRM TrustedHosts. |
 | `cluster_nodes[].mac_address` | P+P | `AA:BB:CC:DD:EE:FF` or `AA-BB-CC-DD-EE-FF` | Picks the management adapter on the node. |
 | `cluster_nodes[].service_tag` | Prov | Text | The machine's serial number. Maps each voucher (`\vouchers\<serial>\`) to its node. |
 | `cluster_nodes[].idrac_ip` | Prov | IPv4 | The BMC address. Redfish target, and the only source allowed to reach the SMB share. |

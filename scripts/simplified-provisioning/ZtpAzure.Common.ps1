@@ -368,6 +368,32 @@ function Get-ZtpProgressItem {
     return $items.ToArray()
 }
 
+function Get-ZtpArcMachineAddress {
+    <#
+    .SYNOPSIS
+    The IPv4 addresses an Arc machine reports for the adapter with a MAC address (properties.networkProfile), skipping
+    link-local ones. After simplified provisioning the OS takes its management address from DHCP; this is where to find it
+    when the node doesn't answer on the address the environment file gives it yet.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][object]$Machine,
+        [Parameter(Mandatory)][string]$MacAddress
+    )
+    $want = ($MacAddress -replace '[:-]', '').ToUpperInvariant()
+    $nics = @(Get-ZtpPathValue $Machine 'properties.networkProfile.networkInterfaces')
+    $addresses = foreach ($nic in $nics) {
+        if ($null -eq $nic) { continue }
+        $mac = ([string](Get-ZtpPropertyValue $nic 'macAddress' '') -replace '[:-]', '').ToUpperInvariant()
+        if ($mac -ne $want) { continue }
+        foreach ($ip in @(Get-ZtpPropertyValue $nic 'ipAddresses' @())) {
+            $address = [string](Get-ZtpPropertyValue $ip 'address' '')
+            if ([string](Get-ZtpPropertyValue $ip 'ipAddressVersion' 'IPv4') -eq 'IPv4' -and $address -and $address -notlike '169.254.*') { $address }
+        }
+    }
+    return @($addresses | Select-Object -Unique)
+}
+
 function Get-ZtpProvisionOsRetryBody {
     <#
     .SYNOPSIS
