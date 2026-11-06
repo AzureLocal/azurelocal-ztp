@@ -5,8 +5,10 @@ Inserts each node's maintenance virtual-USB image READ-WRITE on its iDRAC USB-st
 shows its state.
 .DESCRIPTION
 Mount: Redfish VirtualMedia.InsertMedia of //<ShareHost>/<ShareName>/<ImageNamePrefix><node>.img on the manager's
-USB-stick (RemovableDisk) slot over CIFS with WriteProtected=false, then a read-back that proves the image is attached and
-not write-protected, then a one-time boot override to Usb and, with -Restart, a power-cycle (ForceRestart when on, On
+USB-stick (RemovableDisk) slot over CIFS with WriteProtected=false (with -RfsWriteAttribute, which iDRAC 7.30 needs, the
+manager attribute RFS.<n>.WriteProtected = Read Write instead), then a read-back that proves the image is attached, then a
+one-time boot to that slot (Usb where the BMC offers it; on iDRAC 7.30 ServerBoot.1.FirstBootDevice=vFDD plus the
+Once/Floppy override, confirmed before the reset) and, with -Restart, a power-cycle (ForceRestart when on, On
 when off). The image stays inserted after the maintenance environment installs itself on the boot disk: its setup
 service writes the ownership voucher back to the one writable USB drive it finds (\vouchers\<serial>\), so the slot must
 stay attached and writable until Wait-ZtpVoucher.ps1 sees the voucher.
@@ -102,7 +104,7 @@ if (-not $Execute) {
             'Mount' {
                 if ($RfsWriteAttribute -and -not $ReadOnly) { "PLAN: $node set RFS.<n>.WriteProtected = Read Write" }
                 "PLAN: $node insert $(& $imageUrl $node) on the USB-stick (RemovableDisk) slot over CIFS, WriteProtected=$writeProtected"
-                "PLAN: $node verify Inserted, Image and WriteProtected=$writeProtected; one-time boot override Usb"
+                "PLAN: $node verify Inserted, Image and WriteProtected=$writeProtected; one-time boot to the USB-stick slot (Usb, or vFDD and Once/Floppy on iDRAC 7.30)"
                 if ($Restart) { "PLAN: $node power-cycle (ForceRestart, or On when off)" }
             }
             'Eject' {
@@ -180,7 +182,15 @@ foreach ($target in $targets) {
                 & $state $slots[0] 'NotInserted'
             }
             else {
-                $null = Invoke-ZtpRedfish -Session $session -Path "$($slot.'@odata.id')/Actions/VirtualMedia.EjectMedia" -Method Post -Body @{}
+                # iDRAC 7.30 can return HTTP 500 (VRM0010) just after the node writes to the image; it succeeds shortly after.
+                for ($ejectTry = 1; ; $ejectTry++) {
+                    try { $null = Invoke-ZtpRedfish -Session $session -Path "$($slot.'@odata.id')/Actions/VirtualMedia.EjectMedia" -Method Post -Body @{}; break }
+                    catch {
+                        if ($ejectTry -ge 6) { throw }
+                        Write-Warning "$($node): eject attempt $ejectTry failed; retrying in 30 seconds."
+                        Start-Sleep -Seconds 30
+                    }
+                }
                 $after = Invoke-ZtpRedfish -Session $session -Path $slot.'@odata.id'
                 if ([bool]$after.Inserted) { throw "$($node): the USB-stick slot still reports Inserted after EjectMedia." }
                 if ($RfsWriteAttribute) { Set-ZtpRfsWriteProtection -Session $session -ManagerPath $manager.'@odata.id' -Value 'Read Only' -Confirm:$false }
@@ -204,7 +214,9 @@ foreach ($target in $targets) {
         }
         if ($RfsWriteAttribute -and -not $ReadOnly) { Set-ZtpRfsWriteProtection -Session $session -ManagerPath $manager.'@odata.id' -Value 'Read Write' -Confirm:$false }
         if (-not [bool]$slot.Inserted) {
-            $insertBody = @{ Image = $url; Inserted = $true; WriteProtected = $writeProtected; TransferProtocolType = 'CIFS' }
+            $insertBody = @{ Image = $url; Inserted = $true; TransferProtocolType = 'CIFS' }
+            # iDRAC 7.30 rejects WriteProtected=false here (IDRAC.2.9.SYS458); with -RfsWriteAttribute the RFS attribute sets it.
+            if (-not $RfsWriteAttribute) { $insertBody.WriteProtected = $writeProtected }
             if ($ShareCredential) {
                 $insertBody.UserName = $ShareCredential.UserName
                 $insertBody.Password = $ShareCredential.GetNetworkCredential().Password
@@ -223,16 +235,53 @@ foreach ($target in $targets) {
         }
         $reported = if ($check.PSObject.Properties['WriteProtected']) { $check.WriteProtected } else { $null }
         if ($null -eq $reported) { Write-Warning "$($node): the iDRAC does not report WriteProtected; write access is unverified until a voucher appears in the image." }
+        elseif ([bool]$reported -ne $writeProtected -and $RfsWriteAttribute) { Write-Warning "$($node): Redfish reports WriteProtected=$reported, but iDRAC 7.30 reports this even when RFS.<n>.WriteProtected is Read Write and the share is opened for write. Continuing; the voucher in the image proves write access." }
         elseif ([bool]$reported -ne $writeProtected) {
             throw "$($node): the image is attached with WriteProtected=$reported, not $writeProtected (retry with -RfsWriteAttribute; the maintenance environment cannot write the voucher to a read-only drive)."
         }
-        $null = Invoke-ZtpRedfish -Session $session -Path $system.'@odata.id' -Method Patch -Body @{ Boot = @{ BootSourceOverrideEnabled = 'Once'; BootSourceOverrideTarget = 'Usb' } }
+        # iDRAC 7.30 doesn't offer Usb as an override target, and accepts the request without effect. Its USB-stick slot boots as virtual floppy.
+        $allowed = @()
+        if ($system.PSObject.Properties['Boot'] -and $system.Boot.PSObject.Properties['BootSourceOverrideTarget@Redfish.AllowableValues']) { $allowed = @($system.Boot.'BootSourceOverrideTarget@Redfish.AllowableValues') }
+        if ($allowed.Count -gt 0 -and $allowed -notcontains 'Usb') {
+            $null = Invoke-ZtpRedfish -Session $session -Path "$($manager.'@odata.id')/Attributes" -Method Patch -Body @{ Attributes = @{ 'ServerBoot.1.BootOnce' = 'Enabled'; 'ServerBoot.1.FirstBootDevice' = 'vFDD' } }
+            # The iDRAC applies that attribute in the background. A reset before it lands boots the disk instead (seen on a
+            # second node on 2026-11-05), so also set the standard one-time override to the same slot, and don't reset
+            # until the system reports it.
+            if ($allowed -contains 'Floppy') {
+                $null = Invoke-ZtpRedfish -Session $session -Path $system.'@odata.id' -Method Patch -Body @{ Boot = @{ BootSourceOverrideEnabled = 'Once'; BootSourceOverrideTarget = 'Floppy' } }
+            }
+            $deadline = (Get-Date).AddSeconds(120); $override = ''
+            do {
+                $now = Invoke-ZtpRedfish -Session $session -Path $system.'@odata.id'
+                $override = "$($now.Boot.BootSourceOverrideEnabled)/$($now.Boot.BootSourceOverrideTarget)"
+                if ($override -eq 'Once/Floppy') { break }
+                Start-Sleep -Seconds 5
+            } while ((Get-Date) -lt $deadline)
+            if ($override -ne 'Once/Floppy') { throw "$($node): the one-time boot to the virtual USB slot didn't take; the system reports $override. Not restarting." }
+        }
+        else {
+            $null = Invoke-ZtpRedfish -Session $session -Path $system.'@odata.id' -Method Patch -Body @{ Boot = @{ BootSourceOverrideEnabled = 'Once'; BootSourceOverrideTarget = 'Usb' } }
+        }
         $did = 'Mounted'
         if ($Restart) {
             $power = Invoke-ZtpRedfish -Session $session -Path $system.'@odata.id'
             $resetType = if ($power -and $power.PSObject.Properties['PowerState'] -and [string]$power.PowerState -eq 'Off') { 'On' } else { 'ForceRestart' }
+            $resetAt = [datetime]::UtcNow
             $null = Invoke-ZtpRedfish -Session $session -Path "$($system.'@odata.id')/Actions/ComputerSystem.Reset" -Method Post -Body @{ ResetType = $resetType }
             $did = "Mounted+$resetType"
+            # Gate: the machine must not boot its installed OS. iDRAC logs OSE1002 ("C: boot completed") when the installed
+            # Windows starts its service module; the maintenance environment doesn't run it. Watch for 10 minutes, which
+            # covers POST on these machines, and stop at once if it appears.
+            if ($manager -and $manager.PSObject.Properties['LogServices']) {
+                $watchUntil = $resetAt.AddMinutes(10)
+                while ([datetime]::UtcNow -lt $watchUntil) {
+                    Start-Sleep -Seconds 20
+                    $entries = Invoke-ZtpRedfish -Session $session -Path "$($manager.'@odata.id')/LogServices/Lclog/Entries?`$top=25"
+                    if (-not $entries -or -not $entries.PSObject.Properties['Members']) { break }
+                    $diskBoot = @($entries.Members | Where-Object { [string]$_.MessageId -like '*OSE1002' -and ([datetime]$_.Created).ToUniversalTime() -gt $resetAt })
+                    if ($diskBoot) { throw "$($node): booted its installed OS ($($diskBoot[0].Message)) instead of the virtual USB image. The one-time boot didn't take." }
+                }
+            }
         }
         & $state $check $did
     }

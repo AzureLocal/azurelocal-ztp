@@ -6,6 +6,7 @@
     "discoveryManifestUrl": "https://aka.ms/AzureStackSBEUpdate/DellEMC",
     "releaseNotesUrl": "https://www.dell.com/support/kbdoc/en-us/000224407",
     "downloadMethod": "vendor-connector",
+    "driverPaths": [ "DriversGE/Network" ],
     "note": "The Dell discovery manifest lists every SBE with its SHA256 and size but leaves the package URI empty (download connector or vendor support account). The package is supplied at deployment or update time, not on the maintenance media."
   },
   "bmc": {

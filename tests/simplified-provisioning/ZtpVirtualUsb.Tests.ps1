@@ -79,7 +79,7 @@ BeforeAll {
         param($Session, [string]$Path, [string]$Method = 'Get', [hashtable]$Body, [int]$MaxAttempts)
         $record = $Body   # the same hashtable: proves the script strips the password after the call
         $global:usbCalls.Add([pscustomobject]@{ Path = $Path; Method = $Method; Body = $record })
-        if ($Path -like '*InsertMedia') { $global:usbSlot = $Body.Image; $global:usbProtected = ($global:usbForceProtected ? $true : [bool]$Body.WriteProtected) }
+        if ($Path -like '*InsertMedia') { $global:usbSlot = $Body.Image; $global:usbProtected = ($global:usbForceProtected ? $true : [bool]$Body['WriteProtected']) }
         if ($Path -like '*EjectMedia') { $global:usbSlot = $null }
         if ($Method -eq 'Get' -and $Path -eq '/vm/RemovableDisk') { return (Get-TestUsbSlot) }
         if ($Method -eq 'Get' -and $Path -eq '/system') { return [pscustomobject]@{ PowerState = $global:usbPower; Boot = [pscustomobject]@{ BootSourceOverrideEnabled = 'Once'; BootSourceOverrideTarget = 'Usb' } } }
@@ -359,6 +359,7 @@ Describe 'Mount-ZtpVirtualUsb.ps1' {
         $writes[0].Body.Attributes['RFS.2.WriteProtected'] | Should -Be 'Read Write'
         $writes[0].Body.Attributes.ContainsKey('RFS.1.Enable') | Should -BeFalse
         $writes[1].Path | Should -BeLike '*InsertMedia'
+        $writes[1].Body.ContainsKey('WriteProtected') | Should -BeFalse -Because 'iDRAC 7.30 rejects it in InsertMedia'
     }
 
     It 'power-cycles with ForceRestart when on and powers on when off, only with confirmation' {
@@ -494,6 +495,41 @@ Describe 'Read-write share and the virtual-USB boot plan' {
         Set-Content -LiteralPath (Join-Path $dir 'ztp-usb-node-01.img') -Value 'x'
         { & $script:start -ImageDirectory $dir -ShareHost 192.0.2.10 -NodeName node-01 -Nodes $script:nodes -Restart } | Should -Throw '*ConfirmNotClustered*'
         { & $script:start -ImageDirectory $dir -ShareHost 192.0.2.10 -NodeName node-01 -Nodes $script:nodes -Execute -Confirm:$false } | Should -Throw '*-Credential*'
+    }
+
+    It 'boots every machine at the same time and reports each failure' {
+        # A copy of the script beside stub share and mount scripts: each stub mount takes 3 seconds.
+        $bin = Join-Path $TestDrive 'parallel-bin'
+        $null = New-Item -ItemType Directory -Path $bin
+        Copy-Item -Path $script:start, (Join-Path $script:root '*.Common.ps1') -Destination $bin
+        Set-Content -LiteralPath (Join-Path $bin 'Publish-MaintenanceIso.ps1') -Value @'
+[CmdletBinding(SupportsShouldProcess)]
+param([string[]]$IsoPath, $SharePath, $ShareName, $ShareHost, $AllowedBmcAddress, $ReadWrite, [switch]$Execute)
+[pscustomobject]@{ Credential = $null; Images = @($IsoPath | ForEach-Object { [pscustomobject]@{ ImagePath = "//$ShareHost/$ShareName/$(Split-Path $_ -Leaf)"; Sha256 = 'AB' } }) }
+'@
+        Set-Content -LiteralPath (Join-Path $bin 'Mount-ZtpVirtualUsb.ps1') -Value @'
+[CmdletBinding(SupportsShouldProcess)]
+param($ShareHost, $ShareName, $ImageNamePrefix, $ReadOnly, $RfsWriteAttribute, $Restart, $ConfirmNotClustered, $SkipCertificateCheck, $NodesFile, $Nodes, [string[]]$NodeName, $Credential, $ShareCredential, [switch]$Execute)
+Start-Sleep -Seconds 3
+if ($env:ZTP_TEST_FAIL_NODE -eq $NodeName[0]) { throw "$($NodeName[0]): booted its installed OS" }
+[pscustomobject]@{ Node = $NodeName[0]; Image = "//$ShareHost/$ShareName/ztp-usb-$($NodeName[0]).img"; WriteProtected = $false }
+'@
+        $dir = Join-Path $TestDrive 'boot-parallel'
+        $null = New-Item -ItemType Directory -Path $dir
+        foreach ($n in 'node-01', 'node-02') { Set-Content -LiteralPath (Join-Path $dir "ztp-usb-$n.img") -Value 'x' }
+        $run = { & (Join-Path $bin 'Start-MaintenanceBoot.ps1') -ImageDirectory $dir -ShareHost 192.0.2.10 -NodeName node-01, node-02 -Nodes $script:nodes -Restart -ConfirmNotClustered -Credential $script:bmcCredential -Execute -Confirm:$false }
+
+        $env:ZTP_TEST_FAIL_NODE = ''
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        $rows = @(& $run)
+        $clock.Stop()
+        $rows.Node | Should -Be @('node-01', 'node-02')
+        $rows | ForEach-Object { $_.Restarted | Should -BeTrue; $_.Image | Should -Match $_.Node }
+        $clock.Elapsed.TotalSeconds | Should -BeLessThan 5.5
+
+        $env:ZTP_TEST_FAIL_NODE = 'node-02'
+        try { { & $run } | Should -Throw '*node-02: node-02: booted its installed OS*' }
+        finally { $env:ZTP_TEST_FAIL_NODE = $null }
     }
 }
 

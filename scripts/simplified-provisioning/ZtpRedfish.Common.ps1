@@ -126,7 +126,8 @@ function Invoke-ZtpRedfish {
             $status = if ($_.Exception.PSObject.Properties['Response'] -and $_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
             $transient = $status -in 429, 502, 503, 504 -or ($status -eq 0 -and $_.Exception -is [System.Net.Http.HttpRequestException])
             if ($transient -and $attempt -lt $MaxAttempts) { Start-Sleep -Seconds (2 * $attempt); continue }
-            throw "Redfish $Method $Path on $($Session.BmcAddress) failed$(if ($status) { " with HTTP $status" }): $($_.Exception.Message)"
+            $detail = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { " Response: $($_.ErrorDetails.Message)" } else { '' }
+            throw "Redfish $Method $Path on $($Session.BmcAddress) failed$(if ($status) { " with HTTP $status" }): $($_.Exception.Message)$detail"
         }
     }
 }

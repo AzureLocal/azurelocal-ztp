@@ -11,7 +11,7 @@
 // Deployed at resource-group scope by scripts/simplified-provisioning/Invoke-ZtpAzureProvisioning.ps1. Parameter example:
 // main.example.parameters.json.
 // API versions (reviewed against Microsoft Learn on 15 Oct 2026):
-//   Microsoft.AzureStackHCI/edgeMachines  2026-10-01 (stable). Live-proven so far: 2025-12-01-preview, whose properties used here are unchanged in 2026-10-01
+//   Microsoft.AzureStackHCI/edgeMachines  2026-10-01 (stable). Live-proven: 2026-10-01 (Dell AX-760, 2026-11) and 2025-12-01-preview, with the same properties
 //                                         (siteDetails, ownershipVoucherDetails, provisioningDetails.osProfile and userDetails). To go back: change this one version.
 //   Microsoft.Edge/sites                  2025-06-01 (stable; same displayName property as the 2025-03-01-preview used before).
 //   Microsoft.Edge/configurations and its network, time, connectivity and security children, and configurationReferences:
@@ -33,6 +33,8 @@ param azl_rp_app_object_id string
 param key_vault_name string
 @description('Resource group of that Key Vault.')
 param key_vault_resource_group string
+@description('Subscription of the vault. Defaults to the deployment subscription.')
+param key_vault_subscription_id string = subscription().subscriptionId
 @description('Name of the Microsoft.Edge site (a site groups the machines of one location).')
 param site_name string
 @description('Display name of the site; empty = site_name.')
@@ -91,7 +93,6 @@ param node_filter array = []
 param claim_machines bool = true
 @description('Per-deployment salt of the portal role-assignment names (portal: guidValue = newGuid()).')
 param guid_value string = newGuid()
-
 // ------------------------------------------------------------------ derived values
 var siteName = site_name
 var configurationName = configuration_name
@@ -102,9 +103,9 @@ var assignProvisioningRoles = assign_provisioning_roles
 var assignHciRpRole = assign_hci_rp_role
 var managedResourceGroupName = managed_resource_group_name
 var keyVaultResourceGroup = key_vault_resource_group
-var keyVaultId = resourceId(subscription().subscriptionId, keyVaultResourceGroup, 'Microsoft.KeyVault/vaults', key_vault_name)
+var keyVaultId = resourceId(key_vault_subscription_id, keyVaultResourceGroup, 'Microsoft.KeyVault/vaults', key_vault_name)
 // Secret ARM ID (not the https URI): proven by the portal run and by the API refusing the URI.
-var adminSecretId = resourceId(subscription().subscriptionId, keyVaultResourceGroup, 'Microsoft.KeyVault/vaults/secrets', key_vault_name, admin_secret_name)
+var adminSecretId = resourceId(key_vault_subscription_id, keyVaultResourceGroup, 'Microsoft.KeyVault/vaults/secrets', key_vault_name, admin_secret_name)
 var selectedNodes = claim_machines ? filter(nodes, n => empty(node_filter) || contains(node_filter, n.name)) : []
 var emptyIpv4 = {
   addressRange: { startIp: '', endIp: '' }
@@ -318,7 +319,7 @@ resource machineRoleDelegation 'Microsoft.Authorization/roleAssignments@2022-04-
 module keyVaultDelegation 'modules/key-vault-delegation.bicep' = [
   for (node, i) in selectedNodes: if (assignProvisioningRoles) {
     name: guid(keyVaultId, node.name, 'Key vault template', guid_value)
-    scope: resourceGroup(keyVaultResourceGroup)
+    scope: resourceGroup(key_vault_subscription_id, keyVaultResourceGroup)
     params: {
       key_vault_name: key_vault_name
       edge_machine_name: node.name

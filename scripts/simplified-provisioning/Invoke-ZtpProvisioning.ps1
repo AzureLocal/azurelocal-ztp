@@ -12,8 +12,9 @@ file; nothing is hardcoded.
   Media     New-ZtpVirtualUsbImage.ps1 -NodeName: one virtual-USB image per node (<ImageNamePrefix><node>.img in
             -ImageDirectory) from the maintenance ISO (-SourcePath), GPT with one FAT32 partition labelled CDROM.
   Boot      Start-MaintenanceBoot.ps1: shares the images read-write in place (one account, TCP 445 only from the BMCs),
-            inserts each node's image on the BMC USB-stick slot with WriteProtected=false, proves the attach, sets a
-            one-time USB boot and power-cycles the node. Needs -ConfirmNotClustered: the maintenance environment
+            inserts each node's image on the BMC USB-stick slot read-write, proves the attach, sets a one-time boot to
+            that slot and power-cycles every node at once (iDRAC 7.30: the RFS write attribute and the vFDD / Once-Floppy
+            boot, see Mount-ZtpVirtualUsb.ps1). Needs -ConfirmNotClustered: the maintenance environment
             reinstalls the machine.
   Bootstrap Wait-ZtpBootstrapComplete.ps1: one read-only watch over Redfish power, boot and virtual-media state, the BMC log, the
             voucher in the image and the Azure prerequisites; structured events go to -EventLogPath (Mounted, Booting,
@@ -291,6 +292,7 @@ function Get-ZtpStageCall {
             $p = [ordered]@{ NodeName = $NodeName; NodesFile = $NodesFile; Oem = $Oem; EventLogPath = $EventLogPath; TimeoutMinutes = $BootstrapTimeoutMinutes; VoucherTimeoutMinutes = $BootstrapVoucherTimeoutMinutes }
             if ($VoucherFolder) { $p.VoucherFolder = $VoucherFolder } else { $p.ImageDirectory = $ImageDirectory; $p.ImageNamePrefix = $ImageNamePrefix }
             if ($BmcCredential -and -not $VoucherFolder) { $p.Credential = $BmcCredential }
+            if ($RfsWriteAttribute) { $p.RfsWriteAttribute = $true }
             if ($SkipCertificateCheck) { $p.SkipCertificateCheck = $true }
             if ($SkipAzureCheck) { $p.SkipAzureCheck = $true } else { $p.SubscriptionId = $SubscriptionId; $p.Location = $Location }
             & $actPlain $p
@@ -323,6 +325,9 @@ function Get-ZtpStageCall {
         }
         'Vouchers' {
             $p = [ordered]@{ NodeName = $NodeName; NodesFile = $NodesFile; OutputDirectory = $VoucherDirectory }
+            # The image holds the voucher of the machine's current maintenance environment; an earlier local copy is spent
+            # (vouchers are one-time use), so the current one replaces it.
+            $p.Force = $true
             if ($VoucherFolder) { $p.VoucherFolder = $VoucherFolder }
             else {
                 $p.ImageDirectory = $ImageDirectory; $p.ImageNamePrefix = $ImageNamePrefix; $p.TimeoutMinutes = $VoucherWaitMinutes
@@ -493,7 +498,7 @@ foreach ($name in $run) {
             foreach ($node in $NodeName) {
                 $row = @($rows | Where-Object Node -EQ $node)
                 if ($row.Count -ne 1) { throw "Boot: no result for $node." }
-                if ([bool]$row[0].WriteProtected) { throw "Boot: the image of $node is attached write-protected; the voucher cannot be written back. Retry with -RfsWriteAttribute." }
+                if ([bool]$row[0].WriteProtected -and -not $RfsWriteAttribute) { throw "Boot: the image of $node is attached write-protected; the voucher cannot be written back. Retry with -RfsWriteAttribute." }
                 if (-not [bool]$row[0].Restarted) { throw "Boot: $node was not restarted into the maintenance environment." }
             }
             $evidence = "read-write image and one-time boot on $($NodeName -join ', ')"

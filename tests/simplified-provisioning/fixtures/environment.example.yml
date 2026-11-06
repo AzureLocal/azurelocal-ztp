@@ -1,0 +1,59 @@
+# Synthetic environment file for the tests. Placeholder values only: documentation addresses (RFC 5737), all-zero GUIDs and
+# example names. The SBE folder is replaced by the tests with a folder in TestDrive.
+azure_identity:
+  azure_tenant_id: 00000000-0000-0000-0000-000000000000
+azure_resources:
+  location: eastus
+site:
+  name: Example Site
+hardware:
+  vendor: Contoso
+  model: AX-760
+credentials:
+  local_admin_username: deployadmin
+  local_admin_password_secret: keyvault://kv-example/deploy-admin-password
+network_intents:
+  management:
+    subnet: 192.0.2.0/24
+    gateway: 192.0.2.1
+    dns_servers:
+      - 192.0.2.53
+      - 192.0.2.54
+onprem:
+  ntp_servers:
+    - ntp.example.com
+cluster_nodes:
+  - name: node-01
+    service_tag: EXAMPLE1
+    idrac_ip: 198.51.100.11
+    ip_address: 192.0.2.11
+    mac_address: "02:00:00:00:00:11"
+  - name: node-02
+    service_tag: EXAMPLE2
+    idrac_ip: 198.51.100.12
+    ip_address: 192.0.2.12
+    mac_address: "02:00:00:00:00:12"
+ztp:
+  subscription_id: 00000000-0000-0000-0000-000000000000
+  resource_group: rg-example
+  site_name: example-site
+  time_zone: UTC
+  provisioning_iso: latest
+  os_version: latest
+  share_name: ztp-example
+  share_host: 192.0.2.10
+  azl_rp_object_id: 00000000-0000-0000-0000-000000000001
+  tags:
+    purpose: example
+  admin_secret:
+    subscription_id: 00000000-0000-0000-0000-000000000000
+    resource_group: rg-example-vault
+    vault: kv-example
+    name: ztp-admin-password
+    username: ztpadmin
+  bmc_secret:
+    vault: kv-example
+    username_name: bmc-username
+    password_name: bmc-password
+  node_preparation:
+    sbe_bundle: __SBE_BUNDLE__

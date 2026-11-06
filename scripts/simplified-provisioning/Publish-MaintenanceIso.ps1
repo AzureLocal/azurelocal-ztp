@@ -119,6 +119,16 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 if (-not $PSCmdlet.ShouldProcess($ShareName, "Publish $(($sources.Name) -join ', ') $access to $($AllowedBmcAddress -join ', ')")) { return }
 
 $null = New-Item -ItemType Directory -Force -Path $SharePath
+# A rerun finds the image still open by a BMC from the previous attempt, which locks it. Close this share's handles on
+# the images being published; the Boot stage attaches them again straight after.
+foreach ($source in $sources) {
+    $open = @(Get-SmbOpenFile -ErrorAction SilentlyContinue | Where-Object { $_.ShareRelativePath -eq $source.Name -or $_.Path -eq $source.FullName -or $_.Path -eq (Join-Path $SharePath $source.Name) })
+    if ($open) {
+        $open | Close-SmbOpenFile -Force
+        Write-Warning "Closed $($open.Count) open SMB handle(s) on $($source.Name) left by a previous attach ($(@($open.ClientComputerName | Select-Object -Unique) -join ', '))."
+        Start-Sleep -Seconds 2
+    }
+}
 $hashes = foreach ($source in $sources) {
     $target = Join-Path $SharePath $source.Name
     $sourceHash = (Get-FileHash -LiteralPath $source.FullName -Algorithm SHA256).Hash

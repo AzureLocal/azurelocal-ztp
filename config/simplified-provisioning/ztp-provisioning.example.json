@@ -13,7 +13,7 @@
   "ShareName": "ztp-virtual-usb",
   "VoucherDirectory": "D:/ZtpVouchers",
   "VoucherWaitMinutes": 120,
-  "RfsWriteAttribute": false,
+  "RfsWriteAttribute": true,
   "SkipCertificateCheck": true,
   "EventLogPath": "./ztp-events.jsonl",
   "BootstrapTimeoutMinutes": 120,

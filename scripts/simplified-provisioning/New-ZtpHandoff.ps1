@@ -46,7 +46,7 @@ param(
     [string]$BootstrapManifestPath,
     [string]$EventLogPath,
     [string]$HandoffPath = (Join-Path (Get-Location) 'ztp-handoff.json'),
-    [string]$ApiVersion = '2025-12-01-preview',
+    [string]$ApiVersion = '2026-10-01',
     [switch]$Execute
 )
 

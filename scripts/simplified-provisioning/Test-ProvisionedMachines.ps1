@@ -5,7 +5,8 @@ Checks that the provisioned Arc machines are ready to cluster (read-only).
 .DESCRIPTION
 Each expected machine must exist, be Connected and carry the mandatory Arc extensions of simplified machine provisioning
 (AzureEdgeDeviceManagement, AzureEdgeLifecycleManager, AzureEdgeRemoteSupport, AzureEdgeTelemetryAndDiagnostics) in
-provisioning state Succeeded. An Arc machine in the group that is not expected is reported as 'unexpected machine'. With
+provisioning state Succeeded. Another Arc machine in the group is reported as 'other machine in the group' and doesn't fail
+the check, because nodes can be provisioned one run at a time into the same group; -StrictGroup makes it fail. With
 -PassThru the rows are returned even when a check fails; otherwise the script throws.
 Simplified provisioning names the Arc machine <device-id>-1: pass the values of arc_machine_names (written by
 Update-ArcMachineNames.ps1 from each edge machine's arcMachineResourceId), not the host names.
@@ -19,6 +20,8 @@ Expected Arc machine names.
 Arc extensions that must be Succeeded on every machine.
 .PARAMETER PassThru
 Return the rows even when a check fails.
+.PARAMETER StrictGroup
+Fail when the group holds any Arc machine that isn't expected.
 #>
 [CmdletBinding()]
 param(
@@ -26,7 +29,8 @@ param(
     [Parameter(Mandatory)][string]$ResourceGroupName,
     [Parameter(Mandatory)][string[]]$ExpectedMachineName,
     [string[]]$RequiredExtension = @('AzureEdgeDeviceManagement', 'AzureEdgeLifecycleManager', 'AzureEdgeRemoteSupport', 'AzureEdgeTelemetryAndDiagnostics'),
-    [switch]$PassThru
+    [switch]$PassThru,
+    [switch]$StrictGroup
 )
 
 Set-StrictMode -Version Latest
@@ -69,7 +73,7 @@ foreach ($machine in $listed) {
                 Connected         = ($machine.Status -eq 'Connected')
                 ExtensionsReady   = $false
                 MissingExtensions = @()
-                Detail            = 'unexpected machine'
+                Detail            = if ($StrictGroup) { 'unexpected machine' } else { 'other machine in the group' }
             })
     }
 }

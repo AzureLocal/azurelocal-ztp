@@ -18,7 +18,7 @@ Provisioning region (preview: eastus).
 .PARAMETER Version
 latest, latest-preview or an exact version; omit to list.
 .PARAMETER ApiVersion
-Microsoft.AzureStackHCI api-version (edgeMachines and osImages: 2025-12-01-preview or later).
+Microsoft.AzureStackHCI api-version (edgeMachines and osImages: 2026-10-01 or later).
 .EXAMPLE
 ./Get-ZtpOsImage.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -Location eastus
 .EXAMPLE
@@ -29,7 +29,7 @@ param(
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F-]{36}$')][string]$SubscriptionId,
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$Location,
     [string]$Version,
-    [string]$ApiVersion = '2025-12-01-preview'
+    [string]$ApiVersion = '2026-10-01'
 )
 
 Set-StrictMode -Version Latest

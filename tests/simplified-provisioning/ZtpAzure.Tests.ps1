@@ -135,7 +135,7 @@ Describe 'ZTP Azure half' {
             $rows.VsrVersion | Should -Be @('12.2699.1000.1', '12.2609.1003.7', '12.2608.1003.9', '12.2607.1003.73')
             $rows[0].IsPreview | Should -BeTrue
             $rows[1].IsPreview | Should -BeFalse
-            $global:ztpCalls[0].Path | Should -Match "^/subscriptions/$global:ztpZeroSub/providers/Microsoft\.AzureStackHCI/locations/eastus/osImages\?api-version=2025-12-01-preview&solution-type=HCI$"
+            $global:ztpCalls[0].Path | Should -Match "^/subscriptions/$global:ztpZeroSub/providers/Microsoft\.AzureStackHCI/locations/eastus/osImages\?api-version=2026-10-01&solution-type=HCI$"
             $global:ztpCalls[0].Method | Should -Be 'GET'
         }
 
@@ -235,7 +235,7 @@ Describe 'ZTP Azure half' {
             $rows.Count | Should -Be 2
             @($rows | Where-Object Ready).Count | Should -Be 2
             @($global:ztpCalls | Where-Object Method -EQ 'PUT').Count | Should -Be 0
-            $global:ztpCalls[0].Path | Should -Match '/edgeMachines/node-01\?api-version=2025-12-01-preview$'
+            $global:ztpCalls[0].Path | Should -Match '/edgeMachines/node-01\?api-version=2026-10-01$'
         }
 
         It 'keeps polling through InstallOs and prints each step change once' {
@@ -273,7 +273,7 @@ Describe 'ZTP Azure half' {
             @($rows | Where-Object Ready).Count | Should -Be 2
             $put = @($global:ztpCalls | Where-Object Method -EQ 'PUT')
             $put.Count | Should -Be 1
-            $put[0].Path | Should -Match '/edgeMachines/node-02/jobs/ProvisionOs\?api-version=2025-12-01-preview$'
+            $put[0].Path | Should -Match '/edgeMachines/node-02/jobs/ProvisionOs\?api-version=2026-10-01$'
             $body = $put[0].Payload | ConvertFrom-Json
             $body.properties.jobType | Should -Be 'ProvisionOs'
             $body.properties.provisioningRequest.target | Should -Be 'HCI'
@@ -525,14 +525,17 @@ Describe 'ZTP Azure half' {
             { & $script:machines -SubscriptionId test -ResourceGroupName test -ExpectedMachineName node } | Should -Throw
         }
 
-        It 'reports an unexpected machine with PassThru and throws without it' {
+        It 'reports another machine in the group without failing, and fails on it only with -StrictGroup' {
             Mock Get-AzConnectedMachine {
                 if ($Name) { return [pscustomobject]@{ Name = $Name; Status = 'Connected'; OSName = 'Azure Local' } }
                 @([pscustomobject]@{ Name = 'node'; Status = 'Connected'; OSName = 'Azure Local' }, [pscustomobject]@{ Name = 'extra'; Status = 'Connected'; OSName = 'Azure Local' })
             }
             $rows = @(& $script:machines -SubscriptionId test -ResourceGroupName test -ExpectedMachineName node -PassThru)
-            @($rows | Where-Object Detail -EQ 'unexpected machine').Count | Should -Be 1
-            { & $script:machines -SubscriptionId test -ResourceGroupName test -ExpectedMachineName node } | Should -Throw
+            @($rows | Where-Object Detail -EQ 'other machine in the group').Count | Should -Be 1
+            { & $script:machines -SubscriptionId test -ResourceGroupName test -ExpectedMachineName node } | Should -Not -Throw
+            $strict = @(& $script:machines -SubscriptionId test -ResourceGroupName test -ExpectedMachineName node -StrictGroup -PassThru)
+            @($strict | Where-Object Detail -EQ 'unexpected machine').Count | Should -Be 1
+            { & $script:machines -SubscriptionId test -ResourceGroupName test -ExpectedMachineName node -StrictGroup } | Should -Throw
         }
 
         It 'reports a missing machine' {
