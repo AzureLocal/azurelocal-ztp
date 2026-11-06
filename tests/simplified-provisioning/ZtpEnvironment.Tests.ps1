@@ -91,7 +91,7 @@ BeforeAll {
     }
 
     # Initialize-ZtpNode.ps1 beside a stub Azure layer.
-    $script:initRoot = New-TestRepo -Name 'init-repo' -Copy 'Initialize-ZtpNode.ps1', 'ZtpEnvironment.Common.ps1'
+    $script:initRoot = New-TestRepo -Name 'init-repo' -Copy 'Initialize-ZtpNode.ps1', 'ZtpEnvironment.Common.ps1', 'ZtpEvents.Common.ps1'
     $script:init = Join-Path $script:initRoot 'scripts/simplified-provisioning/Initialize-ZtpNode.ps1'
     Set-Content -LiteralPath (Join-Path $script:initRoot 'scripts/simplified-provisioning/ZtpAzure.Common.ps1') -Value @'
 function Invoke-ZtpArm { [CmdletBinding()] param($Method, $Path, [switch]$AllowNotFound) $null }
@@ -336,15 +336,15 @@ Describe 'Initialize-ZtpNode.ps1 plan' {
 }
 Describe 'Initialize-ZtpNode.ps1 with several nodes' {
     It 'prepares every node at the same time, one worker each, and reports each failure' {
-        $root = New-TestRepo -Name 'init-parallel' -Copy 'Initialize-ZtpNode.ps1', 'ZtpEnvironment.Common.ps1'
+        $root = New-TestRepo -Name 'init-parallel' -Copy 'Initialize-ZtpNode.ps1', 'ZtpEnvironment.Common.ps1', 'ZtpEvents.Common.ps1'
         Set-Content -LiteralPath (Join-Path $root 'scripts/simplified-provisioning/ZtpAzure.Common.ps1') -Value '# unused: the workers are stubs'
         $worker = Join-Path $root 'Worker.ps1'
         # The stub worker records when it started and finished and what it was asked, takes 3 seconds, and fails for one node on request.
         Set-Content -LiteralPath $worker -Value @'
-param([string]$InfrastructureFile, [string[]]$Node, [int]$ReadyTimeoutMinutes, [int]$ReachTimeoutMinutes, [string]$DriverStagingPath, [string]$OemConfigDirectory, [switch]$Execute)
+param([string]$InfrastructureFile, [string[]]$Node, [int]$ReadyTimeoutMinutes, [int]$ReachTimeoutMinutes, [string]$DriverStagingPath, [string]$OemConfigDirectory, [string]$EventLogPath, [switch]$Execute)
 $started = [datetime]::UtcNow.Ticks
 Start-Sleep -Seconds 3
-[pscustomobject]@{ Node = @($Node); Started = $started; Finished = [datetime]::UtcNow.Ticks; Execute = [bool]$Execute; Staging = $DriverStagingPath; Oem = $OemConfigDirectory; Ready = $ReadyTimeoutMinutes; Reach = $ReachTimeoutMinutes } |
+[pscustomobject]@{ Node = @($Node); Started = $started; Finished = [datetime]::UtcNow.Ticks; Execute = [bool]$Execute; Staging = $DriverStagingPath; Oem = $OemConfigDirectory; Events = $EventLogPath; Ready = $ReadyTimeoutMinutes; Reach = $ReachTimeoutMinutes } |
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $env:ZTP_TEST_WORKER_DIR "$($Node[0]).json")
 if ($env:ZTP_TEST_FAIL_NODE -eq $Node[0]) { Write-Output "$($Node[0]): example failure"; exit 1 }
 '@
@@ -353,7 +353,8 @@ if ($env:ZTP_TEST_FAIL_NODE -eq $Node[0]) { Write-Output "$($Node[0]): example f
         $infra = New-TestEnvironment -Name 'init-parallel' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-parallel'))
         $staging = Join-Path $TestDrive 'parallel-staging'
         $oem = Join-Path $root 'config/oem'
-        $run = { & (Join-Path $root 'scripts/simplified-provisioning/Initialize-ZtpNode.ps1') -InfrastructureFile $infra -Node node-01, node-02 -Execute -DriverStagingPath $staging -OemConfigDirectory $oem -WorkerScriptPath $worker -ReadyTimeoutMinutes 7 -ReachTimeoutMinutes 5 *>&1 }
+        $events = Join-Path $TestDrive 'parallel-events/ztp-events.jsonl'
+        $run = { & (Join-Path $root 'scripts/simplified-provisioning/Initialize-ZtpNode.ps1') -InfrastructureFile $infra -Node node-01, node-02 -Execute -DriverStagingPath $staging -OemConfigDirectory $oem -WorkerScriptPath $worker -ReadyTimeoutMinutes 7 -ReachTimeoutMinutes 5 -EventLogPath $events *>&1 }
 
         $env:ZTP_TEST_WORKER_DIR = $records
         $env:ZTP_TEST_FAIL_NODE = ''
@@ -368,7 +369,7 @@ if ($env:ZTP_TEST_FAIL_NODE -eq $Node[0]) { Write-Output "$($Node[0]): example f
             # One worker per node, each for its own node alone, with the parameters passed on.
             @($a.Node) | Should -Be @('node-01')
             @($b.Node) | Should -Be @('node-02')
-            foreach ($w in $a, $b) { $w.Execute | Should -BeTrue; $w.Staging | Should -Be $staging; $w.Oem | Should -Be $oem; $w.Ready | Should -Be 7; $w.Reach | Should -Be 5 }
+            foreach ($w in $a, $b) { $w.Execute | Should -BeTrue; $w.Staging | Should -Be $staging; $w.Oem | Should -Be $oem; $w.Events | Should -Be $events; $w.Ready | Should -Be 7; $w.Reach | Should -Be 5 }
             # They ran together: each started before the other finished (run one after the other, the second would start after the first ended).
             [math]::Max($a.Started, $b.Started) | Should -BeLessThan ([math]::Min($a.Finished, $b.Finished))
             $clock.Elapsed.TotalSeconds | Should -BeLessThan 12
@@ -385,7 +386,7 @@ Describe 'Invoke-ZtpEnvironment.ps1 plan' {
         $script:envRoot = New-TestRepo -Name 'env-repo' -Copy 'Invoke-ZtpEnvironment.ps1', 'ZtpEnvironment.Common.ps1'
         $script:envScript = Join-Path $script:envRoot 'scripts/simplified-provisioning/Invoke-ZtpEnvironment.ps1'
         $bin = Join-Path $script:envRoot 'scripts/simplified-provisioning'
-        $params = '$ConfigPath, $NodeName, $BmcCredential, $InfrastructureFile, $Node, $DriverStagingPath, $From, [switch]$ConfirmNotClustered, [switch]$SkipCertificateCheck, [switch]$RetryProvisionOs, [switch]$RebuildImages, [switch]$Execute'
+        $params = '$ConfigPath, $NodeName, $BmcCredential, $InfrastructureFile, $Node, $DriverStagingPath, $EventLogPath, $From, [switch]$ConfirmNotClustered, [switch]$SkipCertificateCheck, [switch]$RetryProvisionOs, [switch]$RebuildImages, [switch]$Execute'
         foreach ($stub in 'Invoke-ZtpProvisioning.ps1', 'Initialize-ZtpNode.ps1') {
             Set-Content -LiteralPath (Join-Path $bin $stub) -Value @"
 [CmdletBinding(SupportsShouldProcess)]
@@ -433,6 +434,7 @@ param($params)
         $global:ztpE_runs[0].Params['NodeName'] | Should -Be @('node-01', 'node-02')
         $global:ztpE_runs[0].Params.ContainsKey('Execute') | Should -BeFalse
         $global:ztpE_runs[1].Params['DriverStagingPath'] | Should -Be (Join-Path $script:media 'sbe-drivers')
+        $global:ztpE_runs[1].Params['EventLogPath'] | Should -Be (Join-Path $script:media 'ztp-state/ztp-events.jsonl') -Because 'Prepare reports its gates to the event file Sonar follows'
         $global:ztpE_runs[1].Params.ContainsKey('Execute') | Should -BeFalse
         # Plan mode creates nothing in Azure and reads no secret.
         ($global:ztpE_calls -join "`n") | Should -Not -BeLike '*New-AzResourceGroup*'

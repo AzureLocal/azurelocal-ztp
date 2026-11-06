@@ -60,6 +60,7 @@ param(
     [string]$DriverStagingPath = ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../_media/sbe-drivers'))),
     [string]$OemConfigDirectory = ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../config/oem'))),
     [string]$WorkerScriptPath = $PSCommandPath,
+    [string]$EventLogPath,
     [switch]$Execute
 )
 Set-StrictMode -Version Latest
@@ -68,6 +69,14 @@ Import-Module powershell-yaml
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 . (Join-Path $PSScriptRoot 'ZtpAzure.Common.ps1')
 . (Join-Path $PSScriptRoot 'ZtpEnvironment.Common.ps1')
+. (Join-Path $PSScriptRoot 'ZtpEvents.Common.ps1')
+
+# Progress for monitors (Sonar follows this file): one event per gate, stage 'Prepare'. Only with -Execute and a path.
+function Send-PrepareEvent([string]$Node, [string]$State, [string]$Evidence, [string]$Level = 'Info', [string]$NextAction = '') {
+    if (-not $Execute -or -not $EventLogPath) { return }
+    try { Write-ZtpEvent -Path $EventLogPath -Node $Node -State $State -Evidence $Evidence -NextAction $NextAction -Level $Level -Stage 'Prepare' }
+    catch { Write-Warning "Couldn't write the Prepare event to ${EventLogPath}: $($_.Exception.Message)" }
+}
 
 # Progress goes to the information stream, so functions that return objects stay clean. Capture it with *>&1.
 function Write-Step([string]$Text) { Write-Information -MessageData "$((Get-Date).ToUniversalTime().ToString('HH:mm:ss'))Z $Text" -InformationAction Continue }
@@ -139,6 +148,7 @@ if ($Execute -and @($Node).Count -gt 1) {
             $workerArgs = @('-NoProfile', '-File', $using:self, '-InfrastructureFile', $using:envPath, '-Node', $n,
                 '-ReadyTimeoutMinutes', $using:ReadyTimeoutMinutes, '-ReachTimeoutMinutes', $using:ReachTimeoutMinutes,
                 '-DriverStagingPath', $using:DriverStagingPath, '-OemConfigDirectory', $using:OemConfigDirectory, '-Execute')
+            if ($using:EventLogPath) { $workerArgs += @('-EventLogPath', $using:EventLogPath) }
             & pwsh @workerArgs 2>&1 | ForEach-Object { Write-Information -MessageData "[$n] $_" -InformationAction Continue }
             [pscustomobject]@{ Node = $n; ExitCode = $LASTEXITCODE }
         })
@@ -312,6 +322,7 @@ foreach ($n in $Node) {
         Write-Step "  Gate 1: Azure reports Ready to cluster"
         $az = Wait-AzureReady $n $ReadyTimeoutMinutes
         if (-not $az.Ready) { throw "Not Ready to cluster yet. With -Execute this waits up to $ReadyTimeoutMinutes minutes." }
+        Send-PrepareEvent $n 'PrepareStarted' 'Azure reports Ready to cluster; signing in to install the OEM network drivers and set the network'
         Write-Step "  Gate 2: sign-in with the ZTP administrator secret"
         $s = Wait-Session $ip $cred $ReachTimeoutMinutes
         $before = Invoke-Command -Session $s -ScriptBlock $readState -ArgumentList $mac, $zip.Name, $deployAdmin
@@ -384,22 +395,36 @@ foreach ($n in $Node) {
         $result.log | ForEach-Object { Write-Step "  node: $_" }
         Invoke-Command -Session $s -ScriptBlock { Unregister-ScheduledTask -TaskName 'AzureLocalZtpNodePrepare' -Confirm:$false -ErrorAction SilentlyContinue }
         if ($result.status -ne 'Succeeded') { throw "Preparation failed on $n." }
+        Send-PrepareEvent $n 'PrepareDriversInstalled' (@($result.log) -join '; ')
 
         $mid = Invoke-Command -Session $s -ScriptBlock $readState -ArgumentList $mac, $zip.Name, $deployAdmin
         if ($result.rebootRequired -or $mid.RebootPending) {
+            Send-PrepareEvent $n 'PrepareRestarting' $(if ($result.rebootRequired) { 'a driver asked for a restart' } else { 'Windows has a restart pending' })
             Write-Step "  Gate 3b: restart, because $(if ($result.rebootRequired) { 'a driver asked for one' } else { 'Windows has a restart pending' })"
             # Restarting inside the call kills the session before it returns, which reads as a failure. Schedule it a few
             # seconds out so the call returns first; a drop while it returns is expected.
             try { Invoke-Command -Session $s -ScriptBlock { & shutdown.exe /r /t 10 /d p:2:4 /c 'Azure Local ZTP node preparation: driver restart' } }
             catch { Write-Step "  session dropped while the restart was scheduled ($($_.Exception.Message)); continuing" }
-            Remove-PSSession $s; $s = $null
-            $down = (Get-Date).AddMinutes(10)
-            while ((Get-Date) -lt $down -and (Test-NetConnection $ip -Port 5985 -InformationLevel Quiet -WarningAction SilentlyContinue)) { Start-Sleep 10 }
-            Start-Sleep 30
+            Remove-PSSession $s -ErrorAction SilentlyContinue; $s = $null
+            # Wait for a new boot time. Windows can keep WinRM answering for a minute or more after the restart is
+            # scheduled, so a session opened in that window dies mid-call (seen live). Any failure while probing means
+            # "not back yet"; only a new boot time, or the time limit, ends the wait.
+            $backWithin = $ReachTimeoutMinutes + 10
+            $backBy = (Get-Date).AddMinutes($backWithin)
+            $booted = $mid.Booted
+            while ($booted -eq $mid.Booted) {
+                if ((Get-Date) -gt $backBy) { throw "$n didn't come back with a new boot time within $backWithin minutes (still $booted)." }
+                Start-Sleep 20
+                try {
+                    $probe = New-PSSession -ComputerName $ip -Credential $cred -Authentication Negotiate -ErrorAction Stop
+                    try { $booted = (Invoke-Command -Session $probe -ScriptBlock $readState -ArgumentList $mac, $zip.Name, $deployAdmin -ErrorAction Stop).Booted }
+                    finally { Remove-PSSession $probe -ErrorAction SilentlyContinue }
+                }
+                catch { Write-Verbose "  $n not back yet: $($_.Exception.Message)" }
+            }
             $s = Wait-Session $ip $cred $ReachTimeoutMinutes
-            $booted = (Invoke-Command -Session $s -ScriptBlock $readState -ArgumentList $mac, $zip.Name, $deployAdmin).Booted
-            if ($booted -eq $mid.Booted) { throw "$n didn't restart: boot time is still $booted." }
             Write-Step "  $n restarted at $booted"
+            Send-PrepareEvent $n 'PrepareRestarted' "new boot time $booted"
         }
 
         Write-Step "  Gate 4: checks on the node, then Azure"
@@ -427,8 +452,9 @@ foreach ($n in $Node) {
         if ($problems) { throw "$n check failed: $($problems -join '; ')" }
         $null = Wait-AzureReady $n 15
         Write-Step "  $n is ready for Validate"
+        Send-PrepareEvent $n 'ReadyForValidate' 'SBE network drivers on every port, static management address, one default gateway, DNS and time, C:\SBE complete, deployment admin present; Azure reports Ready to cluster'
     }
-    catch { Write-Warning "  $n`: $($_.Exception.Message)"; $failed += $n }
+    catch { Write-Warning "  $n`: $($_.Exception.Message)"; $failed += $n; Send-PrepareEvent $n 'PrepareFailed' $_.Exception.Message 'Error' 'Fix the cause and rerun with -From Prepare; finished steps are skipped.' }
     finally { if ($s) { Remove-PSSession $s } }
 }
 if (-not $Execute) { Write-Step 'Plan only. Add -Execute to wait at each gate and make the changes.' }
