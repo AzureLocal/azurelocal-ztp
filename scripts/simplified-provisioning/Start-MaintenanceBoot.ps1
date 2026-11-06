@@ -7,8 +7,8 @@ Boots the nodes into the Azure Local maintenance environment from per-node virtu
 One run in one process, because the share credential lives only in memory.
   1. Publish-MaintenanceIso.ps1 -ReadWrite shares the per-node images New-ZtpVirtualUsbImage.ps1 built in -ImageDirectory
      (in place, no copy), change rights for one generated account, TCP 445 only from the nodes' BMC addresses;
-  2. Mount-ZtpVirtualUsb.ps1 inserts each node's image on its USB-stick slot with WriteProtected=false, proves the attach
-     and the write access, sets a one-time USB boot and, with -Restart, power-cycles the node. Leave the media inserted:
+  2. Mount-ZtpVirtualUsb.ps1 inserts each node's image on its USB-stick slot read-write, proves the attach, sets a
+     one-time boot to that slot and, with -Restart, power-cycles the node. Every node runs in its own worker, at once. Leave the media inserted:
      Wait-ZtpVoucher.ps1 waits for the voucher in the image, ejects it and extracts <serial>.pem.
 BMC addresses come from the bmc_address of each node (-Nodes or -NodesFile); the BMC account is -Credential. When done,
 eject the media and remove the share (Publish-MaintenanceIso.ps1 -Remove -ShareName <name>). Without -Execute only the
@@ -96,8 +96,22 @@ if (-not $Execute) {
 }
 if (-not $PSCmdlet.ShouldProcess(($NodeName -join ', '), "Boot the maintenance virtual USB; restart: $([bool]$Restart)")) { return }
 $share = & $publish @publishArgs -Execute -Confirm:$false
+# All machines boot at once: each gets its own worker, which mounts, restarts and watches its own BMC. A failure on one
+# doesn't stop the others; the stage fails afterwards with every machine's error.
+$shareCredential = $share.Credential
+$booted = @($NodeName | ForEach-Object -ThrottleLimit ([Math]::Max(1, @($NodeName).Count)) -Parallel {
+        $node = $_
+        try {
+            $a = ([hashtable]$using:usbArgs).Clone()
+            $out = @(& $using:mountUsb @a -NodeName $node -Credential $using:Credential -ShareCredential $using:shareCredential -Execute -Confirm:$false)
+            [pscustomobject]@{ Node = $node; Row = @($out | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties['Image'] })[-1]; Error = $null }
+        }
+        catch { [pscustomobject]@{ Node = $node; Row = $null; Error = $_.Exception.Message } }
+    })
+$failed = @($booted | Where-Object Error)
+if ($failed.Count -gt 0) { throw "Boot failed on $(@($failed | ForEach-Object { "$($_.Node): $($_.Error)" }) -join ' | ')" }
 foreach ($node in $NodeName) {
-    $row = & $mountUsb @usbArgs -NodeName $node -Credential $Credential -ShareCredential $share.Credential -Execute -Confirm:$false
+    $row = @($booted | Where-Object Node -EQ $node)[0].Row
     $hash = @($share.Images | Where-Object { $_.ImagePath -like "*/$(Get-ZtpNodeImageName -NodeName $node -Prefix $ImageNamePrefix)" })[0].Sha256
     [pscustomobject]@{ Node = $node; Image = $row.Image; Sha256 = $hash; WriteProtected = $row.WriteProtected; Restarted = [bool]$Restart }
 }

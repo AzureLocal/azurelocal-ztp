@@ -163,6 +163,8 @@ function Get-ZtpBmcReading {
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][object]$Session, [Parameter(Mandatory)][string]$ImageFileName, [Parameter(Mandatory)][object]$Oem, [datetime]$SinceUtc = [datetime]::MinValue)
+    # A [datetime] cast from "...Z" arrives as local time; comparing its ticks with UTC log times keeps old entries east or west of UTC.
+    $since = if ($SinceUtc.Kind -eq [DateTimeKind]::Local) { $SinceUtc.ToUniversalTime() } else { [datetime]::SpecifyKind($SinceUtc, [DateTimeKind]::Utc) }
     $manager = Get-ZtpRedfishManager -Session $Session
     $system = Get-ZtpRedfishSystem -Session $Session
     $slots = @(Get-ZtpRedfishMember -Session $Session -CollectionPath "$($manager.'@odata.id')/VirtualMedia" | Where-Object { @($_.MediaTypes) -contains 'USBStick' })
@@ -180,7 +182,7 @@ function Get-ZtpBmcReading {
         catch { Write-Verbose "Log service $($service.id) unreadable: $($_.Exception.Message)"; continue }
         foreach ($e in @($entries.Members)) {
             $created = if ($e.PSObject.Properties['Created'] -and $e.Created) { [datetime]::Parse([string]$e.Created, [cultureinfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor [System.Globalization.DateTimeStyles]::AssumeUniversal) } else { [datetime]::MinValue }
-            if ($created -lt $SinceUtc) { continue }
+            if ($created -lt $since) { continue }
             $text = if ($e.PSObject.Properties['Message']) { [string]$e.Message } else { '' }
             foreach ($kind in $patterns.Keys) {
                 foreach ($pattern in $patterns[$kind]) {
@@ -230,7 +232,7 @@ function Get-ZtpAzureReadiness {
     therefore proves the Azure side is ready, not that the device was seen.
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$Location, [string]$ApiVersion = '2025-12-01-preview')
+    param([Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$Location, [string]$ApiVersion = '2026-10-01')
     $problems = [System.Collections.Generic.List[string]]::new()
     $feature = Invoke-ZtpArm -Method GET -ApiVersion '2021-07-01' -AllowNotFound -Path "/subscriptions/$SubscriptionId/providers/Microsoft.Features/featureProviders/Microsoft.DeviceOnboarding/subscriptionFeatureRegistrations/AzureLocalZTP"
     $featureState = [string](Get-ZtpPathValue $feature 'properties.state' '')

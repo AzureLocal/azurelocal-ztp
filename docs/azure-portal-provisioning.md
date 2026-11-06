@@ -1,5 +1,8 @@
 # Azure Local ZTP Portal Provisioning Guide
 
+> [!WARNING]
+> **Superseded.** This guide describes claiming machines by hand in the Azure portal after the manual [Server preparation](server-preparation.md) route. The [Operator guide](operator-guide.md) now does the claim from a Bicep template, waits for "Ready to cluster", and prepares the nodes for Validate. Use this page only if you choose to claim in the portal; its Configurator App and log collection steps still apply.
+
 > [!NOTE]
 > **Note**
 > This guide covers the Azure Portal provisioning phase of Zero-Touch Provisioning (ZTP) for Azure Local. It picks up after the servers have been bootstrapped into the maintenance environment using the [Server Preparation Guide](server-preparation.md).

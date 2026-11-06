@@ -24,7 +24,7 @@ Resource group of the edge machines.
 .PARAMETER EdgeMachineName
 Edge machine names (the node names).
 .PARAMETER ApiVersion
-edgeMachines api-version (2025-12-01-preview is the first that has edgeMachines and jobs).
+edgeMachines api-version (2026-10-01 is the first that has edgeMachines and jobs).
 .PARAMETER TimeoutMinutes
 Overall polling budget (the live run took about 60 minutes per node from claim to Provisioned).
 .PARAMETER PollIntervalSeconds
@@ -47,7 +47,7 @@ param(
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F-]{36}$')][string]$SubscriptionId,
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$ResourceGroupName,
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string[]]$EdgeMachineName,
-    [string]$ApiVersion = '2025-12-01-preview',
+    [string]$ApiVersion = '2026-10-01',
     [ValidateRange(0, 1440)][int]$TimeoutMinutes = 180,
     [ValidateRange(0, 3600)][int]$PollIntervalSeconds = 60,
     [switch]$RetryProvisionOs,

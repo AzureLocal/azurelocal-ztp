@@ -105,10 +105,11 @@ All of them validated with `12.*.1003.*` and, where listed, `12.*.1002.*` from `
 
 ### Where the SBE belongs
 
-**Not on the bootstrap media.** The maintenance ISO has no SBE slot, and no Microsoft source says the maintenance environment reads one (`prov_config/download` is staged onto the maintenance OS only). The SBE is used by the Azure Local lifecycle:
+**Not on the bootstrap media.** The maintenance ISO has no SBE slot, and no Microsoft source says the maintenance environment reads one (`prov_config/download` is staged onto the maintenance OS only). The SBE is used here and by the Azure Local lifecycle:
 
-1. **Cluster deployment.** The portal or the deployment ARM template takes `sbeVersion`, `sbeFamily`, `sbePublisher`, `sbeManifestSource` and `sbeManifestCreationDate`; the download connector fetches the package with the OEM credentials (`Set-SolutionExtensionSecretLocation` can add them in Key Vault later). `Convert-ZtpHandoffToClusterInputs.ps1` emits these as the `sbe` block.
-2. **Update.** A package the connector cannot fetch makes the update `AdditionalContentRequired`; import `SBE_Discovery_<oem>.xml`, `SBE_<oem>_<family>_<version>.xml` and `.zip` from a share (Learn: Update via PowerShell, step 3). The staging folder holds that set.
+1. **Node preparation, before Validate and Deploy.** Learn says to install the OEM's drivers and firmware, and to place the SBE in `C:\SBE` on each machine so deployment detects it ([install drivers and firmware](https://learn.microsoft.com/azure/azure-local/deploy/deployment-install-os#install-drivers-and-firmware)). The Prepare stage (`Initialize-ZtpNode.ps1`) does that from the folder in `ztp.node_preparation.sbe_bundle`. It checks the zip's SHA-256 against the OEM's discovery manifest, extracts the network drivers from the folders listed in `sbe.driverPaths` of `config/oem/<oem>.json`, picks them by each adapter's PCI hardware ID, checks their catalog signatures, installs them with `pnputil`, and copies the three SBE files to `C:\SBE`. It doesn't install firmware. Only `config/oem/dell.json` has `driverPaths` today.
+2. **Cluster deployment.** The portal or the deployment ARM template takes `sbeVersion`, `sbeFamily`, `sbePublisher`, `sbeManifestSource` and `sbeManifestCreationDate`; the download connector fetches the package with the OEM credentials (`Set-SolutionExtensionSecretLocation` can add them in Key Vault later). `Convert-ZtpHandoffToClusterInputs.ps1` emits these as the `sbe` block.
+3. **Update.** A package the connector cannot fetch makes the update `AdditionalContentRequired`; import `SBE_Discovery_<oem>.xml`, `SBE_<oem>_<family>_<version>.xml` and `.zip` from a share (Learn: Update via PowerShell, step 3). The staging folder holds that set.
 
 ## What is proven and what is not
 
@@ -117,11 +118,12 @@ All of them validated with `12.*.1003.*` and, where listed, `12.*.1002.*` from `
 | The short link, redirect, `HEAD`, `Range` and zip-directory results in the tables above | **Verified live** on 15 Oct 2026 with the scripts' own probe |
 | `Get-ZtpBootstrapIso.ps1 -Execute` downloads 1.3 GB, extracts, hashes, writes the manifest and reuses it on the next run (builds `3061` and `3062`) | **Verified live** |
 | `Invoke-ZtpPrepareMedia.ps1 -Execute` builds a 4 GiB GPT/FAT32 `CDROM` image from the downloaded `10.2610` ISO and the read-back check passes (boot loader, `grub.cfg`, `rootfs.img`) | **Verified live** (no hardware) |
-| Booting that image from the iDRAC USB-stick slot | The same layout booted an earlier maintenance build on a Dell 16G server; **`10.2610` on hardware is not yet proven** |
+| Booting that image from the iDRAC USB-stick slot | **Proven on Dell AX-760 / iDRAC 7.30** with maintenance image `10.2610.0.3063` |
 | Discovery manifests resolve; Dell manifest parses; newest SBE per model | **Verified live** |
 | Downloading an SBE package from the manifest | **Not possible**: no URI is published; connector or OEM support site only |
 | Hash of the maintenance ISO from Microsoft | **None published**; trust on first use |
-| Everything else in the pipeline (state machine, events, handoff, Sonar adapter) | Unit tested with mocks and recorded fixtures only; see [Automated bootstrap](automated-bootstrap.md) |
+| A supplied SBE package checked against the OEM's published SHA-256, its network drivers installed, and the SBE copied to `C:\SBE` (Prepare) | **Proven on Dell AX-760 / iDRAC 7.30** |
+| The whole flow, from the ISO to "ready for Validate" | **Proven on Dell AX-760 / iDRAC 7.30**; see [Design and architecture](architecture.md) |
 
 ## Sources
 

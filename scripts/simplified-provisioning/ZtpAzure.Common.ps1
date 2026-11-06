@@ -6,14 +6,14 @@ Get-ZtpOsImage.ps1, Wait-ZtpMachineReady.ps1 and Update-ArcMachineNames.ps1).
 .DESCRIPTION
 ARM transport (Invoke-AzRestMethod under the operator's Az context; no token ever leaves memory), the HCI OS image
 catalog, ownership voucher files, edge machine and ProvisionOs job status, and the Learn ProvisionOs retry body. Response shapes are the ones a live run returned (edgeMachines and
-edgeMachines/jobs, api-version 2025-12-01-preview; fixtures in tests/simplified-provisioning/fixtures). Nothing here prints a voucher or a secret.
+edgeMachines/jobs, api-version 2026-10-01; fixtures in tests/simplified-provisioning/fixtures). Nothing here prints a voucher or a secret.
 #>
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # Mandatory Arc extensions of a provisioned machine (extension resource names on the Arc machine).
 $script:ZtpRequiredExtensions = @('AzureEdgeDeviceManagement', 'AzureEdgeLifecycleManager', 'AzureEdgeRemoteSupport', 'AzureEdgeTelemetryAndDiagnostics')
-$script:ZtpDefaultApiVersion = '2025-12-01-preview'
+$script:ZtpDefaultApiVersion = '2026-10-01'
 
 function Write-ZtpLog {
     [CmdletBinding()]

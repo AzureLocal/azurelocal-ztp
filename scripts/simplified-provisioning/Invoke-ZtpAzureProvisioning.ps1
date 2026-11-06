@@ -25,8 +25,8 @@ Stages:
             -ArcMachineNameMapPath with -Execute). Resumes an interrupted run; never submits the deployment.
 Sign in first (Connect-AzAccount); the operator needs Contributor and Role Based Access Control Administrator (or Owner) on
 the resource group. The Microsoft.DeviceOnboarding/AzureLocalZTP feature and the resource providers must be registered.
-Preview: East US only. Not yet proven end to end live: the scripted submit and the ProvisionOs retry (the portal-equivalent
-template is proven).
+Preview: East US only. Proven end to end live (Dell AX-760, 2026-11): the scripted claim, and the single ProvisionOs
+resubmit after a failed first install attempt.
 .PARAMETER Stage
 One stage, or All (Prereqs, Validate, Plan; Execute and Watch only with -Execute).
 .PARAMETER SubscriptionId
@@ -49,7 +49,7 @@ Name of the resource group deployment.
 Provisioning administrator password; written to the Key Vault secret only when that secret is missing and only with
 -Execute. Never written to a file.
 .PARAMETER ApiVersion
-Microsoft.AzureStackHCI api-version for the GETs and the poller (edgeMachines and jobs: 2025-12-01-preview).
+Microsoft.AzureStackHCI api-version for the GETs and the poller (edgeMachines and jobs: 2026-10-01).
 .PARAMETER TimeoutMinutes
 Watch budget.
 .PARAMETER PollIntervalSeconds
@@ -80,7 +80,7 @@ param(
     [string[]]$Node,
     [ValidatePattern('^[A-Za-z0-9._()-]{1,64}$')][string]$DeploymentName = 'ztp-provisioning',
     [securestring]$AdminPassword,
-    [string]$ApiVersion = '2025-12-01-preview',
+    [string]$ApiVersion = '2026-10-01',
     [ValidateRange(0, 1440)][int]$TimeoutMinutes = 180,
     [ValidateRange(0, 3600)][int]$PollIntervalSeconds = 60,
     [switch]$RetryProvisionOs,
@@ -98,6 +98,8 @@ if ($Stage -eq 'All' -and -not $Execute) { Write-ZtpLog 'Plan only (default): th
 $bicepDir = Join-Path $PSScriptRoot 'bicep'
 $templateFile = Join-Path $bicepDir 'main.bicep'
 $siteApiVersion = '2025-06-01'
+# Microsoft.Edge/configurations has no 2026-10-01; use the version bicep/main.bicep deploys it with.
+$configurationApiVersion = '2025-12-01-preview'
 $stages = if ($Stage -eq 'All') { @('Prereqs', 'Validate', 'Plan') + $(if ($Execute) { @('Execute', 'Watch') } else { @() }) } else { @($Stage) }
 $script:ztpInputs = $null
 
@@ -149,7 +151,7 @@ function Get-ZtpPlan {
     $siteName = [string]$in.site_name
     $configurationName = if ($in.ContainsKey('configuration_name') -and $in.configuration_name) { [string]$in.configuration_name } else { 'default' }
     $site = Invoke-ZtpArm -Method GET -Path "$rgPath/Microsoft.Edge/sites/$siteName" -ApiVersion $siteApiVersion -AllowNotFound
-    $configuration = Invoke-ZtpArm -Method GET -Path "$rgPath/Microsoft.Edge/configurations/$configurationName" -ApiVersion '2025-12-01-preview' -AllowNotFound
+    $configuration = Invoke-ZtpArm -Method GET -Path "$rgPath/Microsoft.Edge/configurations/$configurationName" -ApiVersion $configurationApiVersion -AllowNotFound
     switch ($SiteMode) {
         'Reuse' {
             if (-not $site -or -not $configuration) { throw "SiteMode Reuse: site '$siteName' exists=$([bool]$site), configuration '$configurationName' exists=$([bool]$configuration)." }
@@ -190,7 +192,7 @@ function Get-ZtpPlan {
         KeyVaultName          = [string]$in.key_vault_name
         SecretName            = $secretName
         SecretPresent         = $secretPresent
-        AdminSecretResourceId = "/subscriptions/$SubscriptionId/resourceGroups/$($in.key_vault_resource_group)/providers/Microsoft.KeyVault/vaults/$($in.key_vault_name)/secrets/$secretName"
+        AdminSecretResourceId = "/subscriptions/$(if ($in['key_vault_subscription_id']) { $in['key_vault_subscription_id'] } else { $SubscriptionId })/resourceGroups/$($in.key_vault_resource_group)/providers/Microsoft.KeyVault/vaults/$($in.key_vault_name)/secrets/$secretName"
     }
 }
 
@@ -245,7 +247,7 @@ foreach ($current in $stages) {
                 if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) { throw "'$cmd' is not available (az CLI with Bicep, Az.Resources, Az.KeyVault)." }
             }
             $null = Invoke-ZtpNative -FilePath 'az' -ArgumentList @('bicep', 'version')
-            Write-ZtpLog 'Gate: maintenance environment running on every node (vouchers collected), Microsoft.DeviceOnboarding/AzureLocalZTP feature and providers registered, operator Contributor + RBAC Administrator on the resource group.'
+            Write-ZtpLog 'Gate: az with Bicep and the Az modules are available. The AzureLocalZTP feature and the resource providers were checked in the Bootstrap stage; missing roles fail the template validation that follows.'
         }
         'Validate' {
             foreach ($file in @($templateFile) + @(Get-ChildItem -Path (Join-Path $bicepDir 'modules') -Filter '*.bicep' -ErrorAction SilentlyContinue | ForEach-Object FullName)) {
@@ -319,7 +321,7 @@ foreach ($current in $stages) {
                 TimeoutMinutes        = $TimeoutMinutes
                 PollIntervalSeconds   = $PollIntervalSeconds
                 RetryProvisionOs      = $RetryProvisionOs
-                AdminSecretResourceId = "/subscriptions/$SubscriptionId/resourceGroups/$($in.key_vault_resource_group)/providers/Microsoft.KeyVault/vaults/$($in.key_vault_name)/secrets/$($in.admin_secret_name)"
+                AdminSecretResourceId = "/subscriptions/$(if ($in['key_vault_subscription_id']) { $in['key_vault_subscription_id'] } else { $SubscriptionId })/resourceGroups/$($in.key_vault_resource_group)/providers/Microsoft.KeyVault/vaults/$($in.key_vault_name)/secrets/$($in.admin_secret_name)"
                 Execute               = $Execute
             }
             if ($Execute) { $wait.Confirm = $false }

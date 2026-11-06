@@ -37,7 +37,7 @@ param(
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$ResourceGroupName,
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string[]]$NodeName,
     [string]$MapPath,
-    [string]$ApiVersion = '2025-12-01-preview',
+    [string]$ApiVersion = '2026-10-01',
     [switch]$AllowNotReady,
     [switch]$Execute
 )

@@ -1,0 +1,72 @@
+# Azure DevOps: zero-touch provisioning of Azure Local machines.
+# Plan, then a manual approval, then Execute. See docs/automation-pipelines.md.
+#
+# Before you use it:
+# - A self-hosted Windows agent on the management network, running as a service under a local administrator account,
+#   with the prerequisites in docs/operator-guide.md. Give it the user capability "ztp" so every job lands on it.
+# - The agent host has a managed identity (Azure VM or Azure Arc-enabled server) with the roles in
+#   docs/automation-pipelines.md. No secret is stored in the pipeline: the environment file references Key Vault.
+# - An environment named azurelocal-ztp-execute with an Approvals check, and an Exclusive lock check so that
+#   only one run per environment goes at a time.
+# - Don't set "workspace: clean: all": the run keeps its state in _media next to the checkout.
+
+trigger: none
+pr: none
+
+parameters:
+  - name: infrastructureFile
+    displayName: Environment file path on the agent
+    type: string
+    default: 'D:\ztp\environments\example\infrastructure.yml'
+  - name: nodes
+    displayName: Nodes, comma-separated, or all
+    type: string
+    default: all
+  - name: from
+    displayName: Run this stage and every later one (none = continue where the last run stopped)
+    type: string
+    default: none
+    values: [none, Resolve, Media, Boot, Bootstrap, Vouchers, Azure, Ready, Handoff, Prepare]
+
+pool:
+  name: ztp-management
+  demands:
+    - ztp
+
+variables:
+  INFRASTRUCTURE_FILE: ${{ parameters.infrastructureFile }}
+  ZTP_NODES: ${{ parameters.nodes }}
+  ZTP_FROM: ${{ parameters.from }}
+
+stages:
+  - stage: Plan
+    jobs:
+      - job: plan
+        displayName: Plan (changes nothing)
+        timeoutInMinutes: 30
+        steps:
+          - checkout: self
+          - pwsh: |
+              $p = @{ InfrastructureFile = $env:INFRASTRUCTURE_FILE; UseManagedIdentity = $true }
+              if ($env:ZTP_NODES -ne 'all') { $p.Node = @($env:ZTP_NODES -split ',' | ForEach-Object Trim | Where-Object { $_ }) }
+              ./scripts/simplified-provisioning/Invoke-ZtpEnvironment.ps1 @p
+            displayName: Invoke-ZtpEnvironment.ps1 (plan)
+
+  - stage: Execute
+    dependsOn: Plan
+    jobs:
+      - deployment: execute
+        displayName: Execute (reinstalls the nodes)
+        environment: azurelocal-ztp-execute
+        timeoutInMinutes: 480
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - pwsh: |
+                    $p = @{ InfrastructureFile = $env:INFRASTRUCTURE_FILE; UseManagedIdentity = $true; Execute = $true }
+                    if ($env:ZTP_NODES -ne 'all') { $p.Node = @($env:ZTP_NODES -split ',' | ForEach-Object Trim | Where-Object { $_ }) }
+                    if ($env:ZTP_FROM -ne 'none') { $p.From = $env:ZTP_FROM }
+                    ./scripts/simplified-provisioning/Invoke-ZtpEnvironment.ps1 @p
+                  displayName: Invoke-ZtpEnvironment.ps1 -Execute

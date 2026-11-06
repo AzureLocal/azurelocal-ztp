@@ -41,6 +41,7 @@ Write the config and start Sonar. Without it the config and the command are prin
 #>
 [CmdletBinding()]
 param(
+    [ValidateSet('ActiveDirectory', 'LocalIdentity')][string]$IdentityModel = 'ActiveDirectory',
     [Parameter(Mandatory)][string]$SonarPath,
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F-]{36}$')][string]$SubscriptionId,
     [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$ResourceGroupName,
@@ -81,7 +82,7 @@ $config = [ordered]@{
     resourceGroup     = $ResourceGroupName
     clusterName       = $ClusterName
     provisioningRoute = 'simplified'
-    identityModel     = 'LocalIdentity'
+    identityModel     = $IdentityModel
     pollSeconds       = 20
     nodes             = $nodes
     ztpEvents         = [ordered]@{ path = [System.IO.Path]::GetFullPath($EventLogPath) }

@@ -136,8 +136,11 @@ Describe 'Get-ZtpSbe.ps1' {
         $m = Get-Content (Join-Path $row.StagingFolder 'sbe-manifest.json') -Raw | ConvertFrom-Json
         $m.version | Should -Be '5.0.2606.1616'; $m.connectorRequired | Should -BeTrue; $m.usedAt | Should -Match 'never on the maintenance media'
         Test-Path (Join-Path $row.StagingFolder 'SBE_Discovery_Dell.xml') | Should -BeTrue
-        $bad = Join-Path $TestDrive 'SBE_wrong.zip'; Set-Content $bad 'not the package'
+        New-Item -ItemType Directory (Join-Path $TestDrive 'bad') | Out-Null
+        $bad = Join-Path $TestDrive 'bad\SBE_Dell_16G-45n0c-Intel_5.0.2606.1616.zip'; Set-Content $bad 'not the package'
         { & $global:ztpS_run @{ Model = 'AX760'; SolutionVersion = '12.2609.1003.7'; CacheDirectory = $cache; PackagePath = $bad; Execute = $true } } | Should -Throw '*the OEM published*'
+        $unknown = Join-Path $TestDrive 'SBE_wrong.zip'; Set-Content $unknown 'not the package'
+        { & $global:ztpS_run @{ Model = 'AX760'; SolutionVersion = '12.2609.1003.7'; CacheDirectory = $cache; PackagePath = $unknown; Execute = $true } } | Should -Throw "*SBE_wrong.zip isn't in the manifest*"
     }
     It 'accepts a package whose SHA256 equals the published one and copies it into the staging folder' {
         $bytes = [System.Text.Encoding]::ASCII.GetBytes('synthetic sbe payload')

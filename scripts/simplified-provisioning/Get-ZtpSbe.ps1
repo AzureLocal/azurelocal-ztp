@@ -80,6 +80,12 @@ else {
 }
 $updates = @(Read-ZtpSbeManifest -Text $text)
 if ($updates.Count -eq 0) { throw "The manifest $manifestSource lists no SBE." }
+# A supplied package pins the SBE: select the manifest entry for that file, not the newest one.
+if ($PackagePath) {
+    $leaf = Split-Path -Leaf $PackagePath
+    $updates = @($updates | Where-Object { $_.PackageFileName -eq $leaf })
+    if ($updates.Count -eq 0) { throw "$leaf isn't in the manifest $manifestSource." }
+}
 
 $families = if ($Model -or $Family) { @('') } else { @($updates | ForEach-Object Family | Select-Object -Unique) }
 $rows = foreach ($f in $families) {

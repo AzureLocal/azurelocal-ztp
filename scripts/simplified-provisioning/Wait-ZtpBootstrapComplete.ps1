@@ -57,6 +57,7 @@ Run the watch. Without it only the plan is printed.
 #>
 [CmdletBinding()]
 param(
+    [switch]$RfsWriteAttribute,
     [Parameter(Mandatory)][ValidateCount(1, 64)][string[]]$NodeName,
     [object[]]$Nodes,
     [string]$NodesFile,
@@ -144,7 +145,7 @@ try {
                     $reading = Get-ZtpBmcReading -Session $row.Session -ImageFileName (Get-ZtpNodeImageName -NodeName $row.Node -Prefix $ImageNamePrefix) -Oem $oemConfig -SinceUtc $start
                     $signals = Merge-ZtpBmcTracking -Tracking $row.Tracking -Reading $reading
                     $detail += "BMC power $($reading.PowerState), override $($reading.OverrideEnabled)/$($reading.OverrideTarget), media inserted $($reading.MediaInserted)"
-                    if ($reading.MediaInserted -and $reading.WriteProtected -eq $true) {
+                    if ($reading.MediaInserted -and $reading.WriteProtected -eq $true -and -not $RfsWriteAttribute) {
                         $reject = @{ Evidence = 'the image is attached write-protected, so the voucher cannot be written back'; NextAction = 'Re-mount read-write (Mount-ZtpVirtualUsb.ps1 -RfsWriteAttribute) or use the Configurator App fallback (-VoucherFolder).' }
                     }
                     if (-not $reading.MediaInserted) {
