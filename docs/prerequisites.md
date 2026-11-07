@@ -198,6 +198,8 @@ How the management port gets its address is one of three modes. Set it with the 
 
 The Network stage needs no port to the nodes: it reads Azure's per-NIC report. ZTP uses no WinRM.
 
+**Scan only an isolated provisioning network.** The Device stage signs in as `edgeuser` with the maintenance environment's default password (the one Learn documents, `Password1`, or the one you built into the image) over TLS with the certificate check skipped, to every host that answers on TCP 20001 in the scan range. The maintenance environment can't be certificate-pinned, so a device that imitates the service on that network could receive the password. The password is a documented default and not a secret, but keep the scan to an isolated provisioning network, keep `provisioning_dhcp_range` to the DHCP pool, and prefer `maintenance_address` where you know it. The scan needs dotted-quad IPv4 addresses and a contiguous subnet mask; a /31 or /32 management subnet isn't supported for it.
+
 ## Hardware
 
 | Item | Detail | Who |

@@ -230,6 +230,21 @@ function Test-ZtpEnvironment {
             }
         }
     }
+    # Static node addresses: unique, and not inside the provisioning DHCP pool (the pool would lease them to another device).
+    $scanLow = $null; $scanHigh = $null
+    if ($scan -is [System.Collections.IDictionary] -and (& $isIp ([string]$scan['start'])) -and (& $isIp ([string]$scan['end']))) { $scanLow = ConvertTo-ZtpIpNumber $scan['start']; $scanHigh = ConvertTo-ZtpIpNumber $scan['end'] }
+    $seenIp = @{}
+    $nodeIndex = 0
+    foreach ($n in $nodeList) {
+        if ((Get-ZtpManagementAssignment -Environment $Environment -Node $n) -eq 'static' -and (& $isIp ([string]$n['ip_address']))) {
+            $ip = [string]$n['ip_address']
+            if ($seenIp.ContainsKey($ip)) { $problems.Add("cluster_nodes[$nodeIndex] ($($n['name'])).ip_address $ip is also the address of $($seenIp[$ip]); every node needs its own.") } else { $seenIp[$ip] = "cluster_nodes[$nodeIndex] ($($n['name']))" }
+            if ($null -ne $scanLow -and (ConvertTo-ZtpIpNumber $ip) -ge $scanLow -and (ConvertTo-ZtpIpNumber $ip) -le $scanHigh) {
+                $problems.Add("cluster_nodes[$nodeIndex] ($($n['name'])).ip_address $ip is inside network_intents.management.provisioning_dhcp_range $($scan['start'])-$($scan['end']), where it could be leased to another device. Use an address outside the pool.")
+            }
+        }
+        $nodeIndex++
+    }
     & $check $Environment 'hardware.vendor' 'hardware.vendor' 'text'
     & $check $Environment 'ztp.subscription_id' 'ztp.subscription_id' 'guid'
     & $check $Environment 'ztp.resource_group' 'ztp.resource_group' 'text'

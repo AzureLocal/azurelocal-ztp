@@ -45,6 +45,7 @@ BeforeAll {
                     }
                     $global:devT_pending = $null
                     foreach ($down in @($global:devT_downAfterApply)) { $global:devT_up = @($global:devT_up | Where-Object { $_ -ne $down }) }
+                    foreach ($swap in @($global:devT_swapAfterApply.Keys)) { $global:devT_other[$swap] = $global:devT_swapAfterApply[$swap] }
                 }
                 return [pscustomobject]@{ Status = $status }
             }
@@ -102,6 +103,7 @@ Describe 'Set-ZtpDeviceConfiguration.ps1' {
         $global:devT_statusIndex = 0
         $global:devT_pending = $null
         $global:devT_other = @{}
+        $global:devT_swapAfterApply = @{}
         $global:devT_sweeps = 0
         $global:devT_appearAt = 1
         $global:devT_probes = [System.Collections.Generic.List[object]]::new()
@@ -166,17 +168,81 @@ Describe 'Set-ZtpDeviceConfiguration.ps1' {
         (& $script:eventsOf | Select-Object -Last 1).state | Should -Be 'DeviceAddressSet'
     }
 
-    It 'puts another adapter that holds the address statically on DHCP in the same request' {
+    It 'stops the node, naming the port, MAC and address, when another adapter holds the target address; sends nothing' {
         $global:devT_adapters[2] = New-DevTAdapter -Name 'ens3f1np1' -Mac '00005e0053cc' -Dhcp $false -Ip '192.0.2.11' -Mask '255.255.255.0' -Gateway '192.0.2.1' -Index 2
-        $row = & $script:run (& $script:writeInputs (& $script:static)) @{ Execute = $true; Confirm = $false }
-        $entries = @(((& $script:posts)[0].Body | ConvertFrom-Json).Network.NetworkAdapters)
-        $entries.Count | Should -Be 2
-        $entries[1].MacAddress | Should -Be '00005e0053cc'
-        $entries[1].EnableDhcp | Should -BeTrue
-        @($row.Released) | Should -Be @('ens3f1np1')
-        $global:devT_adapters[2].IpAddress | Should -Be ''
+        { & $script:run (& $script:writeInputs (& $script:static)) @{ Execute = $true; Confirm = $false } } | Should -Throw '*node-01: the adapter ens3f1np1 (00:00:5e:00:53:cc)*already holds the target static address 192.0.2.11*'
+        & $script:posts | Should -BeNullOrEmpty
+        (& $script:eventsOf | Where-Object state -EQ 'DeviceConfigurationFailed').level | Should -Be 'Error'
+        $global:devT_adapters[2].IpAddress | Should -Be '192.0.2.11' -Because 'nothing was edited'
     }
 
+    It 'ignores a response without the management MAC on the old address after the change (its lease went to another device)' {
+        $global:devT_adapters[0].IpAddress = '192.0.2.111'
+        $global:devT_status = @('Succeeded', 'Succeeded', 'Succeeded')
+        $stranger = @(New-DevTAdapter -Name 'eth0' -Mac '00005e0053ee' -Dhcp $true -Ip '192.0.2.111' -Mask '255.255.255.0' -Gateway '192.0.2.1')
+        $global:devT_swapAfterApply = @{ '192.0.2.111' = $stranger }
+        $row = & $script:run (& $script:writeInputs (& $script:static)) @{ Execute = $true; Confirm = $false }
+        $row.Status | Should -Be 'Changed'
+        $statusCalls = @($global:devT_calls | Where-Object { $_.Uri -like '*GetArcBootstrapDeviceConfigurationStatus' })
+        $statusCalls.Count | Should -BeGreaterOrEqual 2
+        $statusCalls[0].Uri | Should -BeLike 'https://192.0.2.111:*'
+        @($statusCalls | Select-Object -Skip 1 | ForEach-Object Uri) | Should -Not -Contain 'https://192.0.2.111:20001/BootstrapOobeService/GetArcBootstrapDeviceConfigurationStatus' -Because 'the stranger on the old address is never read as this node'
+    }
+
+    It 'times out rather than counting a read-back from another device as this node''s' {
+        $global:devT_up = @('192.0.2.111')
+        $global:devT_status = @('Succeeded')
+        $global:devT_swapAfterApply = @{ '192.0.2.111' = @(New-DevTAdapter -Name 'eth0' -Mac '00005e0053ee' -Dhcp $false -Ip '192.0.2.11' -Mask '255.255.255.0' -Gateway '192.0.2.1' -Dns '192.0.2.53', '192.0.2.54') }
+        $global:devT_adapters[0].IpAddress = '192.0.2.111'
+        { & $script:run (& $script:writeInputs (& $script:static)) @{ Execute = $true; Confirm = $false; TimeoutMinutes = 0 } } | Should -Throw "*didn't report static 192.0.2.11*"
+    }
+
+    It 'fails before any request when two nodes share a static address' {
+        $id = [guid]::NewGuid().ToString('N')
+        $params = Join-Path $TestDrive "params-dup-$id.json"
+        $mk = { param($n) $m = & $script:static; $m.mac_address = "00-00-5E-00-53-0$n"; [ordered]@{ name = "node-0$n"; service_tag = "EXAMPLE$n"; management = $m } }
+        @{ parameters = @{ nodes = @{ value = @((& $mk 1), (& $mk 2)) } } } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $params
+        $nodes = Join-Path $TestDrive "nodes-dup-$id.json"
+        @{ nodes = @(@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11'; maintenance_address = '192.0.2.111' }, @{ name = 'node-02'; service_tag = 'EXAMPLE2'; bmc_address = '198.51.100.12'; maintenance_address = '192.0.2.112' }) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $nodes
+        { & $script:run @{ ParameterFile = $params; NodesFile = $nodes } @{ Execute = $true; Confirm = $false } } | Should -Throw '*nodes node-01, node-02 share the management ip_address 192.0.2.11*'
+        $global:devT_calls.Count | Should -Be 0
+    }
+
+    It 'fails before any request when the target address is inside the node''s scan range (the DHCP pool)' {
+        { & $script:run (& $script:writeInputs (& $script:static) -Maintenance '' -ScanRange '192.0.2.5-192.0.2.50') @{ Execute = $true; Confirm = $false } } | Should -Throw '*node-01: the management ip_address 192.0.2.11 is inside its maintenance_scan_range 192.0.2.5-192.0.2.50*'
+        $global:devT_calls.Count | Should -Be 0
+        $global:devT_sweeps | Should -Be 0
+    }
+
+    It 'rejects scan input that is not dotted-quad IPv4 or a contiguous mask, and says /31 and /32 are unsupported' {
+        $bad = @(
+            @{ Range = 'fe80::1-fe80::2'; Mask = '255.255.255.0'; Expect = "*maintenance_scan_range 'fe80::1-fe80::2' isn't start-end*" }
+            @{ Range = '192.0.2.1-192.0.2.300'; Mask = '255.255.255.0'; Expect = '*a part is above 255*' }
+            @{ Range = '192.0.2.001-192.0.2.20'; Mask = '255.255.255.0'; Expect = "*isn't a dotted-quad IPv4 address*" }
+            @{ Range = ''; Mask = '255.0.255.0'; Expect = "*the subnet mask 255.0.255.0 isn't contiguous*" }
+            @{ Range = ''; Mask = '255.255.255.254'; Expect = '*is a /31 network; the scan doesn''t support /31 or /32*' }
+            @{ Range = ''; Mask = '255.255.255.255'; Expect = '*is a /32 network; the scan doesn''t support /31 or /32*' }
+            @{ Range = ''; Mask = '2001:db8::'; Expect = "*isn't a dotted-quad IPv4 address*" }
+        )
+        foreach ($case in $bad) {
+            $m = & $script:static; $m.subnet_mask = $case.Mask
+            $inputs = & $script:writeInputs $m -Maintenance '' -ScanRange $case.Range
+            { & $script:run $inputs @{ Execute = $true; Confirm = $false } } | Should -Throw $case.Expect
+        }
+        $global:devT_calls.Count | Should -Be 0
+    }
+
+    It 'scans in bounded batches with the real probe: 300 loopback addresses finish without leaking or failing' {
+        $saved = (Get-Item Function:global:Test-ZtpTcpPort).ScriptBlock
+        Remove-Item Function:global:Test-ZtpTcpPort
+        try {
+            $m = & $script:static; $m.ip_address = '192.0.2.200'
+            $inputs = & $script:writeInputs $m -Maintenance '' -ScanRange '127.0.0.1-127.0.1.44'
+            $out = @(& $script:run $inputs @{ Port = 1; ProbeTimeoutMilliseconds = 200 })
+            ($out | Where-Object { $_ -is [string] }) | Should -BeLike 'PLAN: node-01: no maintenance environment*127.0.0.1-127.0.1.44*'
+        }
+        finally { Set-Item Function:global:Test-ZtpTcpPort -Value $saved }
+    }
     It 'changes nothing when the management adapter already reports the static configuration' {
         $global:devT_adapters[0] = New-DevTAdapter -Name 'eno1' -Mac '00005e0053aa' -Dhcp $false -Ip '192.0.2.11' -Mask '255.255.255.0' -Gateway '192.0.2.1' -Dns '192.0.2.53', '192.0.2.54'
         $row = & $script:run (& $script:writeInputs (& $script:static)) @{ Execute = $true; Confirm = $false }
