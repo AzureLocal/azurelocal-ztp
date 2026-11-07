@@ -2,6 +2,10 @@
 
 > Every key that `Invoke-ZtpEnvironment.ps1` and `Initialize-ZtpNode.ps1` read from the environment file, what it's for, and an example.
 
+::: warning Deprecated layout
+This page describes ZTP's own environment-file layout (`cluster_nodes`, `network_intents`, `ztp`, ...). It still works, and it's deprecated: use the master `infrastructure.yml` (schema 5), which every Azure Local tool reads and which lists each machine's ports. Pass it through the same `-InfrastructureFile`; ZTP detects the format. See [Reading the master infrastructure.yml](infrastructure-schema-5.md) for where each key below comes from in schema 5.
+:::
+
 The environment file is YAML. It describes the machines, the management network, and the Azure targets. It holds **no secrets**: each credential is a Key Vault reference. The file can hold other keys for other tools; ZTP ignores keys that aren't listed here.
 
 A complete example with placeholder values is in [`examples/infrastructure.example.yml`](https://github.com/AzureLocal/azurelocal-ztp/blob/main/examples/infrastructure.example.yml).
@@ -28,6 +32,7 @@ A complete example with placeholder values is in [`examples/infrastructure.examp
 | `cluster_nodes[].arc_machine_name` | Prov, optional | 1-54 letters, digits, `-`, `_`, `.` | Name of the node's Arc machine. Default: the node's `name`. Sent as the edge machine's `arcMachineResourceId`. Without it the service names the Arc machine `ROE1-<id>`, and an Arc machine can't be renamed. |
 | `cluster_nodes[].service_tag` | Prov | Text | The machine's serial number. Maps each voucher (`\vouchers\<serial>\`) to its node. |
 | `cluster_nodes[].idrac_ip` | Prov | IPv4 | The BMC address. Redfish target, and the only source allowed to reach the SMB share. |
+| `cluster_nodes[].ip_assignment` | P+P, optional | `static`, `dhcp` or `preconfigured` | This node's management mode, instead of `network_intents.management.ip_assignment`. The schema 5 reader sets it from each node's management port. |
 
 ### Management network, time and the deployment admin
 
@@ -137,7 +142,9 @@ That application ID is what `Invoke-ZtpEnvironment.ps1` uses for the lookup.
 | `ztp.admin_secret.name` | P+P | Secret name | The provisioning administrator password. **Create it before the run**; the environment-file path doesn't create it. Learn asks for at least 12 characters with lowercase, uppercase, a digit and a special character ([provision machines](https://learn.microsoft.com/azure/azure-local/deploy/simplified-machine-provisioning#step-3-provision-machines-from-azure)). |
 | `ztp.admin_secret.username` | P+P | Text | Local administrator that the OS install creates. Prepare signs in as `<node>\<username>`. |
 | `ztp.bmc_secret.vault` | Prov | Vault name | Vault that holds the BMC login. |
-| `ztp.bmc_secret.username_name` | Prov | Secret name | Secret whose value is the BMC user name. |
+| `ztp.bmc_secret.username_name` | Prov | Secret name | Secret whose value is the BMC user name. Not needed with `username`. |
+| `ztp.bmc_secret.username_vault` | Prov, optional | Vault name | Vault of `username_name`, when it isn't `ztp.bmc_secret.vault`. |
+| `ztp.bmc_secret.username` | Prov, optional | Text | The BMC user name itself, instead of a secret. |
 | `ztp.bmc_secret.password_name` | Prov | Secret name | Secret whose value is the BMC password. |
 
 ### Media and share

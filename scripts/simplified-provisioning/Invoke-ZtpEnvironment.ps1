@@ -15,7 +15,9 @@
     firewall rule. The signed-in account needs Owner, or Contributor and Role Based Access Control Administrator, on the
     resource group, and rights to delegate on the vault that holds the administrator secret.
 .PARAMETER InfrastructureFile
-    The environment file.
+    The environment file: a master infrastructure.yml (schema 5, detected by _metadata.schema_version; validated with the
+    toolkit's module when an azurelocal-toolkit clone is next to this repository or $env:AZL_TOOLKIT_ROOT names one), or the
+    older environment-file layout (docs/environment-file.md, deprecated). See docs/infrastructure-schema-5.md.
 .PARAMETER Node
     Nodes to provision. Defaults to every node in the environment file.
 .PARAMETER From
@@ -61,7 +63,7 @@ Import-Module powershell-yaml
 $env:PATH = "$env:PATH;$(Join-Path $HOME '.azure\bin')"
 
 # The environment file must hold every key this script reads, and then pass the optional external validator, before anything runs.
-$env_ = Read-ZtpEnvironmentFile -Path $InfrastructureFile
+$env_ = Read-ZtpInfrastructure -Path $InfrastructureFile -For Provision
 Assert-ZtpEnvironment -Environment $env_ -For Provision -Source $InfrastructureFile
 $validator = if ($ValidatorPath) { $ValidatorPath } else { Join-Path (Split-Path (Resolve-Path -LiteralPath $InfrastructureFile)) 'tools\Validate-Infrastructure.ps1' }
 if (Test-Path -LiteralPath $validator) {
@@ -157,7 +159,7 @@ $bicepNodes = @($nodeList | ForEach-Object {
             service_tag      = [string]$_.service_tag
             arc_machine_name = $(if ($arcName) { $arcName } else { [string]$_.name })
             management       = [ordered]@{
-                ip_assignment = $mgmtMode
+                ip_assignment = (Get-ZtpManagementAssignment -Environment $env_ -Node $_)
                 # The maintenance environment (Linux) reports MACs lower case with colons, as its Arc machine does.
                 mac_address   = ([string]$_.mac_address).Replace('-', ':').ToLowerInvariant()
                 adapter_name  = [string](Get-ZtpEnvValue -Environment $_ -Path 'adapter_name')
@@ -174,6 +176,8 @@ $siteNetwork = Get-ZtpSiteNetwork -Environment $env_
 $provisioningNetwork = [string](Get-ZtpEnvValue -Environment $env_ -Path 'network_intents.management.provisioning_network')
 if (-not $provisioningNetwork) { $provisioningNetwork = 'dhcp' }
 Write-Output "Site network: $($siteNetwork.IpAssignmentType)$(if ($siteNetwork.Range) { " $($siteNetwork.Range), gateway $($siteNetwork.Ipv4.defaultGateway), mask $($siteNetwork.Ipv4.subnetMask), DNS $($siteNetwork.Ipv4.dnsServers -join ', '), VLAN $($siteNetwork.Ipv4.vLanId)" }). Maintenance environment to Azure: $provisioningNetwork."
+$modes = @($bicepNodes | ForEach-Object { $_.management.ip_assignment } | Select-Object -Unique)
+if ($modes.Count -gt 1) { $mgmtMode = 'per node (' + (($bicepNodes | ForEach-Object { "$($_.name) $($_.management.ip_assignment)" }) -join ', ') + ')'; Write-Warning "The management addresses mix $($modes -join ' and '); the site's network setting is Manual over the static ones." }
 Write-Output "Management addresses: $mgmtMode. Arc machine names: $(($bicepNodes | ForEach-Object { "$($_.name) -> $($_.arc_machine_name)" }) -join ', ')."
 $bicepParameters = [ordered]@{
     '$schema'      = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#'
@@ -268,7 +272,9 @@ try {
     }
 
     Set-AzContext -Tenant $tenant -Subscription $vaultSub -Scope Process -WarningAction SilentlyContinue | Out-Null
-    $user = Get-AzKeyVaultSecret -VaultName ([string]$ztp.bmc_secret.vault) -Name ([string]$ztp.bmc_secret.username_name) -AsPlainText
+    # The BMC user name: the name itself (bmc_secret.username), or a secret, in username_vault when it isn't the password's vault.
+    $user = if ($ztp.bmc_secret.Contains('username') -and $ztp.bmc_secret.username) { [string]$ztp.bmc_secret.username }
+    else { Get-AzKeyVaultSecret -VaultName $(if ($ztp.bmc_secret.Contains('username_vault') -and $ztp.bmc_secret.username_vault) { [string]$ztp.bmc_secret.username_vault } else { [string]$ztp.bmc_secret.vault }) -Name ([string]$ztp.bmc_secret.username_name) -AsPlainText }
     $password = Get-AzKeyVaultSecret -VaultName ([string]$ztp.bmc_secret.vault) -Name ([string]$ztp.bmc_secret.password_name)
     $bmc = [pscredential]::new($user, $password.SecretValue)
 

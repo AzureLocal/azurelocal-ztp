@@ -155,6 +155,22 @@ function Test-ZtpEnvironment {
                 & $check $n 'idrac_ip' "$label.idrac_ip" 'ip'
             }
             & $checkBios (Get-ZtpEnvValue -Environment $n -Path 'bios') "$label.bios"
+            $nodeMode = Get-ZtpEnvValue -Environment $n -Path 'ip_assignment'
+            if ($null -ne $nodeMode -and [string]$nodeMode -notin 'static', 'dhcp', 'preconfigured') { $problems.Add("$label.ip_assignment must be static, dhcp or preconfigured, not '$nodeMode'.") }
+            # The node's other ports (the schema 5 reader fills this in): Prepare leaves DHCP on the ones marked dhcp.
+            $ports = Get-ZtpEnvValue -Environment $n -Path 'network_adapters'
+            if ($null -ne $ports) {
+                if ($ports -isnot [System.Collections.IList]) { $problems.Add("$label.network_adapters must be a list.") }
+                else {
+                    $p = 0
+                    foreach ($port in @($ports)) {
+                        if ($port -isnot [System.Collections.IDictionary]) { $problems.Add("$label.network_adapters[$p] must be a mapping."); $p++; continue }
+                        & $check $port 'mac_address' "$label.network_adapters[$p].mac_address" 'mac' -Optional
+                        if ([string]$port['ip_assignment'] -notin 'static', 'dhcp_reservation', 'dhcp', 'preconfigured', 'none') { $problems.Add("$label.network_adapters[$p].ip_assignment must be static, dhcp_reservation, dhcp, preconfigured or none, not '$($port['ip_assignment'])'.") }
+                        $p++
+                    }
+                }
+            }
             $index++
         }
     }
@@ -187,9 +203,9 @@ function Test-ZtpEnvironment {
     }
     $nodeValue = Get-ZtpEnvValue -Environment $Environment -Path 'cluster_nodes'
     $nodeList = @(@($nodeValue) | Where-Object { $_ -is [System.Collections.IDictionary] })
-    if ((Get-ZtpManagementAssignment -Environment $Environment) -eq 'static') {
-        $i = 0
-        foreach ($n in $nodeList) {
+    $i = 0
+    foreach ($n in $nodeList) {
+        if ((Get-ZtpManagementAssignment -Environment $Environment -Node $n) -eq 'static') {
             $ip = [string]$n['ip_address']
             if (& $isIp $ip) {
                 if ($subnetOk -and -not (Test-ZtpAddressInSubnet $ip $subnetText)) { $problems.Add("cluster_nodes[$i] ($($n['name'])).ip_address $ip isn't in network_intents.management.subnet $subnetText.") }
@@ -197,8 +213,8 @@ function Test-ZtpEnvironment {
                     $problems.Add("cluster_nodes[$i] ($($n['name'])).ip_address $ip is outside network_intents.management.site_ip_range $($range['start'])-$($range['end']); with ip_assignment static every node address is in the site range.")
                 }
             }
-            $i++
         }
+        $i++
     }
     $provisioning = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.provisioning_network'
     if ($null -ne $provisioning -and [string]$provisioning -notin 'dhcp', 'static') { $problems.Add("network_intents.management.provisioning_network must be dhcp or static, not '$provisioning'.") }
@@ -237,7 +253,9 @@ function Test-ZtpEnvironment {
         if (-not $shareHost -and -not $shareAdapter) { $problems.Add('ztp.share_host or ztp.share_host_adapter is required: the address the BMCs reach this server on.') }
         elseif ($shareHost) { & $check $Environment 'ztp.share_host' 'ztp.share_host' 'ip' }
         & $check $Environment 'ztp.admin_secret.resource_group' 'ztp.admin_secret.resource_group' 'text'
-        foreach ($k in 'vault', 'username_name', 'password_name') { & $check $Environment "ztp.bmc_secret.$k" "ztp.bmc_secret.$k" 'text' }
+        foreach ($k in 'vault', 'password_name') { & $check $Environment "ztp.bmc_secret.$k" "ztp.bmc_secret.$k" 'text' }
+        # The BMC user name: a secret in the vault (username_name, optionally in username_vault), or the name itself (username).
+        if (-not (Get-ZtpEnvValue -Environment $Environment -Path 'ztp.bmc_secret.username')) { & $check $Environment 'ztp.bmc_secret.username_name' 'ztp.bmc_secret.username_name' 'text' }
         & $check $Environment 'ztp.azl_rp_object_id' 'ztp.azl_rp_object_id' 'guid' -Optional
         $tags = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.tags'
         if ($null -ne $tags -and $tags -isnot [System.Collections.IDictionary]) { $problems.Add('ztp.tags must be a mapping of tag names to values.') }
@@ -259,10 +277,18 @@ function Assert-ZtpEnvironment {
         [string]$Source = 'The environment file'
     )
     $problems = @(Test-ZtpEnvironment -Environment $Environment -For $For)
+    $warnings = @(Get-ZtpEnvironmentWarning -Environment $Environment)
+    # A schema 5 file (Read-ZtpInfrastructure): its validator's findings first, then the key check in schema 5 paths.
+    $origin = $Environment['_source']
+    if ($origin -is [System.Collections.IDictionary] -and $origin['format'] -eq 'schema5') {
+        $problems = @(@($origin['problems']) + @($problems | ForEach-Object { ConvertTo-ZtpSchema5Message -Message $_ }) | Where-Object { $_ } | Select-Object -Unique)
+        $warnings = @(@($origin['warnings']) + @($warnings | ForEach-Object { ConvertTo-ZtpSchema5Message -Message $_ }) | Where-Object { $_ })
+        $Source = "$Source (schema $($origin['schema_version']), checked by $($origin['validator']))"
+    }
     if ($problems.Count) {
         throw "$Source is invalid ($($problems.Count) problem$(if ($problems.Count -ne 1) { 's' })):`n  - $($problems -join "`n  - ")"
     }
-    foreach ($w in @(Get-ZtpEnvironmentWarning -Environment $Environment)) { Write-Warning $w }
+    foreach ($w in $warnings) { Write-Warning $w }
 }
 
 function Get-ZtpEnvironmentWarning {
@@ -273,6 +299,9 @@ function Get-ZtpEnvironmentWarning {
     [CmdletBinding()]
     [OutputType([string])]
     param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment)
+    # The toolkit warns about a schema 5 file itself (AZL-024), for the same reason.
+    $origin = $Environment['_source']
+    if ($origin -is [System.Collections.IDictionary] -and $origin['format'] -eq 'schema5' -and @($origin['warnings'] | Where-Object { $_ -like 'AZL-024 *' }).Count) { return }
     if ([string](Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.provisioning_network') -eq 'static') {
         'network_intents.management.provisioning_network is static: the maintenance environment needs a static address to reach Azure before the machine is claimed. Learn documents only the Configurator app for that, and whether the USB image can carry a preset address is an open research item, so ZTP sets nothing for it. Without DHCP on a provisioning port, the machine never reaches Azure and no voucher is written.'
     }
@@ -313,15 +342,16 @@ function Get-ZtpSiteNetwork {
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment)
-    if ((Get-ZtpManagementAssignment -Environment $Environment) -ne 'static') {
+    $nodeValue = Get-ZtpEnvValue -Environment $Environment -Path 'cluster_nodes'
+    $static = @(@($nodeValue) | Where-Object { $_ -is [System.Collections.IDictionary] -and (Get-ZtpManagementAssignment -Environment $Environment -Node $_) -eq 'static' })
+    if ($static.Count -eq 0) {
         return [pscustomobject]@{ IpAssignmentType = 'Automatic'; Ipv4 = [ordered]@{}; Range = '' }
     }
     $mgmt = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management'
     $range = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.site_ip_range'
     if ($range -is [System.Collections.IDictionary] -and $range['start'] -and $range['end']) { $start = [string]$range['start']; $end = [string]$range['end'] }
     else {
-        $nodeValue = Get-ZtpEnvValue -Environment $Environment -Path 'cluster_nodes'
-        $addresses = @(@($nodeValue) | ForEach-Object { [string]$_['ip_address'] } | Sort-Object { ConvertTo-ZtpIpNumber $_ })
+        $addresses = @($static | ForEach-Object { [string]$_['ip_address'] } | Sort-Object { ConvertTo-ZtpIpNumber $_ })
         $start = $addresses[0]; $end = $addresses[-1]
     }
     $vlan = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.vlan_id'
@@ -340,10 +370,12 @@ function Get-ZtpManagementAssignment {
     .SYNOPSIS
     How each node's management address is set: static (the provisioning service sets ip_address on the port with
     mac_address, and Prepare checks it), dhcp (stays DHCP; reserve ip_address for the MAC) or preconfigured (ZTP doesn't
-    change the port). Default static.
+    change the port). Default static. With -Node, the node's own cluster_nodes[].ip_assignment wins (the schema 5 reader sets
+    it from each node's management port).
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment)
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment, [System.Collections.IDictionary]$Node)
+    if ($Node) { $own = [string](Get-ZtpEnvValue -Environment $Node -Path 'ip_assignment'); if ($own) { return $own.ToLowerInvariant() } }
     $mode = [string](Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.ip_assignment')
     if ($mode) { return $mode.ToLowerInvariant() }
     return 'static'
@@ -492,4 +524,315 @@ function Test-ZtpSbeHash {
     $actual = (Get-FileHash -LiteralPath $Bundle.Zip.FullName -Algorithm SHA256).Hash
     if ($actual -ne $expected) { throw "$($Bundle.Zip.Name) has SHA-256 $actual; $source says $expected." }
     return [pscustomobject]@{ Name = $Bundle.Name; Hash = $actual; Source = $source }
+}
+
+# ======================================================================================================================
+# Schema 5: the master infrastructure.yml (azurelocal-toolkit config/infrastructure). Read-ZtpInfrastructure detects the
+# format, validates a schema 5 file (with the toolkit's AzlInfrastructure module when the toolkit sits next to this
+# repository, otherwise with the built-in checks here) and maps it onto the keys above, so every script reads one shape.
+# The mapping is in docs/infrastructure-schema-5.md.
+# ======================================================================================================================
+
+# A schema 5 port's ip_assignment as ZTP's management mode. ZTP's dhcp leaves the port on DHCP and expects ip_address.
+$script:ZtpPortMode = @{ static = 'static'; dhcp_reservation = 'dhcp'; dhcp = 'dhcp'; preconfigured = 'preconfigured' }
+
+function Get-ZtpEnvironmentFormat {
+    <#
+    .SYNOPSIS
+    schema5 for a master infrastructure.yml (it has _metadata.schema_version, or schema_version at the top), else legacy
+    (the environment-file layout in docs/environment-file.md).
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Data)
+    if ((Get-ZtpEnvValue -Environment $Data -Path '_metadata.schema_version') -or $Data.Contains('schema_version')) { return 'schema5' }
+    return 'legacy'
+}
+
+function Find-ZtpToolkitModule {
+    <#
+    .SYNOPSIS
+    The toolkit's AzlInfrastructure.psm1: under $env:AZL_TOOLKIT_ROOT when that is set (only there), else in an
+    azurelocal-toolkit clone next to this repository. $null when there is none.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+    $relative = 'scripts\common\infrastructure\AzlInfrastructure.psm1'
+    $root = if ($env:AZL_TOOLKIT_ROOT) { $env:AZL_TOOLKIT_ROOT } else { Join-Path $PSScriptRoot '..\..\..\azurelocal-toolkit' }
+    $candidate = [IO.Path]::GetFullPath((Join-Path $root $relative))
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    return $null
+}
+
+function Get-ZtpV5ManagementPort {
+    # The port that owns a schema 5 node's management address (nodes[].network_adapters, else nodes[].management), with the
+    # VLAN the host tags. Count is how many ports claim it, so a caller can tell none from several.
+    param([System.Collections.IDictionary]$Data, [System.Collections.IDictionary]$Node)
+    $siteVlan = Get-ZtpEnvValue -Environment $Data -Path 'networking.management.vlan_id'
+    $siteVlan = if ($null -ne $siteVlan -and "$siteVlan" -ne '') { [int]$siteVlan } else { 0 }
+    if ($Node.Contains('network_adapters')) {
+        $owners = @(@($Node['network_adapters']) | Where-Object { $_ -is [System.Collections.IDictionary] -and 'management' -in @($_['roles']) -and [string]$_['ip_assignment'] -in $script:ZtpPortMode.Keys })
+        if ($owners.Count -ne 1) { return [pscustomobject]@{ Count = $owners.Count } }
+        $o = $owners[0]
+        $vlan = if ([string]$o['vlan_mode'] -eq 'access') { 0 } elseif ($null -ne $o['vlan_id']) { [int]$o['vlan_id'] } else { $siteVlan }
+        return [pscustomobject]@{ Count = 1; Name = [string]$o['name']; Mac = [string]$o['mac_address']; Ip = [string]$o['ip_address']; Mode = $script:ZtpPortMode[[string]$o['ip_assignment']]; Vlan = $vlan; Listed = $true }
+    }
+    $m = $Node['management']
+    if ($m -isnot [System.Collections.IDictionary]) { return [pscustomobject]@{ Count = 0 } }
+    $site = [string](Get-ZtpEnvValue -Environment $Data -Path 'networking.management.ip_assignment')
+    $mode = if ($site) { $site.ToLowerInvariant() } else { 'static' }
+    return [pscustomobject]@{ Count = 1; Name = [string]$m['adapter_name']; Mac = [string]$m['mac_address']; Ip = [string]$m['ip_address']; Mode = $mode; Vlan = $siteVlan; Listed = $false }
+}
+
+function Split-ZtpKeyVaultReference([object]$Reference) {
+    if ([string]$Reference -match '^keyvault://([^/]+)/(.+)$') { return [pscustomobject]@{ Vault = $Matches[1]; Secret = $Matches[2] } }
+    return $null
+}
+
+function Test-ZtpInfrastructureV5 {
+    <#
+    .SYNOPSIS
+    The problems in a schema 5 file that ZTP's own key check (run on the mapped keys) can't name: the format, the scenario,
+    each node's management port, and the vaults and BMC login ZTP can use. Messages use schema 5 key paths.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Data, [ValidateSet('Provision', 'Prepare')][string]$For = 'Provision')
+    $version = [string](Get-ZtpEnvValue -Environment $Data -Path '_metadata.schema_version')
+    if (-not $version) { $version = [string]$Data['schema_version'] }
+    if ($version -notmatch '^5\.\d+\.\d+$') { "_metadata.schema_version is '$version'; ZTP reads schema 5.x." }
+    if ($For -eq 'Provision' -and [string](Get-ZtpEnvValue -Environment $Data -Path 'scenario.os_install') -ne 'simplified') {
+        "scenario.os_install is '$(Get-ZtpEnvValue -Environment $Data -Path 'scenario.os_install')'; ZTP provisions with simplified machine provisioning (os_install: simplified)."
+    }
+    $nodeValue = Get-ZtpEnvValue -Environment $Data -Path 'nodes'
+    $i = 0
+    foreach ($n in @($nodeValue)) {
+        if ($n -is [System.Collections.IDictionary]) {
+            $port = Get-ZtpV5ManagementPort -Data $Data -Node $n
+            if ($port.Count -ne 1) { "nodes[$i] ($($n['name'])): $($port.Count) ports own the management address; exactly one port with role management has an ip_assignment other than none." }
+            if ($n['bmc'] -is [System.Collections.IDictionary] -and $n['bmc'].Contains('password')) {
+                $hw = Get-ZtpEnvValue -Environment $Data -Path 'hardware.bmc'
+                if ($hw -isnot [System.Collections.IDictionary] -or [string]$hw['username'] -ne [string]$n['bmc']['username'] -or [string]$hw['password'] -ne [string]$n['bmc']['password']) {
+                    "nodes[$i] ($($n['name'])).bmc has its own login; ZTP uses one BMC login for every node (hardware.bmc)."
+                }
+            }
+        }
+        $i++
+    }
+    $vaults = @{}
+    $vaultList = Get-ZtpEnvValue -Environment $Data -Path 'key_vaults'
+    foreach ($kv in @($vaultList)) { if ($kv -is [System.Collections.IDictionary] -and $kv['name']) { $vaults[[string]$kv['name']] = $kv } }
+    $admin = Split-ZtpKeyVaultReference (Get-ZtpEnvValue -Environment $Data -Path 'provisioning.simplified.admin.password')
+    if ($admin -and -not $vaults.ContainsKey($admin.Vault)) { "provisioning.simplified.admin.password names vault '$($admin.Vault)', which isn't in key_vaults (ZTP needs its subscription_id and resource_group)." }
+    elseif ($admin) {
+        $sub = [string]$vaults[$admin.Vault]['subscription_id']
+        foreach ($ref in @(
+                @{ Path = 'identity.local_admin.password'; Value = (Get-ZtpEnvValue -Environment $Data -Path 'identity.local_admin.password') }
+                @{ Path = 'hardware.bmc.password'; Value = (Get-ZtpEnvValue -Environment $Data -Path 'hardware.bmc.password') }
+                @{ Path = 'hardware.bmc.username'; Value = (Get-ZtpEnvValue -Environment $Data -Path 'hardware.bmc.username') })) {
+            $r = Split-ZtpKeyVaultReference $ref.Value
+            if (-not $r) { continue }
+            if (-not $vaults.ContainsKey($r.Vault)) { "$($ref.Path) names vault '$($r.Vault)', which isn't in key_vaults." }
+            elseif ([string]$vaults[$r.Vault]['subscription_id'] -ne $sub) { "$($ref.Path) is in vault '$($r.Vault)', in another subscription than the provisioning admin's vault '$($admin.Vault)'. ZTP reads its secrets in one subscription." }
+        }
+    }
+    if ($For -eq 'Provision' -and -not (Get-ZtpEnvValue -Environment $Data -Path 'hardware.bmc.password')) { 'hardware.bmc (username and password) is required: ZTP mounts the image and boots each node through its BMC.' }
+}
+
+function ConvertFrom-ZtpInfrastructureV5 {
+    <#
+    .SYNOPSIS
+    Maps a schema 5 infrastructure.yml onto the environment-file keys the ZTP scripts read. Missing values stay missing,
+    so the key check names them (in schema 5 paths, through Assert-ZtpEnvironment).
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Collections.Specialized.OrderedDictionary])]
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Data)
+    $v = { param($p) Get-ZtpEnvValue -Environment $Data -Path $p }
+    $put = { param([System.Collections.IDictionary]$Into, [string]$Key, [object]$Value) if ($null -ne $Value -and "$Value" -ne '') { $Into[$Key] = $Value } }
+    $simplified = & $v 'provisioning.simplified'
+    if ($simplified -isnot [System.Collections.IDictionary]) { $simplified = [ordered]@{} }
+
+    $nodes = [System.Collections.Generic.List[object]]::new()
+    $modes = [System.Collections.Generic.List[string]]::new()
+    $vlans = [System.Collections.Generic.List[int]]::new()
+    $nodeValue = & $v 'nodes'
+    foreach ($n in @($nodeValue)) {
+        if ($n -isnot [System.Collections.IDictionary]) { $nodes.Add($n); continue }
+        $port = Get-ZtpV5ManagementPort -Data $Data -Node $n
+        $node = [ordered]@{}
+        & $put $node 'name' $n['name']
+        if ($port.Count -eq 1) {
+            & $put $node 'ip_address' $port.Ip
+            & $put $node 'mac_address' $port.Mac
+            & $put $node 'adapter_name' $port.Name
+            $node['ip_assignment'] = $port.Mode
+            $modes.Add($port.Mode); $vlans.Add([int]$port.Vlan)
+        }
+        $arc = if ($n['arc_machine_name']) { $n['arc_machine_name'] } else { $n['arc_resource_name'] }
+        & $put $node 'arc_machine_name' $arc
+        & $put $node 'service_tag' $n['serial_number']
+        if ($n['bmc'] -is [System.Collections.IDictionary]) { & $put $node 'idrac_ip' $n['bmc']['ip_address'] }
+        if ($n['rack_position']) { $node['rack_position'] = $n['rack_position'] }
+        if ($n['bios'] -is [System.Collections.IDictionary]) { $node['bios'] = $n['bios'] }
+        if ($n.Contains('network_adapters')) {
+            $node['network_adapters'] = @(@($n['network_adapters']) | Where-Object { $_ -is [System.Collections.IDictionary] } | ForEach-Object {
+                    $a = [ordered]@{ name = [string]$_['name']; roles = @($_['roles']); ip_assignment = [string]$_['ip_assignment'] }
+                    if ($_['mac_address']) { $a['mac_address'] = [string]$_['mac_address'] }
+                    $a
+                })
+        }
+        $nodes.Add($node)
+    }
+
+    $mgmt = [ordered]@{}
+    foreach ($k in 'subnet', 'gateway', 'dns_servers', 'site_ip_range', 'provisioning_network') { & $put $mgmt $k (& $v "networking.management.$k") }
+    $distinct = @($modes | Select-Object -Unique)
+    $mgmt['ip_assignment'] = if ($distinct.Count -eq 1) { $distinct[0] } else { 'static' }
+    $siteVlan = & $v 'networking.management.vlan_id'
+    $mgmt['vlan_id'] = if ($null -ne $siteVlan -and "$siteVlan" -ne '') { [int]$siteVlan } elseif ($vlans.Count) { $vlans[0] } else { 0 }
+
+    $env_ = [ordered]@{}
+    $env_['azure_identity'] = [ordered]@{}; & $put $env_.azure_identity 'azure_tenant_id' (& $v 'azure.tenant_id')
+    $env_['azure_resources'] = [ordered]@{}; & $put $env_.azure_resources 'location' (& $v 'azure.location')
+    $env_['site'] = [ordered]@{}; & $put $env_.site 'name' (& $v 'site.name'); & $put $env_.site 'code' (& $v 'site.code')
+    $env_['hardware'] = [ordered]@{}
+    foreach ($k in 'vendor', 'model') { & $put $env_.hardware $k (& $v "hardware.$k") }
+    if ((& $v 'hardware.bios') -is [System.Collections.IDictionary]) { $env_.hardware['bios'] = & $v 'hardware.bios' }
+    $env_['credentials'] = [ordered]@{}
+    & $put $env_.credentials 'local_admin_username' (& $v 'identity.local_admin.username')
+    & $put $env_.credentials 'local_admin_password_secret' (& $v 'identity.local_admin.password')
+    $env_['network_intents'] = [ordered]@{ management = $mgmt }
+    $env_['onprem'] = [ordered]@{}; & $put $env_.onprem 'ntp_servers' (& $v 'networking.ntp_servers')
+    $env_['cluster_nodes'] = $nodes.ToArray()
+
+    $ztp = [ordered]@{}
+    & $put $ztp 'subscription_id' $(if ($simplified['subscription_id']) { $simplified['subscription_id'] } else { & $v 'azure.subscription_id' })
+    & $put $ztp 'resource_group' $(if ($simplified['resource_group']) { $simplified['resource_group'] } else { & $v 'azure.resource_group' })
+    & $put $ztp 'site_name' $simplified['site_name']
+    & $put $ztp 'time_zone' (& $v 'site.time_zone')
+    & $put $ztp 'provisioning_iso' $simplified['maintenance_iso']
+    & $put $ztp 'os_version' (& $v 'provisioning.os_version')
+    $share = $simplified['media_share']
+    if ($share -is [System.Collections.IDictionary]) { & $put $ztp 'share_name' $share['name']; & $put $ztp 'share_host' $share['host']; & $put $ztp 'share_host_adapter' $share['host_adapter'] }
+    & $put $ztp 'media_path' $simplified['media_path']
+    & $put $ztp 'evidence_path' $simplified['evidence_path']
+    & $put $ztp 'azl_rp_object_id' (& $v 'azure.hci_resource_provider_object_id')
+    if ((& $v 'tags') -is [System.Collections.IDictionary]) { $ztp['tags'] = & $v 'tags' }
+    $vaults = @{}
+    $vaultList = & $v 'key_vaults'
+    foreach ($kv in @($vaultList)) { if ($kv -is [System.Collections.IDictionary] -and $kv['name']) { $vaults[[string]$kv['name']] = $kv } }
+    $adminSecret = [ordered]@{}
+    if ($simplified['admin'] -is [System.Collections.IDictionary]) { & $put $adminSecret 'username' $simplified['admin']['username'] }
+    $adminRef = Split-ZtpKeyVaultReference (& $v 'provisioning.simplified.admin.password')
+    if ($adminRef) {
+        $adminSecret['vault'] = $adminRef.Vault; $adminSecret['name'] = $adminRef.Secret
+        if ($vaults.ContainsKey($adminRef.Vault)) { & $put $adminSecret 'subscription_id' $vaults[$adminRef.Vault]['subscription_id']; & $put $adminSecret 'resource_group' $vaults[$adminRef.Vault]['resource_group'] }
+    }
+    $ztp['admin_secret'] = $adminSecret
+    $bmcSecret = [ordered]@{}
+    $passwordRef = Split-ZtpKeyVaultReference (& $v 'hardware.bmc.password')
+    if ($passwordRef) { $bmcSecret['vault'] = $passwordRef.Vault; $bmcSecret['password_name'] = $passwordRef.Secret }
+    $user = & $v 'hardware.bmc.username'
+    $userRef = Split-ZtpKeyVaultReference $user
+    if ($userRef) { $bmcSecret['username_name'] = $userRef.Secret; if (-not $passwordRef -or $userRef.Vault -ne $passwordRef.Vault) { $bmcSecret['username_vault'] = $userRef.Vault } }
+    elseif ($user) { $bmcSecret['username'] = [string]$user }
+    $ztp['bmc_secret'] = $bmcSecret
+    $prep = [ordered]@{}
+    & $put $prep 'sbe_bundle' (& $v 'hardware.sbe.bundle_path')
+    $allow = & $v 'hardware.sbe.allow_unvalidated'
+    if ($null -ne $allow) { $prep['allow_unvalidated_sbe'] = $allow }
+    $ztp['node_preparation'] = $prep
+    $env_['ztp'] = $ztp
+    return $env_
+}
+
+function ConvertTo-ZtpSchema5Message {
+    # A key-check message in environment-file paths, rewritten in the schema 5 paths the operator wrote.
+    param([Parameter(Mandatory)][string]$Message)
+    $m = $Message
+    $m = $m -replace 'cluster_nodes\[(\d+)\]( \([^)]*\))?\.(ip_address|mac_address)', 'nodes[$1]$2 management port $3'
+    $m = $m -replace 'cluster_nodes\[(\d+)\]( \([^)]*\))?\.adapter_name', 'nodes[$1]$2 management port name'
+    $m = $m -replace 'cluster_nodes\[(\d+)\]( \([^)]*\))?\.service_tag', 'nodes[$1]$2.serial_number'
+    $m = $m -replace 'cluster_nodes\[(\d+)\]( \([^)]*\))?\.idrac_ip', 'nodes[$1]$2.bmc.ip_address'
+    $m = $m -replace 'cluster_nodes\[(\d+)\]( \([^)]*\))?\.ip_assignment', 'nodes[$1]$2 management port ip_assignment'
+    $map = [ordered]@{
+        'cluster_nodes'                                = 'nodes'
+        'azure_identity.azure_tenant_id'               = 'azure.tenant_id'
+        'azure_resources.location'                     = 'azure.location'
+        'network_intents.management.'                  = 'networking.management.'
+        'onprem.ntp_servers'                           = 'networking.ntp_servers'
+        'credentials.local_admin_username'             = 'identity.local_admin.username'
+        'credentials.local_admin_password_secret'      = 'identity.local_admin.password'
+        'ztp.subscription_id'                          = 'azure.subscription_id (or provisioning.simplified.subscription_id)'
+        'ztp.resource_group'                           = 'azure.resource_group (or provisioning.simplified.resource_group)'
+        'ztp.site_name'                                = 'provisioning.simplified.site_name'
+        'ztp.time_zone'                                = 'site.time_zone'
+        'ztp.provisioning_iso'                         = 'provisioning.simplified.maintenance_iso'
+        'ztp.os_version'                               = 'provisioning.os_version'
+        'ztp.share_name'                               = 'provisioning.simplified.media_share.name'
+        'ztp.share_host or ztp.share_host_adapter'     = 'provisioning.simplified.media_share.host or host_adapter'
+        'ztp.share_host_adapter'                       = 'provisioning.simplified.media_share.host_adapter'
+        'ztp.share_host'                               = 'provisioning.simplified.media_share.host'
+        'ztp.media_path'                               = 'provisioning.simplified.media_path'
+        'ztp.evidence_path'                            = 'provisioning.simplified.evidence_path'
+        'ztp.azl_rp_object_id'                         = 'azure.hci_resource_provider_object_id'
+        'ztp.tags'                                     = 'tags'
+        'ztp.admin_secret.username'                    = 'provisioning.simplified.admin.username'
+        'ztp.admin_secret.vault'                       = 'provisioning.simplified.admin.password (keyvault://<vault>/<secret>)'
+        'ztp.admin_secret.name'                        = 'provisioning.simplified.admin.password (keyvault://<vault>/<secret>)'
+        'ztp.admin_secret.subscription_id'             = 'key_vaults[].subscription_id of the provisioning admin''s vault'
+        'ztp.admin_secret.resource_group'              = 'key_vaults[].resource_group of the provisioning admin''s vault'
+        'ztp.bmc_secret.username_name'                 = 'hardware.bmc.username'
+        'ztp.bmc_secret.password_name'                 = 'hardware.bmc.password'
+        'ztp.bmc_secret.vault'                         = 'hardware.bmc.password (keyvault://<vault>/<secret>)'
+        'ztp.node_preparation.sbe_bundle'              = 'hardware.sbe.bundle_path'
+        'ztp.node_preparation.allow_unvalidated_sbe'   = 'hardware.sbe.allow_unvalidated'
+    }
+    foreach ($k in $map.Keys) { $m = $m.Replace($k, $map[$k]) }
+    return $m
+}
+
+function Read-ZtpInfrastructure {
+    <#
+    .SYNOPSIS
+    Reads the file -InfrastructureFile names, in either format, and returns the environment-file keys the scripts read.
+    .DESCRIPTION
+    A legacy environment file (docs/environment-file.md) is returned as it is. A schema 5 infrastructure.yml is validated
+    and mapped (ConvertFrom-ZtpInfrastructureV5); the result carries _source { format, schema_version, path, validator,
+    problems, warnings }, which Assert-ZtpEnvironment reports with the key check, in schema 5 paths.
+    Validation: the toolkit's Test-AzlInfrastructure when Find-ZtpToolkitModule finds the toolkit (its errors and warnings,
+    with their rule IDs), always followed by Test-ZtpInfrastructureV5 for what ZTP itself needs.
+    .PARAMETER ToolkitModulePath
+    The toolkit's AzlInfrastructure.psm1. Default: Find-ZtpToolkitModule. 'none' skips the toolkit.
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Collections.Specialized.OrderedDictionary])]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [ValidateSet('Provision', 'Prepare')][string]$For = 'Provision',
+        [string]$ToolkitModulePath
+    )
+    $data = Read-ZtpEnvironmentFile -Path $Path
+    if ((Get-ZtpEnvironmentFormat -Data $data) -eq 'legacy') { return $data }
+    $full = (Resolve-Path -LiteralPath $Path).Path
+    $problems = [System.Collections.Generic.List[string]]::new()
+    $warnings = [System.Collections.Generic.List[string]]::new()
+    $module = if ($ToolkitModulePath -eq 'none') { $null } elseif ($ToolkitModulePath) { $ToolkitModulePath } else { Find-ZtpToolkitModule }
+    $validator = 'built-in'
+    if ($module) {
+        if (-not (Test-Path -LiteralPath $module -PathType Leaf)) { throw "The toolkit module $module doesn't exist." }
+        Import-Module $module -Force -ErrorAction Stop
+        foreach ($finding in @(Test-AzlInfrastructure -Path $full)) {
+            $line = "$($finding.Id) $($finding.Path): $($finding.Message)"
+            if ($finding.Severity -eq 'error') { $problems.Add($line) } elseif ($finding.Severity -eq 'warning') { $warnings.Add($line) }
+        }
+        $validator = "azurelocal-toolkit ($module)"
+    }
+    foreach ($p in @(Test-ZtpInfrastructureV5 -Data $data -For $For)) { $problems.Add($p) }
+    $env_ = ConvertFrom-ZtpInfrastructureV5 -Data $data
+    $version = [string](Get-ZtpEnvValue -Environment $data -Path '_metadata.schema_version')
+    $env_['_source'] = [ordered]@{ format = 'schema5'; schema_version = $version; path = $full; validator = $validator; problems = $problems.ToArray(); warnings = $warnings.ToArray() }
+    return $env_
 }

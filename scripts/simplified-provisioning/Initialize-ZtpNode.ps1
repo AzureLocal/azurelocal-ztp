@@ -26,8 +26,10 @@
 
     Without -Execute every gate is read once and the changes are listed. Safe to rerun: done steps are skipped.
 .PARAMETER InfrastructureFile
-    The environment file. Reads cluster_nodes, network_intents.management, onprem.ntp_servers, credentials,
-    hardware.vendor and ztp (subscription, resource group, admin_secret, node_preparation.sbe_bundle).
+    The environment file: a master infrastructure.yml (schema 5) or the older environment-file layout (deprecated). Reads
+    the nodes and their management ports, the management network, the time servers, the deployment admin, the vendor, and
+    the ZTP subscription, resource group, admin secret and SBE folder. With schema 5, every port of a node is known: DHCP
+    stays on a non-management port only when the file marks it dhcp or dhcp_reservation.
 .PARAMETER Node
     Nodes to prepare. Defaults to every node in the environment file.
 .PARAMETER ReadyTimeoutMinutes
@@ -82,7 +84,7 @@ function Send-PrepareEvent([string]$Node, [string]$State, [string]$Evidence, [st
 function Write-Step([string]$Text) { Write-Information -MessageData "$((Get-Date).ToUniversalTime().ToString('HH:mm:ss'))Z $Text" -InformationAction Continue }
 
 # The environment file must hold every key this script reads before anything runs.
-$env_ = Read-ZtpEnvironmentFile -Path $InfrastructureFile
+$env_ = Read-ZtpInfrastructure -Path $InfrastructureFile -For Prepare
 Assert-ZtpEnvironment -Environment $env_ -For Prepare -Source $InfrastructureFile
 $ztp = $env_.ztp
 $tenant = [string]$env_.azure_identity.azure_tenant_id
@@ -266,9 +268,15 @@ function Get-DriverPlan($State) {
         [pscustomobject]@{ Adapter = $a.Name; Id = $a.Id; Have = $a.Driver; Want = if ($match) { $match.Version } else { '' }; Driver = $match }
     }
 }
-function Get-ExtraGateway($State) {
-    # Every adapter but the management one that holds a routable address or a default route.
-    @($State.Adapters | Where-Object { $_.Mac -ne $State.Mgmt.Mac -and ($_.Gateway -or @($_.Addresses | Where-Object { $_ -notlike '169.254.*' }).Count) } | ForEach-Object Name)
+function Get-KeepDhcp($Config) {
+    # The non-management ports the file leaves on DHCP (schema 5 network_adapters marked dhcp or dhcp_reservation), as
+    # Windows writes MACs: AA-BB-CC-DD-EE-FF.
+    @($Config['network_adapters'] | Where-Object { $_ -is [System.Collections.IDictionary] -and $_['mac_address'] -and 'management' -notin @($_['roles']) -and [string]$_['ip_assignment'] -in 'dhcp', 'dhcp_reservation' } |
+        ForEach-Object { ([string]$_['mac_address']).Replace(':', '-').ToUpperInvariant() })
+}
+function Get-ExtraGateway($State, [string[]]$Keep = @()) {
+    # Every adapter but the management one, and those the file keeps on DHCP, that holds a routable address or a default route.
+    @($State.Adapters | Where-Object { $_.Mac -ne $State.Mgmt.Mac -and $_.Mac -notin $Keep -and ($_.Gateway -or @($_.Addresses | Where-Object { $_ -notlike '169.254.*' }).Count) } | ForEach-Object Name)
 }
 function Show-State($State, $Plan) {
     $m = $State.Mgmt
@@ -302,6 +310,7 @@ try {
     $nic = Get-NetAdapter -Physical | Where-Object { $_.MacAddress -eq $p.MgmtMac } | Select-Object -First 1
     if (-not $nic) { throw "No adapter with MAC $($p.MgmtMac)" }
     foreach ($o in @(Get-NetAdapter -Physical | Where-Object { $_.ifIndex -ne $nic.ifIndex })) {
+        if (@($p.KeepDhcp) -contains $o.MacAddress) { $log.Add("$($o.Name): DHCP kept (dhcp in the environment file)"); continue }
         $routable = @(Get-NetIPAddress -InterfaceIndex $o.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike '169.254.*' })
         $route = Get-NetRoute -InterfaceIndex $o.ifIndex -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue
         # Same model as the management adapter (its team partner, for example) gets DHCP off even with no lease yet: a driver
@@ -352,6 +361,9 @@ foreach ($n in $Node) {
     $cfg = $envNodes | Where-Object { [string]$_.name -eq $n }
     $ip = [string]$cfg.ip_address
     $mac = ([string]$cfg.mac_address).Replace(':', '-').ToUpperInvariant()
+    # Each node's own mode: the schema 5 reader sets it from the node's management port.
+    $nodeMode = Get-ZtpManagementAssignment -Environment $env_ -Node $cfg
+    $keep = @(Get-KeepDhcp $cfg)
     $cred = [pscredential]::new("$n\$([string]$ztp.admin_secret.username)", $adminPassword)
     $s = $null
     Write-Step "== $n ($ip)"
@@ -375,10 +387,11 @@ foreach ($n in $Node) {
                 if ($sig.Status -ne 'Valid') { throw "$($cat.Name) for $($d.Inf) has signature $($sig.Status)." }
             }
         }
-        $extra = Get-ExtraGateway $before
+        $extra = Get-ExtraGateway $before $keep
+        $kept = @($before.Adapters | Where-Object { $_.Mac -in $keep } | ForEach-Object Name)
         if (-not $Execute) {
-            $addressPlan = if ($mgmtMode -eq 'static') { "static $ip/$prefix gw $gateway on $($before.Mgmt.Name)" } else { "$($before.Mgmt.Name) left as it is ($mgmtMode; expect $ip)" }
-            Write-Step "  PLAN: drivers $(($drivers | ForEach-Object { "$($_.Inf) $($_.Version)" }) -join ', ') (signatures valid); SBE to C:\SBE; create $deployAdmin; $addressPlan; DHCP and gateway off on $(if ($extra) { $extra -join ', ' } else { 'none' }); DNS $($dns -join ','); time $($ntp -join ',')."
+            $addressPlan = if ($nodeMode -eq 'static') { "static $ip/$prefix gw $gateway on $($before.Mgmt.Name)" } else { "$($before.Mgmt.Name) left as it is ($nodeMode; expect $ip)" }
+            Write-Step "  PLAN: drivers $(($drivers | ForEach-Object { "$($_.Inf) $($_.Version)" }) -join ', ') (signatures valid); SBE to C:\SBE; create $deployAdmin; $addressPlan; DHCP and gateway off on $(if ($extra) { $extra -join ', ' } else { 'none' })$(if ($kept) { "; DHCP kept on $($kept -join ', ') (dhcp in the file)" }); DNS $($dns -join ','); time $($ntp -join ',')."
             continue
         }
 
@@ -405,7 +418,7 @@ foreach ($n in $Node) {
         } -ArgumentList $deployAdmin, $deployPassword
         Write-Step "  $deployAdmin is in local Administrators"
 
-        $params = @{ Mode = $mgmtMode; MgmtMac = $mac; Ip = $ip; Prefix = $prefix; Gateway = $gateway; Dns = $dns; Ntp = $ntp
+        $params = @{ Mode = $nodeMode; MgmtMac = $mac; KeepDhcp = @($keep); Ip = $ip; Prefix = $prefix; Gateway = $gateway; Dns = $dns; Ntp = $ntp
             Drivers = @($drivers | ForEach-Object { @{ Inf = $_.Inf; Version = $_.Version; Ids = $_.Ids; Folder = $_.Folder } }) } | ConvertTo-Json -Depth 6
         Invoke-Command -Session $s -ScriptBlock {
             param([string]$Script, [string]$Params)
@@ -477,10 +490,10 @@ foreach ($n in $Node) {
         $afterPlan = @(Get-DriverPlan $after)
         Show-State $after $afterPlan
         $problems = @()
-        if ($mgmtMode -eq 'static' -and @($after.Mgmt.Addresses) -notcontains "$ip/$prefix Manual") { $problems += "management address isn't static $ip" }
-        if ($mgmtMode -ne 'static' -and -not @($after.Mgmt.Addresses | Where-Object { $_ -like "$ip/$prefix *" })) { $problems += "management address isn't $ip ($mgmtMode)" }
+        if ($nodeMode -eq 'static' -and @($after.Mgmt.Addresses) -notcontains "$ip/$prefix Manual") { $problems += "management address isn't static $ip" }
+        if ($nodeMode -ne 'static' -and -not @($after.Mgmt.Addresses | Where-Object { $_ -like "$ip/$prefix *" })) { $problems += "management address isn't $ip ($nodeMode)" }
         $gw = @($after.Adapters | Where-Object Gateway | ForEach-Object Name)
-        $dhcpSiblings = @($after.Adapters | Where-Object { $_.Mac -ne $after.Mgmt.Mac -and $_.Id -and $_.Id -eq $after.Mgmt.Id -and $_.Dhcp -eq 'Enabled' } | ForEach-Object Name)
+        $dhcpSiblings = @($after.Adapters | Where-Object { $_.Mac -ne $after.Mgmt.Mac -and $_.Mac -notin $keep -and $_.Id -and $_.Id -eq $after.Mgmt.Id -and $_.Dhcp -eq 'Enabled' } | ForEach-Object Name)
         if ($dhcpSiblings) { $problems += "DHCP still on for $($dhcpSiblings -join ',')" }
         if ($gw.Count -ne 1 -or $gw[0] -ne $after.Mgmt.Name) { $problems += "default gateway on $($gw -join ',')" }
         if (@($afterPlan | Where-Object { $_.Want -and $_.Have -ne $_.Want })) { $problems += 'an adapter is not on its SBE driver' }

@@ -50,6 +50,7 @@ export default defineConfig({
           { text: 'Overview', link: '/overview' },
           { text: 'Operator guide', link: '/operator-guide' },
           { text: 'Monitoring a run', link: '/monitoring' },
+          { text: 'Master infrastructure.yml (schema 5)', link: '/infrastructure-schema-5' },
           { text: 'Environment file reference', link: '/environment-file' }
         ]
       },

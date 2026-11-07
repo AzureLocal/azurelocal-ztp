@@ -1,0 +1,101 @@
+# Synthetic schema 5.2 infrastructure.yml for the tests: the same machines and values as environment.example.yml, written
+# in the master layout (azurelocal-toolkit config/infrastructure). Two nodes with six ports each: management on the two
+# onboard LOMs (access ports, static), compute and the maintenance environment's way to Azure on two ConnectX ports,
+# storage on the other two. Placeholder values only: documentation addresses (RFC 5737), all-zero GUIDs and example
+# names. The SBE folder is replaced by the tests with a folder in TestDrive.
+_metadata:
+  schema_version: "5.2.0"
+
+scenario:
+  identity: active_directory
+  storage_architecture: s2d
+  storage_connectivity: switched
+  topology: standard
+  connectivity: connected
+  cloud: public
+  outbound_path: direct
+  os_install: simplified
+  deploy_method: arm
+
+site: { code: "EXS", name: "Example Site", time_zone: "UTC" }
+environment: { name: "example-azl", type: lab }
+
+tags:
+  purpose: "example"
+
+azure:
+  tenant_id: "00000000-0000-0000-0000-000000000000"
+  location: "eastus"
+  subscription_id: "00000000-0000-0000-0000-000000000000"
+  resource_group: "rg-example"
+  hci_resource_provider_object_id: "00000000-0000-0000-0000-000000000001"
+
+key_vaults:
+  - { name: "kv-example", subscription_id: "00000000-0000-0000-0000-000000000000", resource_group: "rg-example-vault" }
+
+cluster:
+  name: "example-azl"
+  witness: { type: cloud, storage_account: "stexampleazlwit" }
+  key_vault: { name: "kv-example-azl" }
+
+nodes:
+  - name: "node-01"
+    serial_number: "EXAMPLE1"
+    bmc: { ip_address: "198.51.100.11", type: idrac }
+    network_adapters:
+      - { name: "Embedded NIC 1", mac_address: "02:00:00:00:00:11", slot: "Embedded", speed_gbps: 1, roles: [management], ip_assignment: static, ip_address: "192.0.2.11", vlan_mode: access, vlan_id: 711 }
+      - { name: "Embedded NIC 2", mac_address: "02:00:00:00:00:21", slot: "Embedded", speed_gbps: 1, roles: [management], ip_assignment: none, vlan_mode: access, vlan_id: 711 }
+      - { name: "Slot 3 Port 1", mac_address: "02:00:00:00:00:31", slot: "Slot 3", model: "Example 100G", speed_gbps: 100, roles: [compute, provisioning], ip_assignment: none, vlan_mode: tagged }
+      - { name: "Slot 3 Port 2", mac_address: "02:00:00:00:00:41", slot: "Slot 3", model: "Example 100G", speed_gbps: 100, roles: [storage], ip_assignment: none, vlan_mode: tagged, vlan_id: 712 }
+      - { name: "Slot 6 Port 1", mac_address: "02:00:00:00:00:51", slot: "Slot 6", model: "Example 100G", speed_gbps: 100, roles: [storage], ip_assignment: none, vlan_mode: tagged, vlan_id: 713 }
+      - { name: "Slot 6 Port 2", mac_address: "02:00:00:00:00:61", slot: "Slot 6", model: "Example 100G", speed_gbps: 100, roles: [compute, provisioning], ip_assignment: none, vlan_mode: tagged }
+  - name: "node-02"
+    serial_number: "EXAMPLE2"
+    bmc: { ip_address: "198.51.100.12", type: idrac }
+    network_adapters:
+      - { name: "Embedded NIC 1", mac_address: "02:00:00:00:00:12", slot: "Embedded", speed_gbps: 1, roles: [management], ip_assignment: static, ip_address: "192.0.2.12", vlan_mode: access, vlan_id: 711 }
+      - { name: "Embedded NIC 2", mac_address: "02:00:00:00:00:22", slot: "Embedded", speed_gbps: 1, roles: [management], ip_assignment: none, vlan_mode: access, vlan_id: 711 }
+      - { name: "Slot 3 Port 1", mac_address: "02:00:00:00:00:32", slot: "Slot 3", model: "Example 100G", speed_gbps: 100, roles: [compute, provisioning], ip_assignment: none, vlan_mode: tagged }
+      - { name: "Slot 3 Port 2", mac_address: "02:00:00:00:00:42", slot: "Slot 3", model: "Example 100G", speed_gbps: 100, roles: [storage], ip_assignment: none, vlan_mode: tagged, vlan_id: 712 }
+      - { name: "Slot 6 Port 1", mac_address: "02:00:00:00:00:52", slot: "Slot 6", model: "Example 100G", speed_gbps: 100, roles: [storage], ip_assignment: none, vlan_mode: tagged, vlan_id: 713 }
+      - { name: "Slot 6 Port 2", mac_address: "02:00:00:00:00:62", slot: "Slot 6", model: "Example 100G", speed_gbps: 100, roles: [compute, provisioning], ip_assignment: none, vlan_mode: tagged }
+
+hardware:
+  vendor: "Contoso"
+  model: "AX-760"
+  bmc: { username: "keyvault://kv-example/bmc-username", password: "keyvault://kv-example/bmc-password" }
+  sbe: { bundle_path: "__SBE_BUNDLE__" }
+
+networking:
+  management:
+    subnet: "192.0.2.0/24"
+    gateway: "192.0.2.1"
+    vlan_id: 0
+    dns_servers: ["192.0.2.53", "192.0.2.54"]
+    provisioning_network: dhcp
+    infrastructure_pool: { start: "192.0.2.20", end: "192.0.2.29" }
+  ntp_servers: ["ntp.example.com"]
+  intents:
+    - { name: "management", traffic: [management], adapters: ["Embedded NIC 1", "Embedded NIC 2"] }
+    - { name: "compute", traffic: [compute], adapters: ["Slot 3 Port 1", "Slot 6 Port 2"] }
+    - { name: "storage", traffic: [storage], adapters: ["Slot 3 Port 2", "Slot 6 Port 1"] }
+  storage:
+    auto_ip: true
+    networks:
+      - { name: "StorageNetwork1", adapter: "Slot 3 Port 2", vlan_id: 712 }
+      - { name: "StorageNetwork2", adapter: "Slot 6 Port 1", vlan_id: 713 }
+
+identity:
+  local_admin: { username: "deployadmin", password: "keyvault://kv-example/deploy-admin-password" }
+  active_directory:
+    domain_fqdn: "example.com"
+    ou_path: "OU=example-azl,DC=example,DC=com"
+    lcm_user: { username: "lcm-example", password: "keyvault://kv-example/lcm-password" }
+
+provisioning:
+  os_version: "latest"
+  simplified:
+    site_name: "example-site"
+    maintenance_iso: "latest"
+    admin: { username: "ztpadmin", password: "keyvault://kv-example/ztp-admin-password" }
+    media_share: { name: "ztp-example", host: "192.0.2.10" }

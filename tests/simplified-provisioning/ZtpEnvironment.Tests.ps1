@@ -75,6 +75,20 @@ BeforeAll {
         $path
     }
 
+    $script:fixtureV5 = Join-Path $PSScriptRoot 'fixtures/infrastructure.v5.example.yml'
+    function New-TestInfrastructureV5 {
+        # Writes the schema 5 fixture to TestDrive with the SBE folder and run-data folders filled in; -Edit changes it first.
+        param([Parameter(Mandatory)][string]$Name, [string]$Sbe = 'C:\unused', [scriptblock]$Edit)
+        $d = ConvertFrom-Yaml (Get-Content -LiteralPath $script:fixtureV5 -Raw) -Ordered
+        $d.hardware.sbe.bundle_path = $Sbe
+        $d.provisioning.simplified['media_path'] = Join-Path $TestDrive "data-$Name/media"
+        $d.provisioning.simplified['evidence_path'] = Join-Path $TestDrive "data-$Name/evidence"
+        if ($Edit) { & $Edit $d }
+        $path = Join-Path $TestDrive "$Name.yml"
+        Set-Content -LiteralPath $path -Value (ConvertTo-Yaml $d)
+        $path
+    }
+
     function New-TestRepo {
         # A copy of the script layout (scripts/simplified-provisioning, config/oem) the scripts resolve their default paths against.
         param([Parameter(Mandatory)][string]$Name, [string[]]$Copy, [string]$OemJson = '{ "oem": "Contoso", "sbe": { "driverPaths": [ "Drivers/Network" ] } }')
@@ -710,6 +724,147 @@ param($params)
         $null = & $script:envScript -InfrastructureFile $infra -MediaPath $script:media -From Azure -Execute *>&1
         $global:ztpE_runs[0].Params['From'] | Should -Be 'Azure'
         $global:ztpE_runs[0].Params.ContainsKey('RebuildImages') | Should -BeFalse
+    }
+}
+
+Describe 'Schema 5 infrastructure.yml' {
+    BeforeAll {
+        # Built-in checks only, unless a test names a toolkit: the scripts would otherwise look for a clone next to the repo.
+        $script:savedToolkitRoot = $env:AZL_TOOLKIT_ROOT
+        $env:AZL_TOOLKIT_ROOT = Join-Path $TestDrive 'no-toolkit-here'
+        $script:read = { param([string]$Path, [string]$For = 'Provision') Read-ZtpInfrastructure -Path $Path -For $For }
+        $script:assertText = {
+            param([string]$Path, [string]$For = 'Provision')
+            try { Assert-ZtpEnvironment -Environment (Read-ZtpInfrastructure -Path $Path -For $For) -For $For -Source 'infra.yml'; '' } catch { $_.Exception.Message }
+        }
+    }
+    AfterAll { $env:AZL_TOOLKIT_ROOT = $script:savedToolkitRoot }
+
+    It 'tells the formats apart: _metadata.schema_version is schema 5, the environment-file layout is legacy' {
+        Get-ZtpEnvironmentFormat -Data (Read-ZtpEnvironmentFile -Path $script:fixtureV5) | Should -Be 'schema5'
+        Get-ZtpEnvironmentFormat -Data (Read-ZtpEnvironmentFile -Path $script:fixture) | Should -Be 'legacy'
+        Get-ZtpEnvironmentFormat -Data ([ordered]@{ schema_version = '5.2.0' }) | Should -Be 'schema5'
+        # A legacy file comes back exactly as read.
+        (& $script:read $script:fixture).Contains('_source') | Should -BeFalse
+    }
+
+    It 'maps the schema 5 file onto the keys the scripts read, with no problems for either script' {
+        $e = & $script:read (New-TestInfrastructureV5 -Name 'v5-map')
+        foreach ($for in 'Provision', 'Prepare') { @(Test-ZtpEnvironment -Environment $e -For $for).Count | Should -Be 0 -Because $for }
+        $e._source.format | Should -Be 'schema5'; $e._source.validator | Should -Be 'built-in'
+        $n = $e.cluster_nodes[0]
+        "$($n.name) $($n.ip_address) $($n.mac_address) $($n.adapter_name) $($n.ip_assignment) $($n.service_tag) $($n.idrac_ip)" | Should -Be 'node-01 192.0.2.11 02:00:00:00:00:11 Embedded NIC 1 static EXAMPLE1 198.51.100.11'
+        @($n.network_adapters).Count | Should -Be 6
+        $m = $e.network_intents.management
+        "$($m.subnet) $($m.gateway) $(@($m.dns_servers) -join ',') $($m.ip_assignment) $($m.vlan_id) $($m.provisioning_network)" | Should -Be '192.0.2.0/24 192.0.2.1 192.0.2.53,192.0.2.54 static 0 dhcp'
+        $e.azure_identity.azure_tenant_id | Should -Be '00000000-0000-0000-0000-000000000000'
+        $e.azure_resources.location | Should -Be 'eastus'
+        $e.site.name | Should -Be 'Example Site'
+        @($e.onprem.ntp_servers) | Should -Be @('ntp.example.com')
+        "$($e.credentials.local_admin_username) $($e.credentials.local_admin_password_secret)" | Should -Be 'deployadmin keyvault://kv-example/deploy-admin-password'
+        $z = $e.ztp
+        "$($z.subscription_id) $($z.resource_group) $($z.site_name) $($z.time_zone) $($z.provisioning_iso) $($z.os_version) $($z.share_name) $($z.share_host) $($z.azl_rp_object_id)" | Should -Be '00000000-0000-0000-0000-000000000000 rg-example example-site UTC latest latest ztp-example 192.0.2.10 00000000-0000-0000-0000-000000000001'
+        "$($z.admin_secret.username) $($z.admin_secret.vault) $($z.admin_secret.name) $($z.admin_secret.subscription_id) $($z.admin_secret.resource_group)" | Should -Be 'ztpadmin kv-example ztp-admin-password 00000000-0000-0000-0000-000000000000 rg-example-vault'
+        "$($z.bmc_secret.vault) $($z.bmc_secret.username_name) $($z.bmc_secret.password_name)" | Should -Be 'kv-example bmc-username bmc-password'
+        $z.tags.purpose | Should -Be 'example'
+        $z.media_path | Should -BeLike '*data-v5-map*media'
+        (Get-ZtpSiteNetwork -Environment $e).Range | Should -Be '192.0.2.11-192.0.2.12'
+    }
+
+    It 'maps <Case>' -ForEach @(
+        @{ Case = 'a DHCP reservation to ZTP''s dhcp, and the site network to Automatic'; Edit = { param($d) foreach ($n in $d.nodes) { $n.network_adapters[0].ip_assignment = 'dhcp_reservation' } }; Check = { param($e) $e.cluster_nodes[0].ip_assignment | Should -Be 'dhcp'; $e.network_intents.management.ip_assignment | Should -Be 'dhcp'; (Get-ZtpSiteNetwork -Environment $e).IpAssignmentType | Should -Be 'Automatic' } }
+        @{ Case = 'mixed modes per node, the site network Manual over the static node only'; Edit = { param($d) $d.nodes[1].network_adapters[0].ip_assignment = 'dhcp_reservation' }; Check = { param($e) $e.cluster_nodes[1].ip_assignment | Should -Be 'dhcp'; (Get-ZtpSiteNetwork -Environment $e).Range | Should -Be '192.0.2.11-192.0.2.11' } }
+        @{ Case = 'a tagged management port to its VLAN'; Edit = { param($d) $d.networking.management.Remove('vlan_id'); foreach ($n in $d.nodes) { $n.network_adapters[0].vlan_mode = 'tagged' } }; Check = { param($e) $e.network_intents.management.vlan_id | Should -Be 711 } }
+        @{ Case = 'a 5.0 node with management only'; Edit = { param($d) foreach ($n in $d.nodes) { $mac = $n.network_adapters[0].mac_address; $ip = $n.network_adapters[0].ip_address; $n.Remove('network_adapters'); $n['management'] = [ordered]@{ ip_address = $ip; mac_address = $mac; adapter_name = 'Port1' } } }; Check = { param($e) $e.cluster_nodes[0].adapter_name | Should -Be 'Port1'; $e.cluster_nodes[0].Contains('network_adapters') | Should -BeFalse; $e.cluster_nodes[0].ip_assignment | Should -Be 'static' } }
+        @{ Case = 'a BMC user name that is not a secret, and BIOS settings'; Edit = { param($d) $d.hardware.bmc.username = 'root'; $d.hardware['bios'] = [ordered]@{ Slot2 = 'Disabled' }; $d.nodes[1]['bios'] = [ordered]@{ Slot2 = 'Enabled' } }; Check = { param($e) $e.ztp.bmc_secret.username | Should -Be 'root'; $e.ztp.bmc_secret.Contains('username_name') | Should -BeFalse; (Get-ZtpEnvironmentBios -Environment $e -Node $e.cluster_nodes[1])['Slot2'] | Should -Be 'Enabled'; (Get-ZtpEnvironmentBios -Environment $e -Node $e.cluster_nodes[0])['Slot2'] | Should -Be 'Disabled' } }
+        @{ Case = 'the BMC user name secret in its own vault'; Edit = { param($d) $d.key_vaults.Add([ordered]@{ name = 'kv-example-bmc'; subscription_id = '00000000-0000-0000-0000-000000000000'; resource_group = 'rg-example-vault' }); $d.hardware.bmc.username = 'keyvault://kv-example-bmc/bmc-user' }; Check = { param($e) $e.ztp.bmc_secret.username_vault | Should -Be 'kv-example-bmc'; $e.ztp.bmc_secret.username_name | Should -Be 'bmc-user'; @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0 } }
+        @{ Case = 'the site range, the run folders and a provisioning subscription'; Edit = { param($d) $d.networking.management['site_ip_range'] = [ordered]@{ start = '192.0.2.10'; end = '192.0.2.19' }; $d.provisioning.simplified['subscription_id'] = '00000000-0000-0000-0000-000000000002'; $d.provisioning.simplified['resource_group'] = 'rg-example-ztp' }; Check = { param($e) (Get-ZtpSiteNetwork -Environment $e).Range | Should -Be '192.0.2.10-192.0.2.19'; $e.ztp.subscription_id | Should -Be '00000000-0000-0000-0000-000000000002'; $e.ztp.resource_group | Should -Be 'rg-example-ztp' } }
+    ) {
+        $e = & $script:read (New-TestInfrastructureV5 -Name "v5-case-$([guid]::NewGuid().ToString('N'))" -Edit $Edit)
+        & $Check $e
+    }
+
+    It 'reports what ZTP needs in schema 5 paths: <Case>' -ForEach @(
+        @{ Case = 'a missing time zone'; Edit = { param($d) $d.site.Remove('time_zone') }; Expect = 'site.time_zone is required' }
+        @{ Case = 'a missing serial number'; Edit = { param($d) $d.nodes[1].Remove('serial_number') }; Expect = 'nodes[1] (node-02).serial_number is required' }
+        @{ Case = 'no management port'; Edit = { param($d) $d.nodes[0].network_adapters[0].ip_assignment = 'none' }; Expect = 'nodes[0] (node-01): 0 ports own the management address' }
+        @{ Case = 'a management port without its MAC'; Edit = { param($d) $d.nodes[0].network_adapters[0].Remove('mac_address') }; Expect = 'nodes[0] (node-01) management port mac_address is required' }
+        @{ Case = 'an ISO install'; Edit = { param($d) $d.scenario.os_install = 'iso' }; Expect = "scenario.os_install is 'iso'; ZTP provisions with simplified machine provisioning" }
+        @{ Case = 'another schema major'; Edit = { param($d) $d._metadata.schema_version = '4.0.0' }; Expect = "_metadata.schema_version is '4.0.0'; ZTP reads schema 5.x" }
+        @{ Case = 'an unlisted admin vault'; Edit = { param($d) $d.provisioning.simplified.admin.password = 'keyvault://kv-other/ztp-admin-password' }; Expect = "names vault 'kv-other', which isn't in key_vaults" }
+        @{ Case = 'a node with its own BMC login'; Edit = { param($d) $d.nodes[1].bmc['username'] = 'other'; $d.nodes[1].bmc['password'] = 'keyvault://kv-example/other-bmc' }; Expect = 'nodes[1] (node-02).bmc has its own login; ZTP uses one BMC login' }
+        @{ Case = 'secrets in another subscription'; Edit = { param($d) $d.key_vaults.Add([ordered]@{ name = 'kv-example-two'; subscription_id = '00000000-0000-0000-0000-000000000003'; resource_group = 'rg-x' }); $d.identity.local_admin.password = 'keyvault://kv-example-two/deploy-admin-password' }; Expect = 'identity.local_admin.password is in vault ''kv-example-two'', in another subscription' }
+        @{ Case = 'a missing SBE folder'; Edit = { param($d) $d.hardware.Remove('sbe') }; Expect = 'hardware.sbe.bundle_path is required' }
+        @{ Case = 'a BIOS value that is not a string'; Edit = { param($d) $d.hardware['bios'] = [ordered]@{ Slot2 = 0 } }; Expect = 'hardware.bios.Slot2 must be a string' }
+    ) {
+        $text = & $script:assertText (New-TestInfrastructureV5 -Name "v5-bad-$([guid]::NewGuid().ToString('N'))" -Edit $Edit)
+        $text.Contains($Expect) | Should -BeTrue -Because "the message was: $text"
+        $text | Should -BeLike 'infra.yml (schema *, checked by built-in) is invalid*'
+    }
+
+    It 'validates with the toolkit''s module when one is found, and reports its findings with their rule IDs' {
+        $tk = Join-Path $TestDrive 'stub-toolkit'
+        $mod = Join-Path $tk 'scripts/common/infrastructure'
+        $null = New-Item -ItemType Directory -Force -Path $mod
+        Set-Content -LiteralPath (Join-Path $mod 'AzlInfrastructure.psm1') -Value @'
+function Test-AzlInfrastructure { param([string]$Path)
+    [pscustomobject]@{ Id = 'AZL-099'; Severity = 'error'; Path = 'nodes'; Message = 'stub error'; LearnUrl = '' }
+    [pscustomobject]@{ Id = 'AZL-098'; Severity = 'warning'; Path = 'nodes'; Message = 'stub warning'; LearnUrl = '' } }
+Export-ModuleMember -Function Test-AzlInfrastructure
+'@
+        $file = New-TestInfrastructureV5 -Name 'v5-stub-toolkit'
+        $env:AZL_TOOLKIT_ROOT = $tk
+        try {
+            Find-ZtpToolkitModule | Should -Be ([IO.Path]::GetFullPath((Join-Path $mod 'AzlInfrastructure.psm1')))
+            $text = & $script:assertText $file
+            $text | Should -BeLike '*checked by azurelocal-toolkit*is invalid (1 problem)*AZL-099 nodes: stub error*'
+            (& $script:read $file)._source.warnings | Should -Be @('AZL-098 nodes: stub warning')
+            # 'none' skips the toolkit.
+            (Read-ZtpInfrastructure -Path $file -ToolkitModulePath none)._source.validator | Should -Be 'built-in'
+        }
+        finally { $env:AZL_TOOLKIT_ROOT = Join-Path $TestDrive 'no-toolkit-here'; Remove-Module AzlInfrastructure -ErrorAction SilentlyContinue }
+    }
+
+    It 'passes the real toolkit''s schema 5.2 check, when an azurelocal-toolkit clone is next to this repository' -Skip:(-not (Test-Path (Join-Path $PSScriptRoot '..\..\..\azurelocal-toolkit\scripts\common\infrastructure\AzlInfrastructure.psm1'))) {
+        $module = [IO.Path]::GetFullPath((Join-Path $script:repoRoot '..\azurelocal-toolkit\scripts\common\infrastructure\AzlInfrastructure.psm1'))
+        try {
+            $e = Read-ZtpInfrastructure -Path (New-TestInfrastructureV5 -Name 'v5-real-toolkit') -ToolkitModulePath $module
+            @($e._source.problems) | Should -BeNullOrEmpty
+            $e._source.validator | Should -BeLike 'azurelocal-toolkit*'
+        }
+        finally { Remove-Module AzlInfrastructure -ErrorAction SilentlyContinue }
+    }
+
+    It 'runs Invoke-ZtpEnvironment.ps1 from a schema 5 file: the node list, the Bicep parameters and the settings' {
+        $root = New-TestRepo -Name 'env-v5-repo' -Copy 'Invoke-ZtpEnvironment.ps1', 'ZtpEnvironment.Common.ps1'
+        $bin = Join-Path $root 'scripts/simplified-provisioning'
+        foreach ($stub in 'Invoke-ZtpProvisioning.ps1', 'Initialize-ZtpNode.ps1') { Set-Content -LiteralPath (Join-Path $bin $stub) -Value '[CmdletBinding(SupportsShouldProcess)] param($ConfigPath, $NodeName, $BmcCredential, $InfrastructureFile, $Node, $DriverStagingPath, $EventLogPath, $From, [switch]$ConfirmNotClustered, [switch]$SkipCertificateCheck, [switch]$RetryProvisionOs, [switch]$RebuildImages, [switch]$Execute)' }
+        $infra = New-TestInfrastructureV5 -Name 'v5-invoke' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-v5-invoke')) -Edit { param($d) $d.hardware['bios'] = [ordered]@{ EmbNic1Nic2 = 'Enabled' } }
+        $text = Get-StepText (& (Join-Path $bin 'Invoke-ZtpEnvironment.ps1') -InfrastructureFile $infra *>&1)
+        $text | Should -BeLike '*Site network: Manual 192.0.2.11-192.0.2.12*'
+        $nodes = Get-Content -LiteralPath (Join-Path $root 'config/simplified-provisioning/nodes.json') -Raw | ConvertFrom-Json
+        "$($nodes.nodes[1].name) $($nodes.nodes[1].service_tag) $($nodes.nodes[1].bmc_address) $($nodes.nodes[1].management_ip) $($nodes.nodes[1].bios.EmbNic1Nic2)" | Should -Be 'node-02 EXAMPLE2 198.51.100.12 192.0.2.12 Enabled'
+        $bicep = Get-Content -LiteralPath (Join-Path $bin 'bicep/main.parameters.json') -Raw | ConvertFrom-Json
+        $m = $bicep.parameters.nodes.value[0].management
+        "$($m.ip_assignment) $($m.mac_address) $($m.adapter_name) $($m.ip_address) $($m.subnet_mask) $($m.vlan_id)" | Should -Be 'static 02:00:00:00:00:11 Embedded NIC 1 192.0.2.11 255.255.255.0 0'
+        $bicep.parameters.ip_assignment_type.value | Should -Be 'Manual'
+        $bicep.parameters.key_vault_resource_group.value | Should -Be 'rg-example-vault'
+        $bicep.parameters.admin_secret_name.value | Should -Be 'ztp-admin-password'
+        $cfg = Get-Content -LiteralPath (Join-Path $root 'config/simplified-provisioning/ztp-provisioning.json') -Raw | ConvertFrom-Json
+        "$($cfg.Oem) $($cfg.SbeModel) $($cfg.ShareHost) $($cfg.ShareName) $($cfg.ResourceGroupName) $($cfg.Location)" | Should -Be 'Contoso AX760 192.0.2.10 ztp-example rg-example eastus'
+        $cfg.BootstrapCacheDirectory | Should -BeLike '*data-v5-invoke*media'
+    }
+
+    It 'runs Prepare from a schema 5 file: finds the management port by MAC, and keeps DHCP only where the file says so' {
+        $global:ztpE_calls.Clear(); $global:ztpE_azureStatus = $script:readyStatus; $global:ztpE_nodeState = $script:nodeState; $global:ztpE_signature = 'Valid'
+        $sbe = New-TestSbe -Dir (Join-Path $TestDrive 'sbe-v5-prepare')
+        $plain = New-TestInfrastructureV5 -Name 'v5-prepare' -Sbe $sbe
+        $text = Get-StepText (& $script:init -InfrastructureFile $plain -Node node-01 *>&1)
+        $text | Should -BeLike '*static 192.0.2.11/24 gw 192.0.2.1 on Port 1; DHCP and gateway off on Port 2; DNS*'
+        # The second port of the stub node (MAC 02-00-00-00-00-99) as a compute port the file leaves on DHCP.
+        $keep = New-TestInfrastructureV5 -Name 'v5-prepare-keep' -Sbe $sbe -Edit { param($d) $d.nodes[0].network_adapters.Add([ordered]@{ name = 'Port 2'; mac_address = '02:00:00:00:00:99'; roles = @('compute'); ip_assignment = 'dhcp' }) }
+        $text = Get-StepText (& $script:init -InfrastructureFile $keep -Node node-01 *>&1)
+        $text | Should -BeLike '*DHCP and gateway off on none; DHCP kept on Port 2 (dhcp in the file); DNS*'
     }
 }
 
