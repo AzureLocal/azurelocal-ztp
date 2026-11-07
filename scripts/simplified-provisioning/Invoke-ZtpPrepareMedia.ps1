@@ -1,18 +1,16 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-Prepares everything the boot stage needs, driven only by the config file: newest maintenance ISO, the OEM's SBE selection,
-one verified virtual USB image per node. Plan by default.
+Prepares everything the boot stage needs, driven only by the config file: newest maintenance ISO and one verified virtual
+USB image per node. Plan by default.
 .DESCRIPTION
   1. Get-ZtpBootstrapIso.ps1  resolve the newest maintenance ISO, download with resume, verify (TOFU manifest).
-  2. Get-ZtpSbe.ps1           select the newest SBE of the OEM for the model and solution version and stage its descriptor.
-                              The SBE is NOT written to the media: the maintenance ISO has no SBE slot (it is used at cluster
-                              deployment and update; see docs/bootstrap-media-and-sbe.md).
-  3. New-ZtpVirtualUsbImage.ps1  one raw GPT + FAT32 (CDROM) image per node from the ISO.
-  4. Test-ZtpMediaImage       read-back check of every image (GPT, label, boot files).
+  2. New-ZtpVirtualUsbImage.ps1  one raw GPT + FAT32 (CDROM) image per node from the ISO.
+  3. Test-ZtpMediaImage       read-back check of every image (GPT, label, boot files).
 Then it prints the plan or the result. Config keys are those of config/simplified-provisioning/ztp-provisioning.example.json
-(NodesFile, BootstrapCacheDirectory, BootstrapVersion, IncludePreview, MaxBootstrapTrain, Oem, SbeModel, SbeFamily,
-SbeSolutionVersion, SbePackagePath, SourcePath, ImageDirectory, ImageNamePrefix, RebuildImages); keys it does not use are ignored.
+(NodesFile, BootstrapCacheDirectory, BootstrapVersion, IncludePreview, MaxBootstrapTrain, SourcePath, ImageDirectory,
+ImageNamePrefix, RebuildImages); keys it does not use are ignored. No SBE: the maintenance ISO has no slot for one, the OS
+install discovers its own, and staging one is OS configuration (see docs/bootstrap-media.md).
 A parameter wins over the file. Without -Execute only read-only HEAD requests are made and nothing is written.
 .PARAMETER ConfigPath
 JSON settings file (no secrets).
@@ -69,22 +67,7 @@ if ($cache) {
 }
 Write-ZtpLog "Maintenance ISO: $isoPath$(if ($isoInfo) { " (version $($isoInfo.Version), $($isoInfo.Channel))" })."
 
-# ---- 2. SBE (descriptor only; never on the media)
-$sbeInfo = $null
-$oem = & $get 'Oem'
-if ($oem -and ((& $get 'SbeModel') -or (& $get 'SbeFamily'))) {
-    $sbeArgs = @{ Oem = $oem; SolutionVersion = (& $get 'SbeSolutionVersion' 'latest') }
-    if (& $get 'SbeModel') { $sbeArgs.Model = & $get 'SbeModel' }
-    if (& $get 'SbeFamily') { $sbeArgs.Family = & $get 'SbeFamily' }
-    if ($cache) { $sbeArgs.CacheDirectory = $cache }
-    if (& $get 'SbePackagePath') { $sbeArgs.PackagePath = & $get 'SbePackagePath' }
-    if ($Execute -and $cache) { $sbeArgs.Execute = $true }
-    $sbeInfo = @(& (Join-Path $StageScriptRoot 'Get-ZtpSbe.ps1') @sbeArgs) | Where-Object { $_ -is [pscustomobject] } | Select-Object -First 1
-    if ($sbeInfo) { Write-ZtpLog "SBE: $($sbeInfo.Oem) $($sbeInfo.Version) ($($sbeInfo.Status)); goes to cluster deployment or update, not onto the media." }
-}
-else { Write-ZtpLog 'SBE: not selected (set Oem and SbeModel or SbeFamily in the config to select one).' }
-
-# ---- 3. images
+# ---- 2. images
 $imageArgs = @{ SourcePath = $isoPath; NodeName = $nodeNames; OutputDirectory = $imageDirectory; ImageNamePrefix = $prefix }
 if ($EdgeUserPassword) { $imageArgs.EdgeUserPassword = $EdgeUserPassword }
 if (& $get 'RebuildImages' $false) { $imageArgs.Force = $true }
@@ -93,12 +76,12 @@ if (-not $Execute -and -not (Test-Path -LiteralPath $isoPath)) {
     Write-ZtpLog "PLAN: the ISO is not on disk yet ($isoPath); the image plan below uses its future path." -Level Warning
     $planOnly = foreach ($n in $nodeNames) { "PLAN: build $(Join-Path $imageDirectory (Get-ZtpNodeImageName -NodeName $n -Prefix $prefix)) from $isoPath (GPT, one FAT32 partition labelled CDROM)" }
     $planOnly
-    return [pscustomobject]@{ Planned = $true; IsoPath = $isoPath; Iso = $isoInfo; Sbe = $sbeInfo; Images = @() }
+    return [pscustomobject]@{ Planned = $true; IsoPath = $isoPath; Iso = $isoInfo; Images = @() }
 }
 $built = @(& (Join-Path $StageScriptRoot 'New-ZtpVirtualUsbImage.ps1') @imageArgs)
-if (-not $Execute) { $built | ForEach-Object { $_ }; return [pscustomobject]@{ Planned = $true; IsoPath = $isoPath; Iso = $isoInfo; Sbe = $sbeInfo; Images = @() } }
+if (-not $Execute) { $built | ForEach-Object { $_ }; return [pscustomobject]@{ Planned = $true; IsoPath = $isoPath; Iso = $isoInfo; Images = @() } }
 
-# ---- 4. verify
+# ---- 3. verify
 $rows = @($built | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties['ImagePath'] })
 $checks = foreach ($node in $nodeNames) {
     $row = @($rows | Where-Object Node -EQ $node)
@@ -109,4 +92,4 @@ $checks = foreach ($node in $nodeNames) {
 }
 $checks | Format-Table -AutoSize | Out-String | Write-Information -InformationAction Continue
 Write-ZtpLog "Media ready: $(@($checks).Count) image(s) in $imageDirectory. Next: Start-MaintenanceBoot.ps1 (or Invoke-ZtpProvisioning.ps1 -Stage Boot)."
-return [pscustomobject]@{ Planned = $false; IsoPath = $isoPath; Iso = $isoInfo; Sbe = $sbeInfo; Images = @($checks) }
+return [pscustomobject]@{ Planned = $false; IsoPath = $isoPath; Iso = $isoInfo; Images = @($checks) }

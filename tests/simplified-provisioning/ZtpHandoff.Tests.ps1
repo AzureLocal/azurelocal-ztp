@@ -1,7 +1,7 @@
 #Requires -Version 7.0
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.5.0'; MaximumVersion = '5.99.99' }
-# ztp-handoff.json (New-ZtpHandoff.ps1), its conversion to the cluster deployment inputs (Convert-ZtpHandoffToClusterInputs.ps1),
-# the prepare-everything wrapper (Invoke-ZtpPrepareMedia.ps1) and the Sonar launcher (Start-ZtpMonitor.ps1). ARM is mocked
+# ztp-handoff.json (New-ZtpHandoff.ps1, schema 2: only what Azure generated during ZTP), its conversion to the cluster
+# deployment inputs (Convert-ZtpHandoffToClusterInputs.ps1), the media wrapper (Invoke-ZtpPrepareMedia.ps1) and the Sonar launcher (Start-ZtpMonitor.ps1). ARM is mocked
 # with the recorded fixtures; the wrapper runs against stub stage scripts; Sonar is a stub script.
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments', '', Justification = 'BeforeAll variables are consumed inside It blocks.')]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidGlobalVars', '', Justification = 'Mocks and stubs report through globals.')]
@@ -50,27 +50,47 @@ Describe 'New-ZtpHandoff.ps1' {
         $h.nodes.Count | Should -Be 2
         Test-Path (Join-Path $TestDrive 'out/ztp-handoff.json') | Should -BeFalse
     }
-    It 'writes node names, device-ID Arc machine names, resource group, site, solution version, SBE and bootstrap versions and timestamps' {
-        $sbe = Join-Path $TestDrive 'sbe-manifest.json'
-        @{ oem = 'Dell'; version = '5.0.2606.1616'; family = '16G-45n0c-Intel'; manifestSource = 'https://aka.ms/AzureStackSBEUpdate/DellEMC'; manifestCreationDate = '2026-06-24T05:58:20Z'; packageSha256 = ('A' * 64); compatibilityChecked = $true; deploymentParameters = @{ sbePublisher = 'Dell' } } | ConvertTo-Json | Set-Content $sbe
-        $boot = Join-Path $TestDrive 'bootstrap-manifest.json'
-        @{ version = '10.2610.0.3061'; isoSha256 = ('B' * 64); url = 'https://example.invalid/roe.zip' } | ConvertTo-Json | Set-Content $boot
-        $events = Join-Path $TestDrive 'ev.jsonl'
-        Set-Content $events @('{"timestamp":"2026-10-15T12:00:00Z","node":"node-01","state":"NotStarted"}', '{"timestamp":"2026-10-15T13:10:00Z","node":"node-01","state":"ReadyForPortal"}')
-        $r = & $global:ztpH_run @{ Execute = $true; SbeManifestPath = $sbe; BootstrapManifestPath = $boot; EventLogPath = $events }
+    It 'writes schema 2: only what Azure generated during ZTP, with each node''s Network result and restored BIOS' {
+        $checks = @(@{ node = 'node-01'; verified = $true; reason = $null }, @{ node = 'node-02'; verified = $false; reason = 'dhcp: the management port Port0 reports 192.0.2.200, the infrastructure file expects 192.0.2.12' })
+        $r = & $global:ztpH_run @{ Execute = $true; ManagementAddressCheck = $checks; RestoredBios = @{ 'node-01' = [ordered]@{ Slot2 = 'Enabled' } } }
         $r.ArcMachineNames | Should -Be @('00000000-0000-0000-0000-000000000000-1', '11111111-1111-1111-1111-111111111111-1')
         $h = Get-Content $r.HandoffPath -Raw | ConvertFrom-Json
-        $h.schemaVersion | Should -Be 1; $h.tool | Should -Be 'azurelocal-ztp'; $h.resourceGroup | Should -Be 'rg-example'
-        $h.site.name | Should -Be 'site-example'; $h.solution.vsrVersion | Should -Be '12.2609.1003.7'
-        $h.sbe.version | Should -Be '5.0.2606.1616'; $h.sbe.publisher | Should -Be 'Dell'; $h.bootstrap.version | Should -Be '10.2610.0.3061'
-        $raw = Get-Content $r.HandoffPath -Raw
-        $raw | Should -Match '"bootstrapFirstEvent": "2026-10-15T12:00:00.0000000Z"|"bootstrapFirstEvent": "2026-10-15T12:00:00Z"'
-        $raw | Should -Match '"bootstrapLastEvent": "2026-10-15T13:10:00'
-        $raw | Should -Match '"manifestCreationDate": "2026-06-24T05:58:20Z"'
+        @($h.PSObject.Properties.Name) | Should -Be @('schemaVersion', 'generatedUtc', 'tool', 'subscriptionId', 'resourceGroup', 'site', 'solution', 'nodes')
+        $h.schemaVersion | Should -Be 2; $h.tool | Should -Be 'azurelocal-ztp'; $h.resourceGroup | Should -Be 'rg-example'
+        $h.subscriptionId | Should -Be '00000000-0000-0000-0000-000000000000'
+        $h.site.name | Should -Be 'site-example'; $h.site.resourceId | Should -Match '/sites/site-example$'
+        $h.solution.vsrVersion | Should -Be '12.2609.1003.7'
         $n1 = $h.nodes | Where-Object name -EQ 'node-01'
+        @($n1.PSObject.Properties.Name) | Should -Be @('name', 'serial', 'edgeMachineName', 'edgeMachineId', 'arcMachineName', 'arcMachineResourceId', 'arcMachineResourceGroup', 'ready', 'managementAddressVerified', 'managementAddressReason', 'biosRestored')
         $n1.arcMachineName | Should -Be '00000000-0000-0000-0000-000000000000-1'; $n1.serial | Should -Be 'EXAMPLE1'; $n1.ready | Should -BeTrue
+        $n1.edgeMachineName | Should -Be 'node-01'; $n1.edgeMachineId | Should -Match '/edgeMachines/node-01$'
+        $n1.arcMachineResourceId | Should -Match '/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1$'
         $n1.arcMachineResourceGroup | Should -Be 'rg-example'
-        ($h | ConvertTo-Json -Depth 8) | Should -Not -Match 'BEGIN OWNERSHIP'
+        $n1.managementAddressVerified | Should -BeTrue; $n1.managementAddressReason | Should -BeNullOrEmpty
+        $n1.biosRestored.Slot2 | Should -Be 'Enabled'
+        $n2 = $h.nodes | Where-Object name -EQ 'node-02'
+        $n2.managementAddressVerified | Should -BeFalse
+        $n2.managementAddressReason | Should -Be 'dhcp: the management port Port0 reports 192.0.2.200, the infrastructure file expects 192.0.2.12'
+        @($n2.biosRestored.PSObject.Properties).Count | Should -Be 0
+        $raw = Get-Content $r.HandoffPath -Raw
+        foreach ($gone in '"sbe"', '"bootstrap"', '"timestamps"', '"connectivity"', 'ipAddress', 'macAddress') { $raw | Should -Not -Match $gone -Because "the handoff carries only what Azure generated ($gone)" }
+        $raw | Should -Not -Match 'BEGIN OWNERSHIP'
+    }
+
+    It 'records a node without a Network result as not verified, and reads the results from state-file hashtables' {
+        $h = & $global:ztpH_run @{ ManagementAddressCheck = @(@{ node = 'node-01'; verified = $true; reason = $null }) }
+        ($h.nodes | Where-Object { $_.name -eq 'node-01' }).managementAddressVerified | Should -BeTrue
+        $two = $h.nodes | Where-Object { $_.name -eq 'node-02' }
+        $two.managementAddressVerified | Should -BeFalse
+        $two.managementAddressReason | Should -Be 'no Network stage result for this node'
+    }
+
+    It 'takes the installed build from the ProvisionOs job when the edge machine''s request has no resolved version' {
+        $m = $global:ztpH_ready | ConvertTo-Json -Depth 40 | ConvertFrom-Json -Depth 40
+        $m.properties.provisioningDetails.osProfile.vsrVersion = 'latest'
+        $global:ztpH_machines['node-01'] = $m
+        $h = & $global:ztpH_run @{ NodeName = @('node-01') }
+        $h.solution.vsrVersion | Should -Be '12.2609.1003.7'
     }
     It 'refuses to write a handoff while a machine is not ready to cluster, naming it' {
         $global:ztpH_machines['node-02'] = $global:ztpH_installing
@@ -88,36 +108,42 @@ Describe 'New-ZtpHandoff.ps1' {
 Describe 'Convert-ZtpHandoffToClusterInputs.ps1' {
     BeforeAll {
         $global:ztpH_handoff = Join-Path $TestDrive 'ztp-handoff.json'
+        [ordered]@{ schemaVersion = 2; solution = @{ vsrVersion = '12.2609.1003.7' }
+            nodes = @(@{ name = 'node-01'; arcMachineName = '00000000-0000-0000-0000-000000000000-1'; arcMachineResourceId = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1'; managementAddressVerified = $true }, @{ name = 'node-02'; arcMachineName = '11111111-1111-1111-1111-111111111111-1'; managementAddressVerified = $true }) } | ConvertTo-Json -Depth 6 | Set-Content $global:ztpH_handoff
+        # A handoff written before ZTP ended at Network (schema 1, with an sbe block).
+        $global:ztpH_handoffV1 = Join-Path $TestDrive 'ztp-handoff-v1.json'
         [ordered]@{ schemaVersion = 1; solution = @{ vsrVersion = '12.2609.1003.7' }
-            sbe = @{ oem = 'Dell'; version = '5.0.2606.1616'; family = '16G-45n0c-Intel'; publisher = 'Dell'; manifestSource = 'https://aka.ms/AzureStackSBEUpdate/DellEMC'; manifestCreationDate = '2026-06-24T05:58:20Z' }
-            nodes = @(@{ name = 'node-01'; arcMachineName = '00000000-0000-0000-0000-000000000000-1' }, @{ name = 'node-02'; arcMachineName = '11111111-1111-1111-1111-111111111111-1' }) } | ConvertTo-Json -Depth 6 | Set-Content $global:ztpH_handoff
+            sbe = @{ oem = 'Dell'; version = '5.0.2606.1616'; family = '16G-45n0c-Intel'; publisher = 'Dell' }
+            nodes = @(@{ name = 'node-01'; arcMachineName = '00000000-0000-0000-0000-000000000000-1' }, @{ name = 'node-02'; arcMachineName = '11111111-1111-1111-1111-111111111111-1' }) } | ConvertTo-Json -Depth 6 | Set-Content $global:ztpH_handoffV1
         $global:ztpH_convert = Join-Path $global:ztpH_scripts 'Convert-ZtpHandoffToClusterInputs.ps1'
     }
-    It 'emits the arc_machine_names map (host name -> Arc machine name), the sbe block and the release versions as YAML' {
+    It 'emits the arc_machine_names map (host name -> Arc machine name) and the installed solution version as YAML, and no SBE' {
         $y = & $global:ztpH_convert -HandoffPath $global:ztpH_handoff
         $y | Should -Match "(?m)^arc_machine_names:\r?\n  node-01: '?00000000-0000-0000-0000-000000000000-1'?\r?\n  node-02: '?11111111-1111-1111-1111-111111111111-1'?"
-        $y | Should -Match '(?m)^sbe:'; $y | Should -Match "  version: '?5.0.2606.1616'?"
-        $y | Should -Match "  manifest_creation_date: '2026-06-24T05:58:20Z'"; $y | Should -Match '  publisher: Dell'
-        $y | Should -Match "(?m)^release:\r?\n  azure_local_version: '?12.2609.1003.7'?"
+        $y | Should -Match "(?m)^release:\r?\n  azure_local_version: '?12.2609.1003.7'?$"
+        $y | Should -Not -Match '(?m)^sbe'
+    }
+    It 'reads a schema 1 handoff too, and ignores its sbe block' {
+        $y = & $global:ztpH_convert -HandoffPath $global:ztpH_handoffV1
+        $y | Should -Match '(?m)^arc_machine_names:'
+        $y | Should -Not -Match 'sbe'
     }
     It 'emits JSON that the cluster deployment inputs read (arc_machine_names is a map of strings)' {
         $j = & $global:ztpH_convert -HandoffPath $global:ztpH_handoff -Format Json -Only arc_machine_names | ConvertFrom-Json
         $j.arc_machine_names.'node-02' | Should -Be '11111111-1111-1111-1111-111111111111-1'
         $j.PSObject.Properties.Name | Should -Be @('arc_machine_names')
     }
-    It 'writes -OutputPath and leaves sbe empty when the handoff has none' {
-        $h = Get-Content $global:ztpH_handoff -Raw | ConvertFrom-Json; $h.PSObject.Properties.Remove('sbe'); $nosbe = Join-Path $TestDrive 'nosbe.json'; $h | ConvertTo-Json -Depth 6 | Set-Content $nosbe
+    It 'writes -OutputPath' {
         $out = Join-Path $TestDrive 'cluster/inputs.yaml'
-        $y = & $global:ztpH_convert -HandoffPath $nosbe -OutputPath $out
+        $y = & $global:ztpH_convert -HandoffPath $global:ztpH_handoff -OutputPath $out
         (Get-Content $out -Raw).TrimEnd() | Should -Be $y.TrimEnd()
-        $y | Should -Match '(?m)^sbe: \{\}'
     }
     It 'refuses a handoff without Arc names, with duplicates, or of another schema' {
         $bad = Get-Content $global:ztpH_handoff -Raw | ConvertFrom-Json; $bad.nodes[1].arcMachineName = ''; $p = Join-Path $TestDrive 'bad1.json'; $bad | ConvertTo-Json -Depth 6 | Set-Content $p
         { & $global:ztpH_convert -HandoffPath $p } | Should -Throw '*no Arc machine name*'
         $bad.nodes[1].arcMachineName = $bad.nodes[0].arcMachineName; $p2 = Join-Path $TestDrive 'bad2.json'; $bad | ConvertTo-Json -Depth 6 | Set-Content $p2
         { & $global:ztpH_convert -HandoffPath $p2 } | Should -Throw '*share one Arc machine name*'
-        $bad.schemaVersion = 2; $p3 = Join-Path $TestDrive 'bad3.json'; $bad | ConvertTo-Json -Depth 6 | Set-Content $p3
+        $bad.nodes[1].arcMachineName = 'node-02-arc'; $bad.schemaVersion = 3; $p3 = Join-Path $TestDrive 'bad3.json'; $bad | ConvertTo-Json -Depth 6 | Set-Content $p3
         { & $global:ztpH_convert -HandoffPath $p3 } | Should -Throw '*Unsupported handoff schemaVersion*'
         { & $global:ztpH_convert -HandoffPath (Join-Path $TestDrive 'missing.json') } | Should -Throw '*not found*'
     }
@@ -138,30 +164,24 @@ $p = Join-Path $CacheDirectory 'bootstrap/10.2610.0.3061/provision-os.iso'
 if ($Execute) { $null = New-Item -ItemType Directory (Split-Path $p) -Force; Set-Content $p 'iso' }
 [pscustomobject]@{ Version = '10.2610.0.3061'; Channel = 'GA'; IsoPath = $p; ManifestPath = "$p.json"; IsoSha256 = 'AB'; Planned = (-not $Execute) }
 '@
-        $sbe = @'
-[CmdletBinding()] param([string]$Oem, [string]$SolutionVersion, [string]$Model, [string]$Family, [string]$CacheDirectory, [string]$PackagePath, [switch]$Execute)
-$b = @{}; foreach ($k in $PSBoundParameters.Keys) { $b[$k] = $PSBoundParameters[$k] }; $global:ztpH_calls.Add([pscustomobject]@{ Script = 'sbe'; P = $b })
-[pscustomobject]@{ Oem = $Oem; Version = '5.0.2606.1616'; Status = 'ManualOrConnector'; StagingFolder = (Join-Path $CacheDirectory 'sbe/dell/5.0.2606.1616') }
-'@
         $img = @'
 [CmdletBinding(SupportsShouldProcess)] param([string]$SourcePath, [string[]]$NodeName, [string]$OutputDirectory, [string]$ImageNamePrefix, [securestring]$EdgeUserPassword, [switch]$Force, [switch]$Execute)
 $b = @{}; foreach ($k in $PSBoundParameters.Keys) { $b[$k] = $PSBoundParameters[$k] }; $global:ztpH_calls.Add([pscustomobject]@{ Script = 'img'; P = $b })
 if ($Execute) { foreach ($n in $NodeName) { $f = Join-Path $OutputDirectory "$ImageNamePrefix$n.img"; $null = New-Item -ItemType Directory $OutputDirectory -Force; Set-Content $f 'x'; [pscustomobject]@{ Node = $n; ImagePath = $f } } } else { "PLAN: $($NodeName -join ',')" }
 '@
-        Set-Content (Join-Path $global:ztpH_stubs 'Get-ZtpBootstrapIso.ps1') $iso; Set-Content (Join-Path $global:ztpH_stubs 'Get-ZtpSbe.ps1') $sbe; Set-Content (Join-Path $global:ztpH_stubs 'New-ZtpVirtualUsbImage.ps1') $img
+        Set-Content (Join-Path $global:ztpH_stubs 'Get-ZtpBootstrapIso.ps1') $iso; Set-Content (Join-Path $global:ztpH_stubs 'New-ZtpVirtualUsbImage.ps1') $img
         $global:ztpH_cfg = Join-Path $TestDrive 'cfg.json'
         @{ NodesFile = $global:ztpH_nodes; ImageDirectory = (Join-Path $TestDrive 'images'); BootstrapCacheDirectory = (Join-Path $TestDrive 'dl'); Oem = 'Dell'; SbeModel = 'AX760'; SbeSolutionVersion = '12.2609.1003.7'; MaxBootstrapTrain = '2610'; ShareHost = '192.0.2.10' } | ConvertTo-Json | Set-Content $global:ztpH_cfg
         $global:ztpH_prep = Join-Path $global:ztpH_scripts 'Invoke-ZtpPrepareMedia.ps1'
     }
     BeforeEach { $global:ztpH_calls.Clear(); Remove-Item (Join-Path $TestDrive 'images'), (Join-Path $TestDrive 'dl') -Recurse -Force -ErrorAction SilentlyContinue }
-    It 'plans by default from the config alone: resolves, selects the SBE, plans the images, writes nothing' {
+    It 'plans by default from the config alone: resolves, plans the images, selects no SBE, writes nothing' {
         # The plan lines come first; the result object is the last output.
         $r = @(& $global:ztpH_prep -ConfigPath $global:ztpH_cfg -StageScriptRoot $global:ztpH_stubs -InformationAction SilentlyContinue -WarningAction SilentlyContinue)[-1]
         $r.Planned | Should -BeTrue
-        @($global:ztpH_calls | ForEach-Object Script) | Should -Be @('iso', 'sbe')
+        @($global:ztpH_calls | ForEach-Object Script) | Should -Be @('iso') -Because 'the config''s SbeModel is ignored: no SBE in ZTP'
         ($global:ztpH_calls | Where-Object Script -EQ 'iso').P.ContainsKey('Execute') | Should -BeFalse
         ($global:ztpH_calls | Where-Object Script -EQ 'iso').P.MaxTrain | Should -Be '2610'
-        ($global:ztpH_calls | Where-Object Script -EQ 'sbe').P.Model | Should -Be 'AX760'
         Test-Path (Join-Path $TestDrive 'images') | Should -BeFalse
     }
     It 'plans the image stage with its own script once the ISO is on disk' {
@@ -172,7 +192,7 @@ if ($Execute) { foreach ($n in $NodeName) { $f = Join-Path $OutputDirectory "$Im
         $global:ztpH_calls[0].P.ContainsKey('Execute') | Should -BeFalse
         $out | Should -Contain 'PLAN: node-01,node-02'
     }
-    It 'with -Execute downloads, selects the SBE, builds an image per node from that ISO and verifies each image' {
+    It 'with -Execute downloads, builds an image per node from that ISO and verifies each image' {
         function global:Test-ZtpMediaImage { param([string]$Path) [pscustomobject]@{ Path = $Path; Size = 4GB; Gpt = $true; Label = 'CDROM'; Missing = @(); Valid = $true } }
         try {
             $r = & $global:ztpH_prep -ConfigPath $global:ztpH_cfg -StageScriptRoot $global:ztpH_stubs -Execute -InformationAction SilentlyContinue -WarningAction SilentlyContinue
@@ -181,7 +201,7 @@ if ($Execute) { foreach ($n in $NodeName) { $f = Join-Path $OutputDirectory "$Im
         $r.Planned | Should -BeFalse; @($r.Images).Count | Should -Be 2
         $img = $global:ztpH_calls | Where-Object Script -EQ 'img'
         $img.P.SourcePath | Should -Be $r.IsoPath; $img.P.NodeName | Should -Be @('node-01', 'node-02'); $img.P.Execute | Should -BeTrue
-        ($r.Sbe).Version | Should -Be '5.0.2606.1616'
+        $r.PSObject.Properties.Name | Should -Not -Contain 'Sbe'
         Test-Path (Join-Path $TestDrive 'images/ztp-usb-node-02.img') | Should -BeTrue
     }
     It 'fails when an image does not pass the read-back check' {

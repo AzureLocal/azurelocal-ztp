@@ -8,7 +8,7 @@ Microsoft publishes the maintenance environment as https://aka.ms/aep/installero
 301 to a blob on download.prss.microsoft.com; an unpublished month answers with a 302 to a search page. The blob is either a
 zip (usb_prep.exe, provision-os.iso, readme.txt) or, for older trains, provision-os.iso itself. Microsoft publishes no hash
 for it, so integrity is trust-on-first-use: the SHA256 of the first good download is recorded in a manifest and checked
-on every reuse (see docs/bootstrap-media-and-sbe.md for what that does and does not protect against).
+on every reuse (see docs/bootstrap-media.md for what that does and does not protect against).
 Everything that touches the network goes through Invoke-ZtpHttp (ZtpHttp.Transport.ps1: one seam; the tests mock it). No secrets are involved.
 #>
 Set-StrictMode -Version Latest

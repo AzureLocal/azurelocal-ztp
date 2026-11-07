@@ -14,8 +14,12 @@
     (Set-ZtpManagementAddress.ps1) checks each static management address on the port with the node's management MAC
     through Azure's per-NIC API and moves it there if needed. The Restore stage sets the BIOS values that were changed for
     the install only (bios_during_provisioning) back, restarts the node and waits until it is Connected again. ZTP ends
-    at the Handoff: OEM drivers, the SBE, DNS, time and the deployment admin are OS configuration (azurelocal-toolkit
-    Phase 03), which comes next. The SBE settings (hardware.sbe, ztp.node_preparation) are accepted and ignored.
+    at the Handoff: each machine is Provisioned in Azure and Arc-connected, with its management address on the management
+    port. OEM drivers, the SBE in C:\SBE, DHCP off on the other ports, DNS and time on the host, and the deployment admin
+    are OS configuration (azurelocal-toolkit Phase 03), which comes next, before Validate and Deploy:
+    https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/. The provisioned OS
+    names the ports Port0 to Port6, so find them by MAC there. The SBE settings (hardware.sbe, ztp.node_preparation) are
+    accepted and ignored.
 
     Without -Execute it writes the generated files and shows ZTP's plan. Nothing changes in Azure or on a node.
     With -Execute it REINSTALLS the named nodes. Run it elevated, because it creates the share, a local account and a
@@ -31,7 +35,7 @@
     Stage to resume from: Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Restore or Handoff (each runs with every
     later one).
 .PARAMETER MediaPath
-    Where the maintenance ISO, node images (about 4 GB each), vouchers, unpacked drivers and run state are kept. Overrides
+    Where the maintenance ISO, node images (about 4 GB each), vouchers and run state are kept. Overrides
     ztp.media_path; without either, %ProgramData%\AzureLocalZtp\<ztp.site_name>\media. Refused inside a git working tree;
     created when missing.
 .PARAMETER EvidencePath
@@ -71,8 +75,8 @@ Import-Module powershell-yaml
 $env:PATH = "$env:PATH;$(Join-Path $HOME '.azure\bin')"
 
 # The environment file must hold every key this script reads, and then pass the optional external validator, before anything runs.
-$env_ = Read-ZtpInfrastructure -Path $InfrastructureFile -For Provision
-Assert-ZtpEnvironment -Environment $env_ -For Provision -Source $InfrastructureFile
+$env_ = Read-ZtpInfrastructure -Path $InfrastructureFile
+Assert-ZtpEnvironment -Environment $env_ -Source $InfrastructureFile
 $validator = if ($ValidatorPath) { $ValidatorPath } else { Join-Path (Split-Path (Resolve-Path -LiteralPath $InfrastructureFile)) 'tools\Validate-Infrastructure.ps1' }
 if (Test-Path -LiteralPath $validator) {
     $global:LASTEXITCODE = 0

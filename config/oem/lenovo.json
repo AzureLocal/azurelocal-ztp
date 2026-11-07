@@ -2,12 +2,6 @@
   "oem": "Lenovo",
   "displayName": "Lenovo ThinkAgile MX (XClarity Controller)",
   "publisher": "Lenovo",
-  "sbe": {
-    "discoveryManifestUrl": "https://aka.ms/AzureStackSBEUpdate/Lenovo",
-    "releaseNotesUrl": null,
-    "downloadMethod": "vendor-connector",
-    "note": "Discovery manifest resolves (verified); package URIs are empty like Dell's."
-  },
   "bmc": {
     "kind": "xcc",
     "managerId": "1",

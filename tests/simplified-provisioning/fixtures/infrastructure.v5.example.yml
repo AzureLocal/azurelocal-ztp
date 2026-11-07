@@ -2,7 +2,7 @@
 # in the master layout (azurelocal-toolkit config/infrastructure). Two nodes with six ports each: management on the two
 # onboard LOMs (access ports, static), compute and the maintenance environment's way to Azure on two ConnectX ports,
 # storage on the other two. Placeholder values only: documentation addresses (RFC 5737), all-zero GUIDs and example
-# names. The SBE folder is replaced by the tests with a folder in TestDrive.
+# names. hardware.sbe is for OS configuration and deployment; ZTP doesn't read it.
 _metadata:
   schema_version: "5.2.0"
 
@@ -64,7 +64,7 @@ hardware:
   vendor: "Contoso"
   model: "AX-760"
   bmc: { username: "keyvault://kv-example/bmc-username", password: "keyvault://kv-example/bmc-password" }
-  sbe: { bundle_path: "__SBE_BUNDLE__" }
+  sbe: { bundle_path: "D:/example/sbe" }
 
 networking:
   management:

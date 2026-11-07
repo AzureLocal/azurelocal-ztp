@@ -20,8 +20,9 @@ resource per NIC of a provisioned edge machine, and this script uses it to move 
 3. dhcp, dhcp_reservation, preconfigured: nothing changes; the management adapter's reported state is shown.
 Without -Execute only reads: it prints what it would do (PLAN: lines) and returns one row per node. With -Execute each
 change is appended to -ChangeLogPath (JSON lines: time, node, adapter, MAC, action, before, after, phase, job status),
-and the progress goes to -EventLogPath (stage Network), which monitors follow. Prepare (Initialize-ZtpNode.ps1) checks
-the same address in the OS and changes nothing that is already right.
+and the progress goes to -EventLogPath (stage Network), which monitors follow. Each row carries ExpectedAddress (the
+parameters file's ip_address), so the orchestrator can record for the handoff whether the management port carries it.
+This is ZTP's last change to a node; OS configuration (drivers, DHCP off on the other ports, DNS, time) comes after it.
 Sign in first (Connect-AzAccount). The edge machine is named after the node, as bicep/main.bicep names it.
 .PARAMETER SubscriptionId
 Subscription of the edge machines (for example 00000000-0000-0000-0000-000000000000).
@@ -185,7 +186,7 @@ $failed = [System.Collections.Generic.List[string]]::new()
 foreach ($n in $selected) {
     $name = [string]$n['name']
     $mgmt = Get-ZtpPropertyValue $n 'management'
-    $row = [ordered]@{ Node = $name; Mode = ''; Status = ''; Adapter = ''; AdapterName = ''; MacAddress = ''; Address = ''; Released = @(); Changes = @() }
+    $row = [ordered]@{ Node = $name; Mode = ''; Status = ''; Adapter = ''; AdapterName = ''; MacAddress = ''; Address = ''; ExpectedAddress = ''; Released = @(); Changes = @() }
     try {
         if ($null -eq $mgmt) {
             Write-ZtpLog "${name}: no management block in the parameters file; the Network stage leaves its adapters alone."
@@ -201,6 +202,7 @@ foreach ($n in $selected) {
         $macKey = ConvertTo-ZtpMacKey ([string](Get-ZtpPropertyValue $mgmt 'mac_address' ''))
         $row.MacAddress = Format-ZtpMac $macKey
         $ip = [string](Get-ZtpPropertyValue $mgmt 'ip_address' '')
+        $row.ExpectedAddress = $ip
 
         if ($mode -ne 'static') {
             if (-not $macKey) {

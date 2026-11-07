@@ -4,8 +4,6 @@
   "BootstrapVersion": "latest",
   "IncludePreview": false,
   "Oem": "Dell",
-  "SbeModel": "AX760",
-  "SbeSolutionVersion": "latest",
   "NodesFile": "./config/simplified-provisioning/nodes.json",
   "ImageDirectory": "D:/ZtpVirtualUsb",
   "ImageNamePrefix": "ztp-usb-",

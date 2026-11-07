@@ -1,7 +1,7 @@
 #Requires -Version 7.0
 #Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.5.0'; MaximumVersion = '5.99.99' }, powershell-yaml
-# The environment-file layer: ZtpEnvironment.Common.ps1 (parsing, key checks, node selection, SBE folder and SHA-256 check),
-# and the plan mode of Invoke-ZtpEnvironment.ps1 and Initialize-ZtpNode.ps1 (no -Execute against Azure or a node). Both scripts
+# The environment-file layer: ZtpEnvironment.Common.ps1 (parsing, key checks, node selection, schema 5 mapping),
+# and the plan mode of Invoke-ZtpEnvironment.ps1 (no -Execute against Azure or a node). The script
 # run from copies in a throw-away repository layout in TestDrive, beside stub stage scripts and stub Az/WinRM commands, so
 # nothing touches Azure, a node, a BMC or the real config folders. The environment file is fixtures/environment.example.yml
 # (placeholder values only); the SBE is a tiny synthetic zip with a driver INF in it.
@@ -25,7 +25,6 @@ BeforeAll {
     # Stub commands: they shadow the real Az and WinRM cmdlets for the scripts run below and record what was asked of them.
     $global:ztpE_calls = [System.Collections.Generic.List[string]]::new()
     $global:ztpE_runs = [System.Collections.Generic.List[object]]::new()
-    $global:ztpE_signature = 'Valid'
     function Connect-AzAccount { [CmdletBinding()] param([switch]$Identity) $global:ztpE_calls.Add('Connect-AzAccount') }
     function Set-AzContext { [CmdletBinding()] param($Tenant, $Subscription, $Scope) $global:ztpE_calls.Add("Set-AzContext $Subscription") }
     function Get-AzADServicePrincipal { [CmdletBinding()] param($ApplicationId) $global:ztpE_calls.Add('Get-AzADServicePrincipal'); [pscustomobject]@{ Id = '00000000-0000-0000-0000-000000000009' } }
@@ -38,34 +37,11 @@ BeforeAll {
         [pscustomobject]@{ SecretValue = (ConvertTo-SecureString 'Example-Not-A-Secret-1' -AsPlainText -Force) }
     }
     function Get-NetIPAddress { [CmdletBinding()] param($AddressFamily, $InterfaceAlias) [pscustomobject]@{ IPAddress = '192.0.2.77' } }
-    function New-PSSession { [CmdletBinding()] param($ComputerName, [pscredential]$Credential, $Authentication) $global:ztpE_calls.Add("New-PSSession $ComputerName"); [pscustomobject]@{ ComputerName = $ComputerName } }
-    function Remove-PSSession { [CmdletBinding()] param($Session) }
-    function Invoke-Command { [CmdletBinding()] param($Session, $ScriptBlock, $ArgumentList) $global:ztpE_nodeState }
-    function Get-AuthenticodeSignature { [CmdletBinding()] param($LiteralPath) [pscustomobject]@{ Status = $global:ztpE_signature } }
-
-    function New-TestSbe {
-        # An SBE folder: SBE_<name>.zip with one network driver INF, its <name>.xml and SBE_Discovery_Contoso.xml. -HashInManifest overrides the published hash.
-        param([Parameter(Mandatory)][string]$Dir, [string]$Name = 'SBE_Contoso_1.0.0.0', [string]$HashInManifest, [string]$ManifestName = $Name)
-        $null = New-Item -ItemType Directory -Force -Path $Dir
-        $tree = Join-Path $TestDrive "sbe-tree-$([guid]::NewGuid().ToString('N'))"
-        $nic = Join-Path $tree 'Drivers/Network/nicA'
-        $null = New-Item -ItemType Directory -Force -Path $nic
-        Set-Content -LiteralPath (Join-Path $nic 'nic.inf') -Value "[Version]`nDriverVer = 01/02/2026,1.2.3.4`n[Models]`n%NicA% = Install, PCI\VEN_8086&DEV_1572&SUBSYS_00000000"
-        Set-Content -LiteralPath (Join-Path $nic 'nic.cat') -Value 'catalog'
-        Set-Content -LiteralPath (Join-Path $tree 'unrelated.txt') -Value 'outside the driver folders'
-        $zip = Join-Path $Dir "$Name.zip"
-        [IO.Compression.ZipFile]::CreateFromDirectory($tree, $zip)
-        $hash = if ($HashInManifest) { $HashInManifest } else { (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash }
-        Set-Content -LiteralPath (Join-Path $Dir "$Name.xml") -Value '<package />'
-        Set-Content -LiteralPath (Join-Path $Dir 'SBE_Discovery_Contoso.xml') -Value "<SBEUpdatesManifest><ApplicableUpdate Version=`"1.0.0.0`" Type=`"SBE`"><UpdateInfo><UpdateName>$ManifestName</UpdateName><PackageHash>$hash</PackageHash></UpdateInfo></ApplicableUpdate></SBEUpdatesManifest>"
-        $Dir
-    }
 
     function New-TestEnvironment {
         # Writes the fixture to TestDrive with the SBE folder filled in; -Edit receives the parsed file to change before it is written.
-        param([Parameter(Mandatory)][string]$Name, [string]$Sbe = 'C:\unused', [scriptblock]$Edit)
+        param([Parameter(Mandatory)][string]$Name, [scriptblock]$Edit)
         $e = Read-ZtpEnvironmentFile -Path $script:fixture
-        $e.ztp.node_preparation.sbe_bundle = $Sbe
         # Run data in TestDrive, one folder per case: never in the repository, never in the real ProgramData.
         $e.ztp.media_path = Join-Path $TestDrive "data-$Name/media"
         $e.ztp.evidence_path = Join-Path $TestDrive "data-$Name/evidence"
@@ -78,9 +54,8 @@ BeforeAll {
     $script:fixtureV5 = Join-Path $PSScriptRoot 'fixtures/infrastructure.v5.example.yml'
     function New-TestInfrastructureV5 {
         # Writes the schema 5 fixture to TestDrive with the SBE folder and run-data folders filled in; -Edit changes it first.
-        param([Parameter(Mandatory)][string]$Name, [string]$Sbe = 'C:\unused', [scriptblock]$Edit)
+        param([Parameter(Mandatory)][string]$Name, [scriptblock]$Edit)
         $d = ConvertFrom-Yaml (Get-Content -LiteralPath $script:fixtureV5 -Raw) -Ordered
-        $d.hardware.sbe.bundle_path = $Sbe
         $d.provisioning.simplified['media_path'] = Join-Path $TestDrive "data-$Name/media"
         $d.provisioning.simplified['evidence_path'] = Join-Path $TestDrive "data-$Name/evidence"
         if ($Edit) { & $Edit $d }
@@ -91,7 +66,7 @@ BeforeAll {
 
     function New-TestRepo {
         # A copy of the script layout (scripts/simplified-provisioning, config/oem) the scripts resolve their default paths against.
-        param([Parameter(Mandatory)][string]$Name, [string[]]$Copy, [string]$OemJson = '{ "oem": "Contoso", "sbe": { "driverPaths": [ "Drivers/Network" ] } }')
+        param([Parameter(Mandatory)][string]$Name, [string[]]$Copy, [string]$OemJson = '{ "oem": "Contoso", "publisher": "Contoso", "bmc": { "kind": "example", "logServices": [] } }')
         $root = Join-Path $TestDrive $Name
         $bin = Join-Path $root 'scripts/simplified-provisioning'
         $null = New-Item -ItemType Directory -Force -Path $bin, (Join-Path $root 'config/oem')
@@ -107,17 +82,6 @@ BeforeAll {
         Get-StepText $out
     }
 
-    # Initialize-ZtpNode.ps1 beside a stub Azure layer.
-    $script:initRoot = New-TestRepo -Name 'init-repo' -Copy 'Initialize-ZtpNode.ps1', 'ZtpEnvironment.Common.ps1', 'ZtpEvents.Common.ps1'
-    $script:init = Join-Path $script:initRoot 'scripts/simplified-provisioning/Initialize-ZtpNode.ps1'
-    Set-Content -LiteralPath (Join-Path $script:initRoot 'scripts/simplified-provisioning/ZtpAzure.Common.ps1') -Value @'
-function Invoke-ZtpArm { [CmdletBinding()] param($Method, $Path, [switch]$AllowNotFound) $null }
-function Get-ZtpEdgeMachineStatus { [CmdletBinding()] param($Name, $Machine, $Job) $global:ztpE_azureStatus }
-'@
-    $script:readyStatus = [pscustomobject]@{ Lifecycle = 'ReadyToCluster'; JobStatus = 'Succeeded'; Connectivity = 'Connected'; CurrentStage = ''; Ready = $true; Failed = $false; FailureReason = '' }
-    $port1 = [pscustomobject]@{ Name = 'Port 1'; Mac = '02-00-00-00-00-11'; Description = 'Example NIC'; Driver = '1.0.0.0'; Status = 'Up'; Id = 'PCI\VEN_8086&DEV_1572'; Addresses = @('192.0.2.200/24 Dhcp'); Gateway = $true; Dhcp = 'Enabled' }
-    $port2 = [pscustomobject]@{ Name = 'Port 2'; Mac = '02-00-00-00-00-99'; Description = 'Example NIC'; Driver = '1.0.0.0'; Status = 'Up'; Id = 'PCI\VEN_8086&DEV_1572'; Addresses = @('192.0.2.201/24 Dhcp'); Gateway = $true; Dhcp = 'Enabled' }
-    $script:nodeState = [pscustomobject]@{ Host = 'EXAMPLEHOST'; Adapters = @($port1, $port2); Mgmt = $port1; Dns = @(); SbeFiles = @(); SbeHash = ''; Admin = $false; Time = 'Local CMOS Clock'; Booted = '2026-01-01T00:00:00.0000000Z'; RebootPending = $false }
 }
 AfterAll { Get-Variable -Scope Global -Name 'ztpE_*' -ErrorAction SilentlyContinue | Remove-Variable -Scope Global -Force -ErrorAction SilentlyContinue }
 
@@ -140,10 +104,9 @@ Describe 'Reading the environment file' {
 }
 
 Describe 'Checking the environment file' {
-    It 'accepts the example file for both scripts' {
+    It 'accepts the example file' {
         $e = Read-ZtpEnvironmentFile -Path $script:fixture
-        @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
-        @(Test-ZtpEnvironment -Environment $e -For Prepare).Count | Should -Be 0
+        @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0
         { Assert-ZtpEnvironment -Environment $e } | Should -Not -Throw
     }
     It 'reports <Expect> when <Case>' -ForEach @(
@@ -159,8 +122,6 @@ Describe 'Checking the environment file' {
         @{ Case = 'the gateway is missing'; Edit = { param($e) $e.network_intents.management.Remove('gateway') }; Expect = 'network_intents.management.gateway is required' }
         @{ Case = 'DNS servers are not a list'; Edit = { param($e) $e.network_intents.management.dns_servers = '192.0.2.53' }; Expect = 'dns_servers must be a non-empty list' }
         @{ Case = 'a DNS server is not an address'; Edit = { param($e) $e.network_intents.management.dns_servers = @('dns.example.com') }; Expect = "has 'dns.example.com'" }
-        @{ Case = 'the deployment admin is a built-in account'; Edit = { param($e) $e.credentials.local_admin_username = 'Administrator' }; Expect = "can't be the built-in account" }
-        @{ Case = 'the deployment secret is not a Key Vault reference'; Edit = { param($e) $e.credentials.local_admin_password_secret = 'plaintext' }; Expect = 'must be keyvault://<vault>/<secret>' }
         @{ Case = 'the subscription is not a GUID'; Edit = { param($e) $e.ztp.subscription_id = 'sub' }; Expect = 'ztp.subscription_id must be a GUID' }
         @{ Case = 'the admin secret has no vault'; Edit = { param($e) $e.ztp.admin_secret.Remove('vault') }; Expect = 'ztp.admin_secret.vault is required' }
         @{ Case = 'no share host is given'; Edit = { param($e) $e.ztp.Remove('share_host') }; Expect = 'ztp.share_host or ztp.share_host_adapter is required' }
@@ -192,28 +153,36 @@ Describe 'Checking the environment file' {
     ) {
         $e = Read-ZtpEnvironmentFile -Path $script:fixture
         & $Edit $e
-        $problems = @(Test-ZtpEnvironment -Environment $e -For Provision)
+        $problems = @(Test-ZtpEnvironment -Environment $e)
         # Contains, not -BeLike: the node labels hold [ ].
         ($problems -join "`n").Contains($Expect) | Should -BeTrue -Because "the problems were: $($problems -join '; ')"
     }
-    It 'accepts a share host adapter instead of a share host, and leaves NTP, tags and the resource provider ID optional' {
+    It 'accepts a share host adapter instead of a share host, and leaves tags and the resource provider ID optional' {
         $e = Read-ZtpEnvironmentFile -Path $script:fixture
         $e.ztp.Remove('share_host'); $e.ztp.share_host_adapter = 'Ethernet 2'
-        $e.ztp.Remove('tags'); $e.ztp.Remove('azl_rp_object_id'); $e.onprem.Remove('ntp_servers')
-        @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
+        $e.ztp.Remove('tags'); $e.ztp.Remove('azl_rp_object_id')
+        @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0
     }
-    It 'accepts a file without the SBE for provisioning, ignores one that carries it with a one-line note, and still needs it for the standalone Prepare' {
+    It 'accepts a file without the SBE, and ignores one that carries it with a one-line note' {
         $e = Read-ZtpEnvironmentFile -Path $script:fixture
         $e.ztp.node_preparation['allow_unvalidated_sbe'] = 'not a boolean'
-        @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
+        @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0
         @(Get-ZtpEnvironmentNote -Environment $e) | Should -Be @('ztp.node_preparation ignored: SBE belongs to OS configuration.')
         $info = $null
         Assert-ZtpEnvironment -Environment $e -InformationVariable info -InformationAction SilentlyContinue
         @($info | ForEach-Object { [string]$_.MessageData }) | Should -Contain 'Note: ztp.node_preparation ignored: SBE belongs to OS configuration.'
         $e.ztp.Remove('node_preparation')
-        @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
+        @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0
         @(Get-ZtpEnvironmentNote -Environment $e).Count | Should -Be 0
-        (@(Test-ZtpEnvironment -Environment $e -For Prepare) -join "`n") | Should -BeLike '*ztp.node_preparation.sbe_bundle is required*'
+    }
+    It 'needs none of the OS configuration settings: the deployment admin, NTP, the other ports or the hardware model' {
+        $e = Read-ZtpEnvironmentFile -Path $script:fixture
+        $e.Remove('credentials'); $e.Remove('onprem'); $e.hardware.Remove('model'); $e.ztp.Remove('node_preparation')
+        @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0
+        # A file can still carry them, with any value: ZTP doesn't read them.
+        $e['credentials'] = [ordered]@{ local_admin_username = 'Administrator'; local_admin_password_secret = 'plaintext' }
+        $e.cluster_nodes[0]['network_adapters'] = 'not a list'
+        @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0
     }
     It 'accepts static_method device or site and the provisioning DHCP range, and leaves both optional' {
         $e = Read-ZtpEnvironmentFile -Path $script:fixture
@@ -221,17 +190,17 @@ Describe 'Checking the environment file' {
         foreach ($m in 'device', 'site', 'SITE') {
             $e.network_intents.management['static_method'] = $m
             Get-ZtpStaticMethod -Environment $e | Should -Be $m.ToLowerInvariant()
-            @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0 -Because "$m is valid"
+            @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0 -Because "$m is valid"
         }
         $e.network_intents.management['provisioning_dhcp_range'] = [ordered]@{ start = '192.0.2.100'; end = '192.0.2.250' }
-        @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
+        @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0
     }
     It 'merges the provisioning-only BIOS values over the final ones for Boot, and keeps them apart' {
         $e = Read-ZtpEnvironmentFile -Path $script:fixture
         $e.hardware['bios'] = [ordered]@{ Slot2 = 'Enabled'; EmbNic1Nic2 = 'Enabled' }
         $e.hardware['bios_during_provisioning'] = [ordered]@{ Slot2 = 'Disabled' }
         $e.cluster_nodes[1]['bios_during_provisioning'] = [ordered]@{ Slot3 = 'Disabled' }
-        @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
+        @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0
         $n2 = $e.cluster_nodes[1]
         $boot = Get-ZtpEnvironmentBios -Environment $e -Node $n2 -Kind boot
         @($boot.Keys | ForEach-Object { "$_=$($boot[$_])" }) | Should -Be @('Slot2=Disabled', 'EmbNic1Nic2=Enabled', 'Slot3=Disabled')
@@ -239,12 +208,6 @@ Describe 'Checking the environment file' {
         @($final.Keys | ForEach-Object { "$_=$($final[$_])" }) | Should -Be @('Slot2=Enabled', 'EmbNic1Nic2=Enabled')
         $during = Get-ZtpEnvironmentBios -Environment $e -Node $n2 -Kind provisioning
         @($during.Keys | ForEach-Object { "$_=$($during[$_])" }) | Should -Be @('Slot2=Disabled', 'Slot3=Disabled')
-    }
-    It 'checks only what Initialize-ZtpNode.ps1 reads for Prepare, so provisioning-only keys can be missing' {
-        $e = Read-ZtpEnvironmentFile -Path $script:fixture
-        $e.Remove('azure_resources'); $e.Remove('site'); $e.ztp.Remove('share_name'); $e.ztp.Remove('bmc_secret'); $e.cluster_nodes[0].Remove('service_tag')
-        @(Test-ZtpEnvironment -Environment $e -For Prepare).Count | Should -Be 0
-        @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -BeGreaterThan 3
     }
     It 'names every problem at once, with the count and the file' {
         $e = Read-ZtpEnvironmentFile -Path $script:fixture
@@ -266,13 +229,13 @@ Describe 'Management address and Arc name settings' {
         foreach ($m in 'static', 'dhcp', 'preconfigured', 'DHCP') {
             $e.network_intents.management.ip_assignment = $m
             Get-ZtpManagementAssignment -Environment $e | Should -Be $m.ToLowerInvariant()
-            @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0 -Because "$m is a valid mode"
+            @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0 -Because "$m is a valid mode"
         }
     }
     It 'accepts an Arc machine name, an adapter name and a VLAN, and leaves them optional' {
         $e = Read-ZtpEnvironmentFile -Path $script:fixture
         $e.cluster_nodes[0].arc_machine_name = 'node-01'; $e.cluster_nodes[0].adapter_name = 'SLOT 3 Port 1'; $e.network_intents.management.vlan_id = 711
-        @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
+        @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0
     }
     It 'sets the site network to Automatic for static addresses by default: the Device stage sets them, by MAC' {
         $e = Read-ZtpEnvironmentFile -Path $script:fixture
@@ -303,7 +266,7 @@ Describe 'Management address and Arc name settings' {
         $site = Get-ZtpSiteNetwork -Environment $e
         $site.Range | Should -Be '192.0.2.10-192.0.2.19'
         $site.Ipv4.vLanId | Should -Be 0
-        @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
+        @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0
     }
     It 'sets the site network to Automatic, with no ipv4, for <_>' -ForEach @('dhcp', 'preconfigured') {
         $e = Read-ZtpEnvironmentFile -Path $script:fixture
@@ -313,14 +276,14 @@ Describe 'Management address and Arc name settings' {
         @($site.Ipv4.Keys).Count | Should -Be 0
         # With DHCP the range isn't checked: the addresses come from the DHCP server.
         $e.network_intents.management['site_ip_range'] = [ordered]@{ start = '192.0.2.11'; end = '192.0.2.11' }
-        @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
+        @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0
     }
     It 'accepts provisioning_network dhcp quietly and warns about static, which ZTP cannot set' {
         $e = Read-ZtpEnvironmentFile -Path $script:fixture
         $e.network_intents.management['provisioning_network'] = 'dhcp'
         @(Get-ZtpEnvironmentWarning -Environment $e).Count | Should -Be 0
         $e.network_intents.management['provisioning_network'] = 'static'
-        @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
+        @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0
         (Get-ZtpEnvironmentWarning -Environment $e) | Should -BeLike '*provisioning_network is static*Configurator app*open research item*'
         $warnings = $null
         Assert-ZtpEnvironment -Environment $e -WarningVariable warnings -WarningAction SilentlyContinue
@@ -348,199 +311,13 @@ Describe 'Choosing the nodes' {
     }
 }
 
-Describe 'The SBE folder and its SHA-256' {
-    It 'finds the zip, its XML and the discovery XML' {
-        $b = Get-ZtpSbeBundle -Path (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-ok'))
-        $b.Name | Should -Be 'SBE_Contoso_1.0.0.0'
-        $b.Files.Name | Should -Be @('SBE_Contoso_1.0.0.0.zip', 'SBE_Contoso_1.0.0.0.xml', 'SBE_Discovery_Contoso.xml')
-    }
-    It 'says what is wrong with the folder' {
-        { Get-ZtpSbeBundle -Path (Join-Path $TestDrive 'no-such-folder') } | Should -Throw "*doesn't exist*"
-        $none = Join-Path $TestDrive 'sbe-none'; $null = New-Item -ItemType Directory -Path $none
-        { Get-ZtpSbeBundle -Path $none } | Should -Throw '*Expected one SBE_*.zip*found 0*'
-        $two = New-TestSbe -Dir (Join-Path $TestDrive 'sbe-two'); Copy-Item (Join-Path $two 'SBE_Contoso_1.0.0.0.zip') (Join-Path $two 'SBE_Contoso_2.0.0.0.zip')
-        { Get-ZtpSbeBundle -Path $two } | Should -Throw '*found 2*'
-        $noXml = New-TestSbe -Dir (Join-Path $TestDrive 'sbe-no-xml'); Remove-Item (Join-Path $noXml 'SBE_Contoso_1.0.0.0.xml')
-        { Get-ZtpSbeBundle -Path $noXml } | Should -Throw '*needs SBE_Contoso_1.0.0.0.zip, SBE_Contoso_1.0.0.0.xml and the SBE_Discovery_*.xml*'
-        $noDiscovery = New-TestSbe -Dir (Join-Path $TestDrive 'sbe-no-discovery'); Remove-Item (Join-Path $noDiscovery 'SBE_Discovery_Contoso.xml')
-        { Get-ZtpSbeBundle -Path $noDiscovery } | Should -Throw '*SBE_Discovery_*.xml*'
-    }
-    It "passes when the zip matches the package's own discovery XML" {
-        $b = Get-ZtpSbeBundle -Path (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-hash-ok'))
-        $r = Test-ZtpSbeHash -Bundle $b
-        $r.Hash | Should -Be (Get-FileHash -LiteralPath $b.Zip.FullName -Algorithm SHA256).Hash
-        $r.Source | Should -Be 'SBE_Discovery_Contoso.xml'
-    }
-    It 'rejects a zip whose hash differs from the published one, naming both' {
-        $b = Get-ZtpSbeBundle -Path (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-hash-bad') -HashInManifest ('AB' * 32))
-        { Test-ZtpSbeHash -Bundle $b } | Should -Throw "*SBE_Contoso_1.0.0.0.zip has SHA-256 *; SBE_Discovery_Contoso.xml says $('AB' * 32)*"
-    }
-    It 'rejects a manifest that does not list the SBE or is not a discovery manifest' {
-        $b = Get-ZtpSbeBundle -Path (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-hash-other') -ManifestName 'SBE_Contoso_9.9.9.9')
-        { Test-ZtpSbeHash -Bundle $b } | Should -Throw "*SBE_Contoso_1.0.0.0 isn't in SBE_Discovery_Contoso.xml*"
-        Set-Content -LiteralPath (Join-Path $b.Files[2].DirectoryName 'SBE_Discovery_Contoso.xml') -Value '<html />'
-        { Test-ZtpSbeHash -Bundle $b } | Should -Throw "*isn't an SBE discovery manifest*"
-        Set-Content -LiteralPath (Join-Path $b.Files[2].DirectoryName 'SBE_Discovery_Contoso.xml') -Value 'not xml <'
-        { Test-ZtpSbeHash -Bundle $b } | Should -Throw "*isn't valid XML*"
-    }
-    It "reads the OEM's published manifest when given a URL, and falls back to the package's XML when it can't" {
-        $b = Get-ZtpSbeBundle -Path (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-hash-url') -HashInManifest ('CD' * 32))
-        $good = (Get-FileHash -LiteralPath $b.Zip.FullName -Algorithm SHA256).Hash
-        Mock Invoke-WebRequest { [pscustomobject]@{ Content = "<SBEUpdatesManifest><ApplicableUpdate><UpdateInfo><UpdateName>SBE_Contoso_1.0.0.0</UpdateName><PackageHash>$($good.ToLowerInvariant())</PackageHash></UpdateInfo></ApplicableUpdate></SBEUpdatesManifest>" } }
-        (Test-ZtpSbeHash -Bundle $b -ManifestUrl 'https://example.invalid/manifest.xml').Source | Should -Be 'https://example.invalid/manifest.xml'
-        Mock Invoke-WebRequest { throw 'offline' }
-        { Test-ZtpSbeHash -Bundle $b -ManifestUrl 'https://example.invalid/manifest.xml' -WarningAction SilentlyContinue } | Should -Throw "*SBE_Discovery_Contoso.xml says $('CD' * 32)*"
-    }
-}
-
-Describe 'Initialize-ZtpNode.ps1 plan' {
-    BeforeEach {
-        $global:ztpE_calls.Clear()
-        $global:ztpE_azureStatus = $script:readyStatus
-        $global:ztpE_nodeState = $script:nodeState
-        $global:ztpE_signature = 'Valid'
-        Remove-Item -LiteralPath (Join-Path $script:initRoot '_media') -Recurse -Force -ErrorAction SilentlyContinue
-    }
-
-    It 'plans the node: verifies the SBE, unpacks only the driver folders under the repo, and changes nothing' {
-        $infra = New-TestEnvironment -Name 'init-plan' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-plan'))
-        $text = Get-StepText (& $script:init -InfrastructureFile $infra -Node node-01 *>&1)
-        $text | Should -BeLike '*SBE SBE_Contoso_1.0.0.0: SHA-256 matches SBE_Discovery_Contoso.xml*'
-        $text | Should -BeLike '*SBE network drivers indexed: 1*'
-        $text | Should -BeLike '*Port 1 PCI\VEN_8086&DEV_1572 driver 1.0.0.0 -> 1.2.3.4 (nic.inf)*'
-        $text | Should -BeLike '*PLAN: drivers nic.inf 1.2.3.4 (signatures valid); SBE to C:\SBE; create deployadmin; static 192.0.2.11/24 gw 192.0.2.1 on Port 1; DHCP and gateway off on Port 2; DNS 192.0.2.53,192.0.2.54; time ntp.example.com.*'
-        $text | Should -BeLike '*Plan only. Add -Execute*'
-        # The default staging folder is in the file's media folder, not in the repository.
-        $staging = Join-Path $TestDrive 'data-init-plan/media/sbe-drivers/SBE_Contoso_1.0.0.0'
-        Test-Path (Join-Path $script:initRoot '_media') | Should -BeFalse
-        Test-Path (Join-Path $staging '.extracted') | Should -BeTrue
-        Test-Path (Join-Path $staging 'Drivers/Network/nicA/nic.inf') | Should -BeTrue
-        Test-Path (Join-Path $staging 'unrelated.txt') | Should -BeFalse
-        # Only the node asked for was contacted.
-        $global:ztpE_calls | Should -Not -Contain 'New-PSSession 192.0.2.12'
-    }
-
-    It 'takes the driver staging folder and the OEM folder from parameters' {
-        $infra = New-TestEnvironment -Name 'init-params' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-params'))
-        $oem = Join-Path $TestDrive 'oem-elsewhere'; $null = New-Item -ItemType Directory -Path $oem
-        Set-Content -LiteralPath (Join-Path $oem 'contoso.json') -Value '{ "sbe": { "driverPaths": [ "Drivers/Network/" ] } }'
-        $staging = Join-Path $TestDrive 'staging-elsewhere'
-        $null = & $script:init -InfrastructureFile $infra -Node node-01 -DriverStagingPath $staging -OemConfigDirectory $oem *>&1
-        Test-Path (Join-Path $staging 'SBE_Contoso_1.0.0.0/.extracted') | Should -BeTrue
-        Test-Path (Join-Path $script:initRoot '_media') | Should -BeFalse
-    }
-
-    It 'covers every node in the file by default and only the named one when told' {
-        $infra = New-TestEnvironment -Name 'init-nodes' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-nodes'))
-        $all = Get-StepText (& $script:init -InfrastructureFile $infra *>&1)
-        $all | Should -BeLike '*== node-01 (192.0.2.11)*'
-        $all | Should -BeLike '*== node-02 (192.0.2.12)*'
-        $one = Get-StepText (& $script:init -InfrastructureFile $infra -Node node-02 *>&1)
-        $one | Should -BeLike '*== node-02 (192.0.2.12)*'
-        $one | Should -Not -BeLike '*== node-01*'
-        { & $script:init -InfrastructureFile $infra -Node node-09 } | Should -Throw "*Node node-09 isn't in the environment file*"
-    }
-
-    It 'stops before any Azure call when the SBE zip does not match the published SHA-256' {
-        $infra = New-TestEnvironment -Name 'init-badhash' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-badhash') -HashInManifest ('AB' * 32))
-        { & $script:init -InfrastructureFile $infra -Node node-01 } | Should -Throw "*has SHA-256*; SBE_Discovery_Contoso.xml says $('AB' * 32)*"
-        $global:ztpE_calls.Count | Should -Be 0
-    }
-
-    It 'stops when the SBE folder is missing or the OEM names no driver folders' {
-        $infra = New-TestEnvironment -Name 'init-nofolder' -Sbe (Join-Path $TestDrive 'not-there')
-        { & $script:init -InfrastructureFile $infra } | Should -Throw "*SBE folder*doesn't exist*"
-        $infra2 = New-TestEnvironment -Name 'init-nodrivers' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-nodrivers'))
-        $oem = Join-Path $TestDrive 'oem-nodrivers'; $null = New-Item -ItemType Directory -Path $oem
-        Set-Content -LiteralPath (Join-Path $oem 'contoso.json') -Value '{ "sbe": { } }'
-        { & $script:init -InfrastructureFile $infra2 -OemConfigDirectory $oem } | Should -Throw '*Set sbe.driverPaths in*'
-    }
-
-    It 'fails early and names the problem when the environment file is wrong' {
-        $infra = New-TestEnvironment -Name 'init-invalid' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-invalid')) -Edit { param($e) $e.network_intents.management.Remove('gateway'); $e.ztp.admin_secret.Remove('vault') }
-        { & $script:init -InfrastructureFile $infra } | Should -Throw '*is invalid (2 problems):*network_intents.management.gateway is required*ztp.admin_secret.vault is required*'
-        $global:ztpE_calls.Count | Should -Be 0
-        $unnamed = New-TestEnvironment -Name 'init-no-sbe-key' -Edit { param($e) $e.ztp.Remove('node_preparation') }
-        { & $script:init -InfrastructureFile $unnamed } | Should -Throw '*ztp.node_preparation.sbe_bundle is required*'
-    }
-
-    It 'refuses a driver whose catalog signature is not valid' {
-        $global:ztpE_signature = 'NotSigned'
-        $infra = New-TestEnvironment -Name 'init-unsigned' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-unsigned'))
-        $text = Get-RunText $script:init @{ InfrastructureFile = $infra; Node = 'node-01' }
-        $text | Should -BeLike '*nic.cat for nic.inf has signature NotSigned*'
-        $text | Should -BeLike '*THROWN: Not ready: node-01*'
-        $text | Should -Not -BeLike '*PLAN:*'
-    }
-
-    It 'reports a node that Azure does not call ready, one that failed, and one that has no adapter with its MAC' {
-        $infra = New-TestEnvironment -Name 'init-notready' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-notready'))
-        $global:ztpE_azureStatus = [pscustomobject]@{ Lifecycle = 'AwaitingConnection'; JobStatus = 'InProgress'; Connectivity = 'Connecting'; CurrentStage = 'ProvisionOs'; Ready = $false; Failed = $false; FailureReason = '' }
-        $text = Get-RunText $script:init @{ InfrastructureFile = $infra; Node = 'node-01' }
-        $text | Should -BeLike '*Azure: lifecycle AwaitingConnection, job InProgress, Arc Connecting, at ProvisionOs*'
-        $text | Should -BeLike '*Not Ready to cluster yet*'
-        $text | Should -BeLike '*THROWN: Not ready: node-01*'
-        $global:ztpE_azureStatus = [pscustomobject]@{ Lifecycle = 'Failed'; JobStatus = 'Failed'; Connectivity = ''; CurrentStage = ''; Ready = $false; Failed = $true; FailureReason = 'example failure' }
-        (Get-RunText $script:init @{ InfrastructureFile = $infra; Node = 'node-01' }) | Should -BeLike '*Azure reports node-01 failed: example failure*'
-        $global:ztpE_azureStatus = $script:readyStatus
-        $global:ztpE_nodeState = [pscustomobject]@{ Host = 'EXAMPLEHOST'; Adapters = @(); Mgmt = $null; Dns = @(); SbeFiles = @(); SbeHash = ''; Admin = $false; Time = ''; Booted = ''; RebootPending = $false }
-        (Get-RunText $script:init @{ InfrastructureFile = $infra; Node = 'node-01' }) | Should -BeLike '*No adapter on node-01 has the environment file*02-00-00-00-00-11*'
-    }
-}
-Describe 'Initialize-ZtpNode.ps1 with several nodes' {
-    It 'prepares every node at the same time, one worker each, and reports each failure' {
-        $root = New-TestRepo -Name 'init-parallel' -Copy 'Initialize-ZtpNode.ps1', 'ZtpEnvironment.Common.ps1', 'ZtpEvents.Common.ps1'
-        Set-Content -LiteralPath (Join-Path $root 'scripts/simplified-provisioning/ZtpAzure.Common.ps1') -Value '# unused: the workers are stubs'
-        $worker = Join-Path $root 'Worker.ps1'
-        # The stub worker records when it started and finished and what it was asked, takes 3 seconds, and fails for one node on request.
-        Set-Content -LiteralPath $worker -Value @'
-param([string]$InfrastructureFile, [string[]]$Node, [int]$ReadyTimeoutMinutes, [int]$ReachTimeoutMinutes, [string]$DriverStagingPath, [string]$OemConfigDirectory, [string]$EventLogPath, [switch]$Execute)
-$started = [datetime]::UtcNow.Ticks
-Start-Sleep -Seconds 3
-[pscustomobject]@{ Node = @($Node); Started = $started; Finished = [datetime]::UtcNow.Ticks; Execute = [bool]$Execute; Staging = $DriverStagingPath; Oem = $OemConfigDirectory; Events = $EventLogPath; Ready = $ReadyTimeoutMinutes; Reach = $ReachTimeoutMinutes } |
-    ConvertTo-Json | Set-Content -LiteralPath (Join-Path $env:ZTP_TEST_WORKER_DIR "$($Node[0]).json")
-if ($env:ZTP_TEST_FAIL_NODE -eq $Node[0]) { Write-Output "$($Node[0]): example failure"; exit 1 }
-'@
-        $records = Join-Path $TestDrive 'worker-records'
-        $null = New-Item -ItemType Directory -Path $records
-        $infra = New-TestEnvironment -Name 'init-parallel' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-parallel'))
-        $staging = Join-Path $TestDrive 'parallel-staging'
-        $oem = Join-Path $root 'config/oem'
-        $events = Join-Path $TestDrive 'parallel-events/ztp-events.jsonl'
-        $run = { & (Join-Path $root 'scripts/simplified-provisioning/Initialize-ZtpNode.ps1') -InfrastructureFile $infra -Node node-01, node-02 -Execute -DriverStagingPath $staging -OemConfigDirectory $oem -WorkerScriptPath $worker -ReadyTimeoutMinutes 7 -ReachTimeoutMinutes 5 -EventLogPath $events *>&1 }
-
-        $env:ZTP_TEST_WORKER_DIR = $records
-        $env:ZTP_TEST_FAIL_NODE = ''
-        try {
-            $clock = [Diagnostics.Stopwatch]::StartNew()
-            $text = Get-StepText (& $run)
-            $clock.Stop()
-            $text | Should -BeLike '*Preparing node-01, node-02 at the same time*'
-            $text | Should -BeLike '*All ready for Validate: node-01, node-02*'
-            $a = Get-Content -LiteralPath (Join-Path $records 'node-01.json') -Raw | ConvertFrom-Json
-            $b = Get-Content -LiteralPath (Join-Path $records 'node-02.json') -Raw | ConvertFrom-Json
-            # One worker per node, each for its own node alone, with the parameters passed on.
-            @($a.Node) | Should -Be @('node-01')
-            @($b.Node) | Should -Be @('node-02')
-            foreach ($w in $a, $b) { $w.Execute | Should -BeTrue; $w.Staging | Should -Be $staging; $w.Oem | Should -Be $oem; $w.Events | Should -Be $events; $w.Ready | Should -Be 7; $w.Reach | Should -Be 5 }
-            # They ran together: each started before the other finished (run one after the other, the second would start after the first ended).
-            [math]::Max($a.Started, $b.Started) | Should -BeLessThan ([math]::Min($a.Finished, $b.Finished))
-            $clock.Elapsed.TotalSeconds | Should -BeLessThan 12
-
-            $env:ZTP_TEST_FAIL_NODE = 'node-02'
-            { $null = & $run } | Should -Throw '*Not ready: node-02*'
-        }
-        finally { $env:ZTP_TEST_WORKER_DIR = $null; $env:ZTP_TEST_FAIL_NODE = $null }
-    }
-}
-
 Describe 'Invoke-ZtpEnvironment.ps1 plan' {
     BeforeAll {
         $script:envRoot = New-TestRepo -Name 'env-repo' -Copy 'Invoke-ZtpEnvironment.ps1', 'ZtpEnvironment.Common.ps1'
         $script:envScript = Join-Path $script:envRoot 'scripts/simplified-provisioning/Invoke-ZtpEnvironment.ps1'
         $bin = Join-Path $script:envRoot 'scripts/simplified-provisioning'
         $params = '$ConfigPath, $NodeName, $BmcCredential, $EdgeUserPassword, $InfrastructureFile, $Node, $DriverStagingPath, $EventLogPath, $From, [switch]$ConfirmNotClustered, [switch]$SkipCertificateCheck, [switch]$RetryProvisionOs, [switch]$RebuildImages, [switch]$Execute'
-        foreach ($stub in 'Invoke-ZtpProvisioning.ps1', 'Initialize-ZtpNode.ps1') {
+        foreach ($stub in 'Invoke-ZtpProvisioning.ps1') {
             Set-Content -LiteralPath (Join-Path $bin $stub) -Value @"
 [CmdletBinding(SupportsShouldProcess)]
 param($params)
@@ -554,9 +331,8 @@ param($params)
         $global:ztpE_calls.Clear(); $global:ztpE_runs.Clear()
     }
 
-    It 'writes the ZTP inputs from the file, keeps its state under -MediaPath, and runs the stages and Prepare as plans' {
-        $sbe = New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env')
-        $infra = New-TestEnvironment -Name 'env-plan' -Sbe $sbe
+    It 'writes the ZTP inputs from the file, keeps its state under -MediaPath, and runs the stages as a plan' {
+        $infra = New-TestEnvironment -Name 'env-plan'
         $null = & $script:envScript -InfrastructureFile $infra -MediaPath $script:media *>&1
 
         $nodes = Get-Content -LiteralPath (Join-Path $script:envRoot 'config/simplified-provisioning/nodes.json') -Raw | ConvertFrom-Json
@@ -606,7 +382,7 @@ param($params)
     }
 
     It 'keeps run data in ztp.media_path and ztp.evidence_path when -MediaPath and -EvidencePath are not given, and creates them' {
-        $infra = New-TestEnvironment -Name 'env-file-paths' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-file-paths'))
+        $infra = New-TestEnvironment -Name 'env-file-paths'
         $null = & $script:envScript -InfrastructureFile $infra *>&1
         $cfg = Get-Content -LiteralPath (Join-Path $script:envRoot 'config/simplified-provisioning/ztp-provisioning.json') -Raw | ConvertFrom-Json
         $media = [IO.Path]::GetFullPath((Join-Path $TestDrive 'data-env-file-paths/media'))
@@ -624,7 +400,7 @@ param($params)
     }
 
     It 'without the keys or the parameters, uses the site folder under ProgramData\AzureLocalZtp' {
-        $infra = New-TestEnvironment -Name 'env-default-paths' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-default')) -Edit { param($e) $e.ztp.Remove('media_path'); $e.ztp.Remove('evidence_path') }
+        $infra = New-TestEnvironment -Name 'env-default-paths' -Edit { param($e) $e.ztp.Remove('media_path'); $e.ztp.Remove('evidence_path') }
         $saved = $env:ProgramData
         $env:ProgramData = Join-Path $TestDrive 'programdata'
         try { $null = & $script:envScript -InfrastructureFile $infra *>&1 }
@@ -637,17 +413,16 @@ param($params)
     It 'refuses a media or evidence folder inside a git working tree, from the file or from the parameters' {
         $repo = Join-Path $TestDrive 'a-clone'
         $null = New-Item -ItemType Directory -Force -Path (Join-Path $repo '.git')
-        $sbe = New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-in-repo')
-        $inFile = New-TestEnvironment -Name 'env-in-repo' -Sbe $sbe -Edit { param($e) $e.ztp.media_path = Join-Path $repo '_media' }
+        $inFile = New-TestEnvironment -Name 'env-in-repo' -Edit { param($e) $e.ztp.media_path = Join-Path $repo '_media' }
         { & $script:envScript -InfrastructureFile $inFile } | Should -Throw "*ztp.media_path*is inside the git working tree*a-clone*"
-        $clean = New-TestEnvironment -Name 'env-param-in-repo' -Sbe $sbe
+        $clean = New-TestEnvironment -Name 'env-param-in-repo'
         { & $script:envScript -InfrastructureFile $clean -MediaPath (Join-Path $repo 'media') } | Should -Throw '*media folder*(from -MediaPath) is inside the git working tree*'
         { & $script:envScript -InfrastructureFile $clean -EvidencePath (Join-Path $repo 'deep/evidence') } | Should -Throw '*evidence folder*(from -EvidencePath) is inside the git working tree*'
         Test-Path (Join-Path $repo 'media') | Should -BeFalse
     }
 
     It 'writes an Automatic site network with no address range when the management addresses are DHCP' {
-        $infra = New-TestEnvironment -Name 'env-dhcp-site' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-dhcp-site')) -Edit { param($e) $e.network_intents.management['ip_assignment'] = 'dhcp' }
+        $infra = New-TestEnvironment -Name 'env-dhcp-site' -Edit { param($e) $e.network_intents.management['ip_assignment'] = 'dhcp' }
         $text = Get-StepText (& $script:envScript -InfrastructureFile $infra *>&1)
         $text | Should -BeLike '*Site network: Automatic. Maintenance environment to Azure: dhcp.*'
         $bicep = Get-Content -LiteralPath (Join-Path $script:envRoot 'scripts/simplified-provisioning/bicep/main.parameters.json') -Raw | ConvertFrom-Json
@@ -657,7 +432,7 @@ param($params)
     }
 
     It 'writes each node''s BIOS settings to the node list: hardware.bios with the node''s own merged over it' {
-        $infra = New-TestEnvironment -Name 'env-bios' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-bios')) -Edit {
+        $infra = New-TestEnvironment -Name 'env-bios' -Edit {
             param($e)
             $e.hardware['bios'] = [ordered]@{ Slot2 = 'Disabled'; EmbNic1Nic2 = 'Enabled' }
             $e.cluster_nodes[1]['bios'] = [ordered]@{ Slot2 = 'Enabled'; SriovGlobalEnable = 'Enabled' }
@@ -670,20 +445,20 @@ param($params)
         $nodes.nodes[1].bios.EmbNic1Nic2 | Should -Be 'Enabled'
         $nodes.nodes[1].bios.SriovGlobalEnable | Should -Be 'Enabled'
         # Without bios, the node list has no bios key.
-        $plain = New-TestEnvironment -Name 'env-no-bios' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-no-bios'))
+        $plain = New-TestEnvironment -Name 'env-no-bios'
         $null = & $script:envScript -InfrastructureFile $plain *>&1
         $nodes = Get-Content -LiteralPath (Join-Path $script:envRoot 'config/simplified-provisioning/nodes.json') -Raw | ConvertFrom-Json
         $nodes.nodes[0].PSObject.Properties.Name | Should -Not -Contain 'bios'
     }
 
     It 'with -Execute writes the run transcript to the evidence folder' {
-        $infra = New-TestEnvironment -Name 'env-transcript' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-transcript'))
+        $infra = New-TestEnvironment -Name 'env-transcript'
         $null = & $script:envScript -InfrastructureFile $infra -Node node-01 -Execute *>&1
         @(Get-ChildItem -LiteralPath (Join-Path $TestDrive 'data-env-transcript/evidence') -Filter 'node-01.*.transcript.log').Count | Should -Be 1
     }
 
     It 'covers the nodes named and keeps a separate state for that set' {
-        $infra = New-TestEnvironment -Name 'env-one-node' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-one'))
+        $infra = New-TestEnvironment -Name 'env-one-node'
         $null = & $script:envScript -InfrastructureFile $infra -MediaPath $script:media -Node node-02 *>&1
         $cfg = Get-Content -LiteralPath (Join-Path $script:envRoot 'config/simplified-provisioning/ztp-provisioning.json') -Raw | ConvertFrom-Json
         $cfg.StatePath | Should -BeLike '*node-02.ztp-provisioning.state.json'
@@ -692,7 +467,7 @@ param($params)
     }
 
     It 'fails on a bad environment file before it writes anything or signs in' {
-        $infra = New-TestEnvironment -Name 'env-invalid' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-invalid')) -Edit { param($e) $e.ztp.Remove('time_zone'); $e.cluster_nodes[0].idrac_ip = 'bmc.example.com' }
+        $infra = New-TestEnvironment -Name 'env-invalid' -Edit { param($e) $e.ztp.Remove('time_zone'); $e.cluster_nodes[0].idrac_ip = 'bmc.example.com' }
         Remove-Item -LiteralPath (Join-Path $script:envRoot 'config/simplified-provisioning/nodes.json') -ErrorAction SilentlyContinue
         { & $script:envScript -InfrastructureFile $infra -MediaPath $script:media } | Should -Throw '*is invalid (2 problems):*idrac_ip must be an IPv4 address*ztp.time_zone is required*'
         Test-Path (Join-Path $script:envRoot 'config/simplified-provisioning/nodes.json') | Should -BeFalse
@@ -701,7 +476,7 @@ param($params)
     }
 
     It 'accepts a file whose SBE folder is missing, notes that it ignores it, and runs no Prepare' {
-        $infra = New-TestEnvironment -Name 'env-no-sbe' -Sbe (Join-Path $TestDrive 'not-there')
+        $infra = New-TestEnvironment -Name 'env-no-sbe'
         $text = Get-StepText (& $script:envScript -InfrastructureFile $infra -MediaPath $script:media *>&1)
         $text | Should -BeLike '*Note: ztp.node_preparation ignored: SBE belongs to OS configuration.*'
         $global:ztpE_runs.Script | Should -Be @('Invoke-ZtpProvisioning.ps1')
@@ -744,7 +519,7 @@ param($params)
     }
 
     It 'treats the external validator as optional and parameterized' {
-        $infra = New-TestEnvironment -Name 'env-validator' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-validator'))
+        $infra = New-TestEnvironment -Name 'env-validator'
         # None beside the file and none given: runs on the built-in check alone.
         { $null = & $script:envScript -InfrastructureFile $infra -MediaPath $script:media *>&1 } | Should -Not -Throw
         # One given that does not exist: refused, because the operator asked for it.
@@ -764,20 +539,20 @@ param($params)
         Copy-Item -LiteralPath $fail -Destination (Join-Path $beside 'tools/Validate-Infrastructure.ps1')
         { & $script:envScript -InfrastructureFile (Join-Path $beside 'infrastructure.yml') -MediaPath $script:media } | Should -Throw '*failed validation*'
         # The built-in check runs before the external one.
-        $bad = New-TestEnvironment -Name 'env-bad-first' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-bad-first')) -Edit { param($e) $e.ztp.Remove('share_name') }
+        $bad = New-TestEnvironment -Name 'env-bad-first' -Edit { param($e) $e.ztp.Remove('share_name') }
         { & $script:envScript -InfrastructureFile $bad -MediaPath $script:media -ValidatorPath $fail } | Should -Throw '*ztp.share_name is required*'
     }
 
     It 'finds the share host from the named adapter, and asks for the resource provider ID only when the file does not give it' {
-        $infra = New-TestEnvironment -Name 'env-adapter' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-adapter')) -Edit { param($e) $e.ztp.Remove('share_host'); $e.ztp.share_host_adapter = 'Ethernet 2'; $e.ztp.Remove('azl_rp_object_id') }
+        $infra = New-TestEnvironment -Name 'env-adapter' -Edit { param($e) $e.ztp.Remove('share_host'); $e.ztp.share_host_adapter = 'Ethernet 2'; $e.ztp.Remove('azl_rp_object_id') }
         $null = & $script:envScript -InfrastructureFile $infra -MediaPath $script:media *>&1
         $cfg = Get-Content -LiteralPath (Join-Path $script:envRoot 'config/simplified-provisioning/ztp-provisioning.json') -Raw | ConvertFrom-Json
         $cfg.ShareHost | Should -Be '192.0.2.77'
         $global:ztpE_calls | Should -Contain 'Get-AzADServicePrincipal'
     }
 
-    It 'with -Execute creates the resource group, runs the stages for the nodes and then Prepare; -From Prepare runs only Prepare' {
-        $infra = New-TestEnvironment -Name 'env-execute' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-execute'))
+    It 'with -Execute creates the resource group and runs the stages for the nodes; nothing runs after Handoff' {
+        $infra = New-TestEnvironment -Name 'env-execute'
         $null = & $script:envScript -InfrastructureFile $infra -MediaPath $script:media -Node node-01 -Execute *>&1
         $global:ztpE_calls | Should -Contain 'New-AzResourceGroup rg-example'
         $global:ztpE_calls | Should -Contain 'Get-AzKeyVaultSecret kv-example/bmc-username'
@@ -797,7 +572,7 @@ param($params)
     }
 
     It 'reads the edgeuser password from Key Vault for the images and the Device stage, and lists each maintenance address' {
-        $infra = New-TestEnvironment -Name 'env-device' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-device')) -Edit {
+        $infra = New-TestEnvironment -Name 'env-device' -Edit {
             param($e) $e.ztp['maintenance_password_secret'] = 'keyvault://kv-example/edgeuser-password'; $e.cluster_nodes[0]['maintenance_address'] = '192.0.2.111'
         }
         $text = Get-StepText (& $script:envScript -InfrastructureFile $infra -MediaPath $script:media -Execute *>&1)
@@ -821,10 +596,10 @@ Describe 'Schema 5 infrastructure.yml' {
         # Built-in checks only, unless a test names a toolkit: the scripts would otherwise look for a clone next to the repo.
         $script:savedToolkitRoot = $env:AZL_TOOLKIT_ROOT
         $env:AZL_TOOLKIT_ROOT = Join-Path $TestDrive 'no-toolkit-here'
-        $script:read = { param([string]$Path, [string]$For = 'Provision') Read-ZtpInfrastructure -Path $Path -For $For }
+        $script:read = { param([string]$Path) Read-ZtpInfrastructure -Path $Path }
         $script:assertText = {
-            param([string]$Path, [string]$For = 'Provision')
-            try { Assert-ZtpEnvironment -Environment (Read-ZtpInfrastructure -Path $Path -For $For) -For $For -Source 'infra.yml'; '' } catch { $_.Exception.Message }
+            param([string]$Path)
+            try { Assert-ZtpEnvironment -Environment (Read-ZtpInfrastructure -Path $Path) -Source 'infra.yml' -InformationAction SilentlyContinue; '' } catch { $_.Exception.Message }
         }
     }
     AfterAll { $env:AZL_TOOLKIT_ROOT = $script:savedToolkitRoot }
@@ -837,20 +612,20 @@ Describe 'Schema 5 infrastructure.yml' {
         (& $script:read $script:fixture).Contains('_source') | Should -BeFalse
     }
 
-    It 'maps the schema 5 file onto the keys the scripts read, with no problems for either script' {
+    It 'maps the schema 5 file onto the keys the scripts read, with no problems' {
         $e = & $script:read (New-TestInfrastructureV5 -Name 'v5-map')
-        foreach ($for in 'Provision', 'Prepare') { @(Test-ZtpEnvironment -Environment $e -For $for).Count | Should -Be 0 -Because $for }
+        @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0
         $e._source.format | Should -Be 'schema5'; $e._source.validator | Should -Be 'built-in'
         $n = $e.cluster_nodes[0]
         "$($n.name) $($n.ip_address) $($n.mac_address) $($n.adapter_name) $($n.ip_assignment) $($n.service_tag) $($n.idrac_ip)" | Should -Be 'node-01 192.0.2.11 02:00:00:00:00:11 Embedded NIC 1 static EXAMPLE1 198.51.100.11'
-        @($n.network_adapters).Count | Should -Be 6
+        $n.Contains('network_adapters') | Should -BeFalse -Because 'the other ports are OS configuration'
         $m = $e.network_intents.management
         "$($m.subnet) $($m.gateway) $(@($m.dns_servers) -join ',') $($m.ip_assignment) $($m.vlan_id) $($m.provisioning_network)" | Should -Be '192.0.2.0/24 192.0.2.1 192.0.2.53,192.0.2.54 static 0 dhcp'
         $e.azure_identity.azure_tenant_id | Should -Be '00000000-0000-0000-0000-000000000000'
         $e.azure_resources.location | Should -Be 'eastus'
         $e.site.name | Should -Be 'Example Site'
-        @($e.onprem.ntp_servers) | Should -Be @('ntp.example.com')
-        "$($e.credentials.local_admin_username) $($e.credentials.local_admin_password_secret)" | Should -Be 'deployadmin keyvault://kv-example/deploy-admin-password'
+        foreach ($k in 'credentials', 'onprem') { $e.Contains($k) | Should -BeFalse -Because "$k is OS configuration" }
+        $e.ztp.Contains('node_preparation') | Should -BeFalse -Because 'hardware.sbe belongs to OS configuration and deployment'
         $z = $e.ztp
         "$($z.subscription_id) $($z.resource_group) $($z.site_name) $($z.time_zone) $($z.provisioning_iso) $($z.os_version) $($z.share_name) $($z.share_host) $($z.azl_rp_object_id)" | Should -Be '00000000-0000-0000-0000-000000000000 rg-example example-site UTC latest latest ztp-example 192.0.2.10 00000000-0000-0000-0000-000000000001'
         "$($z.admin_secret.username) $($z.admin_secret.vault) $($z.admin_secret.name) $($z.admin_secret.subscription_id) $($z.admin_secret.resource_group)" | Should -Be 'ztpadmin kv-example ztp-admin-password 00000000-0000-0000-0000-000000000000 rg-example-vault'
@@ -883,7 +658,7 @@ Describe 'Schema 5 infrastructure.yml' {
         @{ Case = 'another schema major'; Edit = { param($d) $d._metadata.schema_version = '4.0.0' }; Expect = "_metadata.schema_version is '4.0.0'; ZTP reads schema 5.x" }
         @{ Case = 'an unlisted admin vault'; Edit = { param($d) $d.provisioning.simplified.admin.password = 'keyvault://kv-other/ztp-admin-password' }; Expect = "names vault 'kv-other', which isn't in key_vaults" }
         @{ Case = 'a node with its own BMC login'; Edit = { param($d) $d.nodes[1].bmc['username'] = 'other'; $d.nodes[1].bmc['password'] = 'keyvault://kv-example/other-bmc' }; Expect = 'nodes[1] (node-02).bmc has its own login; ZTP uses one BMC login' }
-        @{ Case = 'secrets in another subscription'; Edit = { param($d) $d.key_vaults.Add([ordered]@{ name = 'kv-example-two'; subscription_id = '00000000-0000-0000-0000-000000000003'; resource_group = 'rg-x' }); $d.identity.local_admin.password = 'keyvault://kv-example-two/deploy-admin-password' }; Expect = 'identity.local_admin.password is in vault ''kv-example-two'', in another subscription' }
+        @{ Case = 'secrets in another subscription'; Edit = { param($d) $d.key_vaults.Add([ordered]@{ name = 'kv-example-two'; subscription_id = '00000000-0000-0000-0000-000000000003'; resource_group = 'rg-x' }); $d.provisioning.simplified['maintenance_password'] = 'keyvault://kv-example-two/edgeuser-password' }; Expect = 'provisioning.simplified.maintenance_password is in vault ''kv-example-two'', in another subscription' }
         @{ Case = 'an unknown static method'; Edit = { param($d) $d.networking.management['static_method'] = 'azure' }; Expect = "networking.management.static_method must be device or site, not 'azure'" }
         @{ Case = 'a provisioning DHCP range backwards'; Edit = { param($d) $d.networking.management['provisioning_dhcp_range'] = [ordered]@{ start = '192.0.2.250'; end = '192.0.2.100' } }; Expect = 'networking.management.provisioning_dhcp_range starts at 192.0.2.250' }
         @{ Case = 'a node''s maintenance address that is no address'; Edit = { param($d) $d.nodes[0]['maintenance_address'] = 'console' }; Expect = "nodes[0] (node-01) provisioning port ip_address must be an IPv4 address, not 'console'" }
@@ -930,8 +705,8 @@ Export-ModuleMember -Function Test-AzlInfrastructure
     It 'runs Invoke-ZtpEnvironment.ps1 from a schema 5 file: the node list, the Bicep parameters and the settings' {
         $root = New-TestRepo -Name 'env-v5-repo' -Copy 'Invoke-ZtpEnvironment.ps1', 'ZtpEnvironment.Common.ps1'
         $bin = Join-Path $root 'scripts/simplified-provisioning'
-        foreach ($stub in 'Invoke-ZtpProvisioning.ps1', 'Initialize-ZtpNode.ps1') { Set-Content -LiteralPath (Join-Path $bin $stub) -Value '[CmdletBinding(SupportsShouldProcess)] param($ConfigPath, $NodeName, $BmcCredential, $InfrastructureFile, $Node, $DriverStagingPath, $EventLogPath, $From, [switch]$ConfirmNotClustered, [switch]$SkipCertificateCheck, [switch]$RetryProvisionOs, [switch]$RebuildImages, [switch]$Execute)' }
-        $infra = New-TestInfrastructureV5 -Name 'v5-invoke' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-v5-invoke')) -Edit { param($d) $d.hardware['bios'] = [ordered]@{ EmbNic1Nic2 = 'Enabled' } }
+        foreach ($stub in 'Invoke-ZtpProvisioning.ps1') { Set-Content -LiteralPath (Join-Path $bin $stub) -Value '[CmdletBinding(SupportsShouldProcess)] param($ConfigPath, $NodeName, $BmcCredential, $InfrastructureFile, $Node, $DriverStagingPath, $EventLogPath, $From, [switch]$ConfirmNotClustered, [switch]$SkipCertificateCheck, [switch]$RetryProvisionOs, [switch]$RebuildImages, [switch]$Execute)' }
+        $infra = New-TestInfrastructureV5 -Name 'v5-invoke' -Edit { param($d) $d.hardware['bios'] = [ordered]@{ EmbNic1Nic2 = 'Enabled' } }
         $text = Get-StepText (& (Join-Path $bin 'Invoke-ZtpEnvironment.ps1') -InfrastructureFile $infra *>&1)
         $text | Should -BeLike '*Site network: Automatic.*'
         $text | Should -BeLike '*Note: hardware.sbe ignored: SBE belongs to OS configuration.*'
@@ -982,17 +757,6 @@ Export-ModuleMember -Function Test-AzlInfrastructure
         & $script:assertText $nosbe | Should -Be ''
     }
 
-    It 'runs Prepare from a schema 5 file: finds the management port by MAC, and keeps DHCP only where the file says so' {
-        $global:ztpE_calls.Clear(); $global:ztpE_azureStatus = $script:readyStatus; $global:ztpE_nodeState = $script:nodeState; $global:ztpE_signature = 'Valid'
-        $sbe = New-TestSbe -Dir (Join-Path $TestDrive 'sbe-v5-prepare')
-        $plain = New-TestInfrastructureV5 -Name 'v5-prepare' -Sbe $sbe
-        $text = Get-StepText (& $script:init -InfrastructureFile $plain -Node node-01 *>&1)
-        $text | Should -BeLike '*static 192.0.2.11/24 gw 192.0.2.1 on Port 1; DHCP and gateway off on Port 2; DNS*'
-        # The second port of the stub node (MAC 02-00-00-00-00-99) as a compute port the file leaves on DHCP.
-        $keep = New-TestInfrastructureV5 -Name 'v5-prepare-keep' -Sbe $sbe -Edit { param($d) $d.nodes[0].network_adapters.Add([ordered]@{ name = 'Port 2'; mac_address = '02:00:00:00:00:99'; roles = @('compute'); ip_assignment = 'dhcp' }) }
-        $text = Get-StepText (& $script:init -InfrastructureFile $keep -Node node-01 *>&1)
-        $text | Should -BeLike '*DHCP and gateway off on none; DHCP kept on Port 2 (dhcp in the file); DNS*'
-    }
 }
 
 Describe 'Ported code stays generic' {

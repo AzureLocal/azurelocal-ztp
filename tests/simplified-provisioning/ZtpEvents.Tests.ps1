@@ -13,7 +13,7 @@ BeforeAll {
     $global:ztpE_scripts = Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'scripts/simplified-provisioning'
     . (Join-Path $global:ztpE_scripts 'ZtpAzure.Common.ps1')
     . (Join-Path $global:ztpE_scripts 'ZtpVirtualUsb.Common.ps1')
-    . (Join-Path $global:ztpE_scripts 'ZtpSbe.Common.ps1')
+    . (Join-Path $global:ztpE_scripts 'ZtpOem.Common.ps1')
     . (Join-Path $global:ztpE_scripts 'ZtpRedfish.Common.ps1')
     . (Join-Path $global:ztpE_scripts 'ZtpEvents.Common.ps1')
     $global:ztpE_nodes = Join-Path $TestDrive 'nodes.json'

@@ -1,17 +1,15 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-Shared helpers for the environment file (dot-sourced by Invoke-ZtpEnvironment.ps1 and Initialize-ZtpNode.ps1).
+Shared helpers for the environment file (dot-sourced by Invoke-ZtpEnvironment.ps1).
 .DESCRIPTION
-Reads the environment file (YAML), checks the keys the two scripts use so a bad file fails before anything runs and every
-problem is named at once, resolves which nodes a run covers, finds the OEM's SBE files in a folder, and checks the SBE zip
-against the SHA-256 the OEM publishes. Nothing here talks to Azure or to a node. The only network call is the optional read
-of the OEM's SBE discovery manifest in Test-ZtpSbeHash.
+Reads the environment file (YAML), checks the keys Invoke-ZtpEnvironment.ps1 uses so a bad file fails before anything runs
+and every problem is named at once, and resolves which nodes a run covers. Nothing here talks to Azure or to a node.
 
-The keys, by what needs them:
-  Prepare (Initialize-ZtpNode.ps1) and Provision (Invoke-ZtpEnvironment.ps1, which also runs Prepare) both read
-    cluster_nodes[].name, .ip_address, .mac_address (the management port)
+The keys Invoke-ZtpEnvironment.ps1 reads:
+    cluster_nodes[].name, .ip_address, .mac_address (the management port), .service_tag, .idrac_ip
     cluster_nodes[].adapter_name, .arc_machine_name   (optional; the Arc name defaults to the node name)
+    cluster_nodes[].maintenance_address               (optional; where the Device stage reaches the maintenance environment)
     azure_identity.azure_tenant_id
     network_intents.management.subnet, .gateway, .dns_servers
     network_intents.management.ip_assignment, .vlan_id   (optional; static, dhcp or preconfigured; default static)
@@ -31,26 +29,22 @@ The keys, by what needs them:
     hardware.bios_during_provisioning, cluster_nodes[].bios_during_provisioning (optional; temporary values for the
                                                           install only: Boot applies them over hardware.bios, Restore sets
                                                           each back to hardware.bios or the value saved before Boot)
-    onprem.ntp_servers                         (optional)
-    credentials.local_admin_username, .local_admin_password_secret   (keyvault://<vault>/<secret>)
-    hardware.vendor
-    ztp.subscription_id, .resource_group
-    ztp.admin_secret.subscription_id, .vault, .name, .username
-    ztp.node_preparation.sbe_bundle
-  Provision also reads
-    cluster_nodes[].service_tag, .idrac_ip
-    hardware.model
+    hardware.vendor                                       (picks config/oem/<vendor>.json)
     azure_resources.location
     site.name
+    ztp.subscription_id, .resource_group
     ztp.site_name, .time_zone, .provisioning_iso, .os_version, .share_name
     ztp.share_host or ztp.share_host_adapter
-    ztp.admin_secret.resource_group
+    ztp.admin_secret.subscription_id, .resource_group, .vault, .name, .username
     ztp.bmc_secret.vault, .username_name, .password_name
+    ztp.maintenance_password_secret (optional keyvault://<vault>/<secret>)
     ztp.tags (optional mapping), ztp.azl_rp_object_id (optional GUID)
-  Both read, optionally
-    ztp.media_path      downloads, images, vouchers, unpacked drivers and run state  (default %ProgramData%\AzureLocalZtp\<site_name>\media)
-    ztp.evidence_path   the event log, change logs and run logs                      (default %ProgramData%\AzureLocalZtp\<site_name>\evidence)
+    ztp.media_path      downloads, images, vouchers and run state  (default %ProgramData%\AzureLocalZtp\<site_name>\media)
+    ztp.evidence_path   the event log, change logs and run logs    (default %ProgramData%\AzureLocalZtp\<site_name>\evidence)
     Neither may be inside a git working tree: Resolve-ZtpDataPath refuses one, and creates the folder.
+ZTP ends at the Handoff, so it reads nothing for OS configuration: ztp.node_preparation and hardware.sbe (the SBE),
+credentials.local_admin_* and identity.local_admin (the deployment admin), onprem.ntp_servers and the other ports'
+settings may stay in a file and are ignored (Get-ZtpEnvironmentNote names the SBE ones).
 #>
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -87,15 +81,11 @@ function Get-ZtpEnvValue {
 function Test-ZtpEnvironment {
     <#
     .SYNOPSIS
-    Returns every problem found in the parsed environment file as a string; no output means it is valid.
-    .PARAMETER For
-    Provision checks every key Invoke-ZtpEnvironment.ps1 reads; Prepare checks only those Initialize-ZtpNode.ps1 reads.
+    Returns every problem found in the parsed environment file as a string; no output means it is valid. Checks every
+    key Invoke-ZtpEnvironment.ps1 reads, and nothing else.
     #>
     [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][System.Collections.IDictionary]$Environment,
-        [ValidateSet('Provision', 'Prepare')][string]$For = 'Provision'
-    )
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment)
     $problems = [System.Collections.Generic.List[string]]::new()
     $isText = { param($v) $null -ne $v -and $v -isnot [System.Collections.IDictionary] -and $v -isnot [System.Collections.IList] -and -not [string]::IsNullOrWhiteSpace([string]$v) }
     $isIp = { param($v) $ip = [ipaddress]::None; $v -is [string] -and $v -match '^\d{1,3}(\.\d{1,3}){3}$' -and [ipaddress]::TryParse($v, [ref]$ip) }
@@ -163,30 +153,14 @@ function Test-ZtpEnvironment {
             $arcName = [string](Get-ZtpEnvValue -Environment $n -Path 'arc_machine_name')
             # Microsoft.HybridCompute/machines name rule: 1-54 characters, letters, digits, '-', '_' and '.', not ending in '.'.
             if ($arcName -and ($arcName -notmatch '^[A-Za-z0-9_.-]{1,54}$' -or $arcName.EndsWith('.'))) { $problems.Add("$label.arc_machine_name '$arcName' isn't a valid Arc machine name (1-54 letters, digits, '-', '_', '.').") }
-            if ($For -eq 'Provision') {
-                & $check $n 'service_tag' "$label.service_tag" 'text'
-                & $check $n 'idrac_ip' "$label.idrac_ip" 'ip'
-                # Where the Device stage reaches the maintenance environment's REST service (its DHCP lease, best reserved).
-                & $check $n 'maintenance_address' "$label.maintenance_address" 'ip' -Optional
-            }
+            & $check $n 'service_tag' "$label.service_tag" 'text'
+            & $check $n 'idrac_ip' "$label.idrac_ip" 'ip'
+            # Where the Device stage reaches the maintenance environment's REST service (without it, the stage scans for it).
+            & $check $n 'maintenance_address' "$label.maintenance_address" 'ip' -Optional
             & $checkBios (Get-ZtpEnvValue -Environment $n -Path 'bios') "$label.bios"
             & $checkBios (Get-ZtpEnvValue -Environment $n -Path 'bios_during_provisioning') "$label.bios_during_provisioning"
             $nodeMode = Get-ZtpEnvValue -Environment $n -Path 'ip_assignment'
             if ($null -ne $nodeMode -and [string]$nodeMode -notin 'static', 'dhcp', 'preconfigured') { $problems.Add("$label.ip_assignment must be static, dhcp or preconfigured, not '$nodeMode'.") }
-            # The node's other ports (the schema 5 reader fills this in): Prepare leaves DHCP on the ones marked dhcp.
-            $ports = Get-ZtpEnvValue -Environment $n -Path 'network_adapters'
-            if ($null -ne $ports) {
-                if ($ports -isnot [System.Collections.IList]) { $problems.Add("$label.network_adapters must be a list.") }
-                else {
-                    $p = 0
-                    foreach ($port in @($ports)) {
-                        if ($port -isnot [System.Collections.IDictionary]) { $problems.Add("$label.network_adapters[$p] must be a mapping."); $p++; continue }
-                        & $check $port 'mac_address' "$label.network_adapters[$p].mac_address" 'mac' -Optional
-                        if ([string]$port['ip_assignment'] -notin 'static', 'dhcp_reservation', 'dhcp', 'preconfigured', 'none') { $problems.Add("$label.network_adapters[$p].ip_assignment must be static, dhcp_reservation, dhcp, preconfigured or none, not '$($port['ip_assignment'])'.") }
-                        $p++
-                    }
-                }
-            }
             $index++
         }
     }
@@ -252,20 +226,11 @@ function Test-ZtpEnvironment {
             }
         }
     }
-    & $check $Environment 'onprem.ntp_servers' 'onprem.ntp_servers' 'textlist' -Optional
-    & $check $Environment 'credentials.local_admin_username' 'credentials.local_admin_username' 'text'
-    $admin = [string](Get-ZtpEnvValue -Environment $Environment -Path 'credentials.local_admin_username')
-    if ($admin -in 'Administrator', 'Guest') { $problems.Add("credentials.local_admin_username can't be the built-in account '$admin'.") }
-    & $check $Environment 'credentials.local_admin_password_secret' 'credentials.local_admin_password_secret' 'text'
-    $ref = [string](Get-ZtpEnvValue -Environment $Environment -Path 'credentials.local_admin_password_secret')
-    if ($ref -and $ref -notmatch '^keyvault://([^/]+)/(.+)$') { $problems.Add('credentials.local_admin_password_secret must be keyvault://<vault>/<secret>.') }
     & $check $Environment 'hardware.vendor' 'hardware.vendor' 'text'
     & $check $Environment 'ztp.subscription_id' 'ztp.subscription_id' 'guid'
     & $check $Environment 'ztp.resource_group' 'ztp.resource_group' 'text'
     & $check $Environment 'ztp.admin_secret.subscription_id' 'ztp.admin_secret.subscription_id' 'guid'
     foreach ($k in 'vault', 'name', 'username') { & $check $Environment "ztp.admin_secret.$k" "ztp.admin_secret.$k" 'text' }
-    # The SBE belongs to OS configuration: only the standalone Initialize-ZtpNode.ps1 (-For Prepare) still needs it.
-    if ($For -eq 'Prepare') { & $check $Environment 'ztp.node_preparation.sbe_bundle' 'ztp.node_preparation.sbe_bundle' 'text' }
     foreach ($k in 'media_path', 'evidence_path') {
         & $check $Environment "ztp.$k" "ztp.$k" 'text' -Optional
         $p = Get-ZtpEnvValue -Environment $Environment -Path "ztp.$k"
@@ -278,26 +243,23 @@ function Test-ZtpEnvironment {
         }
     }
 
-    if ($For -eq 'Provision') {
-        & $check $Environment 'hardware.model' 'hardware.model' 'text'
-        & $check $Environment 'azure_resources.location' 'azure_resources.location' 'text'
-        & $check $Environment 'site.name' 'site.name' 'text'
-        foreach ($k in 'site_name', 'time_zone', 'provisioning_iso', 'os_version', 'share_name') { & $check $Environment "ztp.$k" "ztp.$k" 'text' }
-        $shareHost = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.share_host'
-        $shareAdapter = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.share_host_adapter'
-        if (-not $shareHost -and -not $shareAdapter) { $problems.Add('ztp.share_host or ztp.share_host_adapter is required: the address the BMCs reach this server on.') }
-        elseif ($shareHost) { & $check $Environment 'ztp.share_host' 'ztp.share_host' 'ip' }
-        & $check $Environment 'ztp.admin_secret.resource_group' 'ztp.admin_secret.resource_group' 'text'
-        foreach ($k in 'vault', 'password_name') { & $check $Environment "ztp.bmc_secret.$k" "ztp.bmc_secret.$k" 'text' }
-        # The BMC user name: a secret in the vault (username_name, optionally in username_vault), or the name itself (username).
-        if (-not (Get-ZtpEnvValue -Environment $Environment -Path 'ztp.bmc_secret.username')) { & $check $Environment 'ztp.bmc_secret.username_name' 'ztp.bmc_secret.username_name' 'text' }
-        & $check $Environment 'ztp.azl_rp_object_id' 'ztp.azl_rp_object_id' 'guid' -Optional
-        $tags = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.tags'
-        if ($null -ne $tags -and $tags -isnot [System.Collections.IDictionary]) { $problems.Add('ztp.tags must be a mapping of tag names to values.') }
-        # The maintenance environment's edgeuser password: preset in the image and used by the Device stage. Default Password1.
-        $edge = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.maintenance_password_secret'
-        if ($null -ne $edge -and "$edge" -ne '' -and [string]$edge -notmatch '^keyvault://([^/]+)/(.+)$') { $problems.Add('ztp.maintenance_password_secret must be keyvault://<vault>/<secret>.') }
-    }
+    & $check $Environment 'azure_resources.location' 'azure_resources.location' 'text'
+    & $check $Environment 'site.name' 'site.name' 'text'
+    foreach ($k in 'site_name', 'time_zone', 'provisioning_iso', 'os_version', 'share_name') { & $check $Environment "ztp.$k" "ztp.$k" 'text' }
+    $shareHost = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.share_host'
+    $shareAdapter = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.share_host_adapter'
+    if (-not $shareHost -and -not $shareAdapter) { $problems.Add('ztp.share_host or ztp.share_host_adapter is required: the address the BMCs reach this server on.') }
+    elseif ($shareHost) { & $check $Environment 'ztp.share_host' 'ztp.share_host' 'ip' }
+    & $check $Environment 'ztp.admin_secret.resource_group' 'ztp.admin_secret.resource_group' 'text'
+    foreach ($k in 'vault', 'password_name') { & $check $Environment "ztp.bmc_secret.$k" "ztp.bmc_secret.$k" 'text' }
+    # The BMC user name: a secret in the vault (username_name, optionally in username_vault), or the name itself (username).
+    if (-not (Get-ZtpEnvValue -Environment $Environment -Path 'ztp.bmc_secret.username')) { & $check $Environment 'ztp.bmc_secret.username_name' 'ztp.bmc_secret.username_name' 'text' }
+    & $check $Environment 'ztp.azl_rp_object_id' 'ztp.azl_rp_object_id' 'guid' -Optional
+    $tags = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.tags'
+    if ($null -ne $tags -and $tags -isnot [System.Collections.IDictionary]) { $problems.Add('ztp.tags must be a mapping of tag names to values.') }
+    # The maintenance environment's edgeuser password: preset in the image and used by the Device stage. Default Password1.
+    $edge = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.maintenance_password_secret'
+    if ($null -ne $edge -and "$edge" -ne '' -and [string]$edge -notmatch '^keyvault://([^/]+)/(.+)$') { $problems.Add('ztp.maintenance_password_secret must be keyvault://<vault>/<secret>.') }
     return $problems.ToArray()
 }
 
@@ -309,10 +271,9 @@ function Assert-ZtpEnvironment {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][System.Collections.IDictionary]$Environment,
-        [ValidateSet('Provision', 'Prepare')][string]$For = 'Provision',
         [string]$Source = 'The environment file'
     )
-    $problems = @(Test-ZtpEnvironment -Environment $Environment -For $For)
+    $problems = @(Test-ZtpEnvironment -Environment $Environment)
     $warnings = @(Get-ZtpEnvironmentWarning -Environment $Environment)
     # A schema 5 file (Read-ZtpInfrastructure): its validator's findings first, then the key check in schema 5 paths.
     $origin = $Environment['_source']
@@ -325,7 +286,7 @@ function Assert-ZtpEnvironment {
         throw "$Source is invalid ($($problems.Count) problem$(if ($problems.Count -ne 1) { 's' })):`n  - $($problems -join "`n  - ")"
     }
     foreach ($w in $warnings) { Write-Warning $w }
-    if ($For -eq 'Provision') { foreach ($n in @(Get-ZtpEnvironmentNote -Environment $Environment)) { Write-Information -MessageData "Note: $n" -InformationAction Continue } }
+    foreach ($n in @(Get-ZtpEnvironmentNote -Environment $Environment)) { Write-Information -MessageData "Note: $n" -InformationAction Continue }
 }
 
 function Get-ZtpEnvironmentNote {
@@ -338,8 +299,10 @@ function Get-ZtpEnvironmentNote {
     param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment)
     $origin = $Environment['_source']
     $schema5 = $origin -is [System.Collections.IDictionary] -and $origin['format'] -eq 'schema5'
-    $prep = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.node_preparation'
-    if ($prep -is [System.Collections.IDictionary] -and @($prep.Keys).Count) { "$(if ($schema5) { 'hardware.sbe' } else { 'ztp.node_preparation' }) ignored: SBE belongs to OS configuration." }
+    # A schema 5 file: Read-ZtpInfrastructure records the keys it ignores in _source.ignored.
+    if ($schema5) { foreach ($k in @($origin['ignored'])) { if ($k) { "$k ignored: SBE belongs to OS configuration." } }; return }
+    $ztp = Get-ZtpEnvValue -Environment $Environment -Path 'ztp'
+    if ($ztp -is [System.Collections.IDictionary] -and $ztp.Contains('node_preparation')) { 'ztp.node_preparation ignored: SBE belongs to OS configuration.' }
 }
 
 function Get-ZtpEnvironmentWarning {
@@ -440,7 +403,7 @@ function Get-ZtpManagementAssignment {
     <#
     .SYNOPSIS
     How each node's management address is set: static (the provisioning service sets ip_address on the port with
-    mac_address, and Prepare checks it), dhcp (stays DHCP; reserve ip_address for the MAC) or preconfigured (ZTP doesn't
+    mac_address), dhcp (stays DHCP; reserve ip_address for the MAC) or preconfigured (ZTP doesn't
     change the port). Default static. With -Node, the node's own cluster_nodes[].ip_assignment wins (the schema 5 reader sets
     it from each node's management port).
     #>
@@ -560,55 +523,6 @@ function Resolve-ZtpNodeSelection {
     return @($Node | Select-Object -Unique)
 }
 
-function Get-ZtpSbeBundle {
-    <#
-    .SYNOPSIS
-    Finds the three files an OEM's SBE needs in a folder: SBE_*.zip, its <name>.xml and SBE_Discovery_*.xml.
-    #>
-    [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$Path)
-    if (-not (Test-Path -LiteralPath $Path -PathType Container)) { throw "SBE folder $Path doesn't exist." }
-    $zips = @(Get-ChildItem -LiteralPath $Path -File -Filter 'SBE_*.zip')
-    if ($zips.Count -ne 1) { throw "Expected one SBE_*.zip in $Path, found $($zips.Count)." }
-    $zip = $zips[0]
-    $name = [IO.Path]::GetFileNameWithoutExtension($zip.Name)
-    $xml = @(Get-ChildItem -LiteralPath $Path -File -Filter "$name.xml")
-    $discovery = @(Get-ChildItem -LiteralPath $Path -File -Filter 'SBE_Discovery_*.xml')
-    if (-not $xml -or -not $discovery) { throw "$Path needs $($zip.Name), $name.xml and the SBE_Discovery_*.xml file." }
-    return [pscustomobject]@{ Name = $name; Zip = $zip; Files = @($zip, $xml[0], $discovery[0]) }
-}
-
-function Test-ZtpSbeHash {
-    <#
-    .SYNOPSIS
-    Checks the SBE zip against the SHA-256 the OEM publishes; throws on a mismatch.
-    .DESCRIPTION
-    Reads the OEM's SBE discovery manifest from -ManifestUrl when given, and falls back to the SBE_Discovery_*.xml that came
-    with the package if it can't be reached. Returns the name, hash and where the expected hash came from.
-    #>
-    [CmdletBinding()]
-    param([Parameter(Mandatory)][pscustomobject]$Bundle, [string]$ManifestUrl)
-    $manifest = $null
-    $source = ''
-    if ($ManifestUrl) {
-        try { $manifest = [xml](Invoke-WebRequest -Uri $ManifestUrl -TimeoutSec 60).Content; $source = $ManifestUrl }
-        catch { Write-Warning "Couldn't read $ManifestUrl ($($_.Exception.Message)); using the SBE's discovery XML." }
-    }
-    if (-not $manifest) {
-        $discovery = $Bundle.Files[2]
-        try { $manifest = [xml](Get-Content -LiteralPath $discovery.FullName -Raw) }
-        catch { throw "$($discovery.Name) isn't valid XML: $($_.Exception.Message)" }
-        $source = $discovery.Name
-    }
-    if (-not $manifest.DocumentElement -or $manifest.DocumentElement.LocalName -ne 'SBEUpdatesManifest') { throw "$source isn't an SBE discovery manifest (no SBEUpdatesManifest element)." }
-    $update = @($manifest.DocumentElement.ApplicableUpdate | Where-Object { $_ -and $_.UpdateInfo.UpdateName -eq $Bundle.Name })
-    if (-not $update) { throw "$($Bundle.Name) isn't in $source." }
-    $expected = ([string]$update[0].UpdateInfo.PackageHash).Trim().ToUpperInvariant()
-    $actual = (Get-FileHash -LiteralPath $Bundle.Zip.FullName -Algorithm SHA256).Hash
-    if ($actual -ne $expected) { throw "$($Bundle.Zip.Name) has SHA-256 $actual; $source says $expected." }
-    return [pscustomobject]@{ Name = $Bundle.Name; Hash = $actual; Source = $source }
-}
-
 # ======================================================================================================================
 # Schema 5: the master infrastructure.yml (azurelocal-toolkit config/infrastructure). Read-ZtpInfrastructure detects the
 # format, validates a schema 5 file (with the toolkit's AzlInfrastructure module when the toolkit sits next to this
@@ -681,11 +595,11 @@ function Test-ZtpInfrastructureV5 {
     #>
     [CmdletBinding()]
     [OutputType([string])]
-    param([Parameter(Mandatory)][System.Collections.IDictionary]$Data, [ValidateSet('Provision', 'Prepare')][string]$For = 'Provision')
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Data)
     $version = [string](Get-ZtpEnvValue -Environment $Data -Path '_metadata.schema_version')
     if (-not $version) { $version = [string]$Data['schema_version'] }
     if ($version -notmatch '^5\.\d+\.\d+$') { "_metadata.schema_version is '$version'; ZTP reads schema 5.x." }
-    if ($For -eq 'Provision' -and [string](Get-ZtpEnvValue -Environment $Data -Path 'scenario.os_install') -ne 'simplified') {
+    if ([string](Get-ZtpEnvValue -Environment $Data -Path 'scenario.os_install') -ne 'simplified') {
         "scenario.os_install is '$(Get-ZtpEnvValue -Environment $Data -Path 'scenario.os_install')'; ZTP provisions with simplified machine provisioning (os_install: simplified)."
     }
     $nodeValue = Get-ZtpEnvValue -Environment $Data -Path 'nodes'
@@ -711,7 +625,6 @@ function Test-ZtpInfrastructureV5 {
     elseif ($admin) {
         $sub = [string]$vaults[$admin.Vault]['subscription_id']
         foreach ($ref in @(
-                @{ Path = 'identity.local_admin.password'; Value = (Get-ZtpEnvValue -Environment $Data -Path 'identity.local_admin.password') }
                 @{ Path = 'hardware.bmc.password'; Value = (Get-ZtpEnvValue -Environment $Data -Path 'hardware.bmc.password') }
                 @{ Path = 'hardware.bmc.username'; Value = (Get-ZtpEnvValue -Environment $Data -Path 'hardware.bmc.username') }
                 @{ Path = 'provisioning.simplified.maintenance_password'; Value = (Get-ZtpEnvValue -Environment $Data -Path 'provisioning.simplified.maintenance_password') })) {
@@ -721,7 +634,7 @@ function Test-ZtpInfrastructureV5 {
             elseif ([string]$vaults[$r.Vault]['subscription_id'] -ne $sub) { "$($ref.Path) is in vault '$($r.Vault)', in another subscription than the provisioning admin's vault '$($admin.Vault)'. ZTP reads its secrets in one subscription." }
         }
     }
-    if ($For -eq 'Provision' -and -not (Get-ZtpEnvValue -Environment $Data -Path 'hardware.bmc.password')) { 'hardware.bmc (username and password) is required: ZTP mounts the image and boots each node through its BMC.' }
+    if (-not (Get-ZtpEnvValue -Environment $Data -Path 'hardware.bmc.password')) { 'hardware.bmc (username and password) is required: ZTP mounts the image and boots each node through its BMC.' }
 }
 
 function ConvertFrom-ZtpInfrastructureV5 {
@@ -766,13 +679,7 @@ function ConvertFrom-ZtpInfrastructureV5 {
         if ($n['rack_position']) { $node['rack_position'] = $n['rack_position'] }
         if ($n['bios'] -is [System.Collections.IDictionary]) { $node['bios'] = $n['bios'] }
         if ($n['bios_during_provisioning'] -is [System.Collections.IDictionary]) { $node['bios_during_provisioning'] = $n['bios_during_provisioning'] }
-        if ($n.Contains('network_adapters')) {
-            $node['network_adapters'] = @(@($n['network_adapters']) | Where-Object { $_ -is [System.Collections.IDictionary] } | ForEach-Object {
-                    $a = [ordered]@{ name = [string]$_['name']; roles = @($_['roles']); ip_assignment = [string]$_['ip_assignment'] }
-                    if ($_['mac_address']) { $a['mac_address'] = [string]$_['mac_address'] }
-                    $a
-                })
-        }
+        # The node's other ports aren't mapped: setting them up (DHCP off and so on) is OS configuration.
         $nodes.Add($node)
     }
 
@@ -791,11 +698,9 @@ function ConvertFrom-ZtpInfrastructureV5 {
     foreach ($k in 'vendor', 'model') { & $put $env_.hardware $k (& $v "hardware.$k") }
     if ((& $v 'hardware.bios') -is [System.Collections.IDictionary]) { $env_.hardware['bios'] = & $v 'hardware.bios' }
     if ((& $v 'hardware.bios_during_provisioning') -is [System.Collections.IDictionary]) { $env_.hardware['bios_during_provisioning'] = & $v 'hardware.bios_during_provisioning' }
-    $env_['credentials'] = [ordered]@{}
-    & $put $env_.credentials 'local_admin_username' (& $v 'identity.local_admin.username')
-    & $put $env_.credentials 'local_admin_password_secret' (& $v 'identity.local_admin.password')
+    # identity.local_admin (the deployment admin), networking.ntp_servers and hardware.sbe aren't mapped: OS configuration
+    # and deployment read them; ZTP doesn't.
     $env_['network_intents'] = [ordered]@{ management = $mgmt }
-    $env_['onprem'] = [ordered]@{}; & $put $env_.onprem 'ntp_servers' (& $v 'networking.ntp_servers')
     $env_['cluster_nodes'] = $nodes.ToArray()
 
     $ztp = [ordered]@{}
@@ -831,11 +736,6 @@ function ConvertFrom-ZtpInfrastructureV5 {
     if ($userRef) { $bmcSecret['username_name'] = $userRef.Secret; if (-not $passwordRef -or $userRef.Vault -ne $passwordRef.Vault) { $bmcSecret['username_vault'] = $userRef.Vault } }
     elseif ($user) { $bmcSecret['username'] = [string]$user }
     $ztp['bmc_secret'] = $bmcSecret
-    $prep = [ordered]@{}
-    & $put $prep 'sbe_bundle' (& $v 'hardware.sbe.bundle_path')
-    $allow = & $v 'hardware.sbe.allow_unvalidated'
-    if ($null -ne $allow) { $prep['allow_unvalidated_sbe'] = $allow }
-    $ztp['node_preparation'] = $prep
     $env_['ztp'] = $ztp
     return $env_
 }
@@ -856,9 +756,6 @@ function ConvertTo-ZtpSchema5Message {
         'azure_identity.azure_tenant_id'               = 'azure.tenant_id'
         'azure_resources.location'                     = 'azure.location'
         'network_intents.management.'                  = 'networking.management.'
-        'onprem.ntp_servers'                           = 'networking.ntp_servers'
-        'credentials.local_admin_username'             = 'identity.local_admin.username'
-        'credentials.local_admin_password_secret'      = 'identity.local_admin.password'
         'ztp.subscription_id'                          = 'azure.subscription_id (or provisioning.simplified.subscription_id)'
         'ztp.resource_group'                           = 'azure.resource_group (or provisioning.simplified.resource_group)'
         'ztp.site_name'                                = 'provisioning.simplified.site_name'
@@ -881,8 +778,6 @@ function ConvertTo-ZtpSchema5Message {
         'ztp.bmc_secret.username_name'                 = 'hardware.bmc.username'
         'ztp.bmc_secret.password_name'                 = 'hardware.bmc.password'
         'ztp.bmc_secret.vault'                         = 'hardware.bmc.password (keyvault://<vault>/<secret>)'
-        'ztp.node_preparation.sbe_bundle'              = 'hardware.sbe.bundle_path'
-        'ztp.node_preparation.allow_unvalidated_sbe'   = 'hardware.sbe.allow_unvalidated'
     }
     foreach ($k in $map.Keys) { $m = $m.Replace($k, $map[$k]) }
     return $m
@@ -905,7 +800,6 @@ function Read-ZtpInfrastructure {
     [OutputType([System.Collections.Specialized.OrderedDictionary])]
     param(
         [Parameter(Mandatory)][string]$Path,
-        [ValidateSet('Provision', 'Prepare')][string]$For = 'Provision',
         [string]$ToolkitModulePath
     )
     $data = Read-ZtpEnvironmentFile -Path $Path
@@ -924,9 +818,9 @@ function Read-ZtpInfrastructure {
         }
         $validator = "azurelocal-toolkit ($module)"
     }
-    foreach ($p in @(Test-ZtpInfrastructureV5 -Data $data -For $For)) { $problems.Add($p) }
+    foreach ($p in @(Test-ZtpInfrastructureV5 -Data $data)) { $problems.Add($p) }
     $env_ = ConvertFrom-ZtpInfrastructureV5 -Data $data
     $version = [string](Get-ZtpEnvValue -Environment $data -Path '_metadata.schema_version')
-    $env_['_source'] = [ordered]@{ format = 'schema5'; schema_version = $version; path = $full; validator = $validator; problems = $problems.ToArray(); warnings = $warnings.ToArray() }
+    $env_['_source'] = [ordered]@{ format = 'schema5'; schema_version = $version; path = $full; validator = $validator; problems = $problems.ToArray(); warnings = $warnings.ToArray(); ignored = @(if ((Get-ZtpEnvValue -Environment $data -Path 'hardware.sbe') -is [System.Collections.IDictionary]) { 'hardware.sbe' }) }
     return $env_
 }

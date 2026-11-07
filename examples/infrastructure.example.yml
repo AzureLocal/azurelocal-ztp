@@ -1,8 +1,11 @@
-# Example environment file for azurelocal-ztp (Invoke-ZtpEnvironment.ps1 and Initialize-ZtpNode.ps1).
+# Example environment file for azurelocal-ztp (Invoke-ZtpEnvironment.ps1), in the older layout. New files use the master
+# infrastructure.yml (schema 5); see docs/infrastructure-schema-5.md.
 # Placeholder values only: addresses are from RFC 5737 documentation ranges, MAC addresses from the RFC 7042 documentation
 # range. Copy it outside this repository and fill in your values. Every key is described in docs/environment-file.md.
 # The file holds no secrets: each credential is a Key Vault reference. ZTP ignores keys it doesn't use, so this can be
 # part of a larger environment file.
+# ZTP ends at the Handoff, after Network and Restore. OS configuration (OEM drivers, the SBE, DNS, time, the deployment admin) reads its own
+# settings; ZTP accepts an old ztp.node_preparation block and ignores it.
 
 azure_identity:
   azure_tenant_id: "<tenant-id>"
@@ -15,12 +18,7 @@ site:
   name: "Example site"
 
 hardware:
-  vendor: Dell                     # picks config/oem/dell.json
-  model: AX-760                    # SBE selection; becomes AX760
-
-onprem:
-  ntp_servers:
-    - 192.0.2.123
+  vendor: Dell                     # picks config/oem/dell.json (BMC log services and signals)
 
 network_intents:
   management:
@@ -30,16 +28,11 @@ network_intents:
       - 192.0.2.53
       - 192.0.2.54
 
-credentials:
-  # Deployment admin that Prepare creates in local Administrators. Not Administrator or Guest.
-  local_admin_username: <deployment-admin-username>
-  local_admin_password_secret: keyvault://<vault-name>/<deployment-admin-secret-name>
-
 cluster_nodes:
   - name: node-01
     service_tag: <serial-number-1>
     idrac_ip: 198.51.100.11        # BMC address
-    ip_address: 192.0.2.11         # management address; give the MAC below a DHCP reservation for it
+    ip_address: 192.0.2.11         # management address, set on the port with the MAC below
     mac_address: "00-00-5E-00-53-01"
   - name: node-02
     service_tag: <serial-number-2>
@@ -81,7 +74,3 @@ ztp:
     vault: <vault-name>
     username_name: <bmc-username-secret-name>
     password_name: <bmc-password-secret-name>
-
-  node_preparation:
-    # Folder with SBE_<OEM>_<family>_<version>.zip, its .xml and SBE_Discovery_<OEM>.xml from the OEM.
-    sbe_bundle: 'D:\ztp\sbe\<sbe-folder>'

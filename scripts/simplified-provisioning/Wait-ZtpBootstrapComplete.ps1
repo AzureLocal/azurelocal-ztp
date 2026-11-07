@@ -83,7 +83,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'ZtpVirtualUsb.Common.ps1')
 . (Join-Path $PSScriptRoot 'ZtpAzure.Common.ps1')
-. (Join-Path $PSScriptRoot 'ZtpSbe.Common.ps1')
+. (Join-Path $PSScriptRoot 'ZtpOem.Common.ps1')
 if (-not (Get-Command Get-ZtpBmcReading -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'ZtpEvents.Common.ps1') }
 if (-not (Get-Command New-ZtpRedfishSession -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'ZtpRedfish.Common.ps1') }
 

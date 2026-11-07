@@ -1,5 +1,5 @@
 # Synthetic environment file for the tests. Placeholder values only: documentation addresses (RFC 5737), all-zero GUIDs and
-# example names. The SBE folder is replaced by the tests with a folder in TestDrive.
+# example names. ztp.node_preparation stays, as in live files that predate ZTP ending at Network: ZTP ignores it.
 azure_identity:
   azure_tenant_id: 00000000-0000-0000-0000-000000000000
 azure_resources:
@@ -56,4 +56,4 @@ ztp:
     username_name: bmc-username
     password_name: bmc-password
   node_preparation:
-    sbe_bundle: __SBE_BUNDLE__
+    sbe_bundle: 'D:/example/sbe'

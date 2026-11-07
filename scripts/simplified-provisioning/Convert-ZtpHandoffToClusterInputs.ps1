@@ -2,15 +2,17 @@
 <#
 .SYNOPSIS
 Turns ztp-handoff.json into the block the cluster deployment solution wants in its environment file: arc_machine_names
-(node host name -> Arc machine name), plus the sbe descriptor and the release versions when the handoff has them.
+(node host name -> Arc machine name), plus the installed solution version.
 .DESCRIPTION
-Simplified machine provisioning names each Arc machine by device ID, not after the host, so the cluster deployment needs
-arc_machine_names[<host name>] to build the Arc node resource IDs (and its pre-Deploy Arc-name gate reads the same map). The
-output is plain YAML (default) or JSON, printed and optionally written to -OutputPath, for the attendee to paste into their
-environment file. Pure conversion: no Azure, no hardware, no file other than -OutputPath is touched.
-Keys: arc_machine_names; sbe { version, family, publisher, manifest_source, manifest_creation_date } (empty when the handoff
-has no SBE); release { azure_local_version (the solution recipe version), sbe_version }. Check release.* against your
-environment schema before pasting: only arc_machine_names is required by the cluster deployment inputs.
+The cluster deployment needs arc_machine_names[<host name>] to build the Arc node resource IDs (and its pre-Deploy Arc-name
+gate reads the same map); ZTP names each Arc machine after its node unless the infrastructure file says otherwise, and the
+handoff records the name Azure actually has. The output is plain YAML (default) or JSON, printed and optionally written to
+-OutputPath, for the operator to paste into their environment file. Pure conversion: no Azure, no hardware, no file other
+than -OutputPath is touched.
+Keys: arc_machine_names; release { azure_local_version (the solution build installed) }. Only arc_machine_names is required
+by the cluster deployment inputs. ZTP carries no SBE: the SBE belongs to OS configuration and deployment, so an older
+(schema 1) handoff's sbe block is ignored.
+Reads handoff schema 2 (New-ZtpHandoff.ps1 now) and schema 1 (before ZTP ended at the Network stage).
 .PARAMETER HandoffPath
 ztp-handoff.json from New-ZtpHandoff.ps1.
 .PARAMETER Format
@@ -26,7 +28,7 @@ Also write the text here.
 param(
     [Parameter(Mandatory)][string]$HandoffPath,
     [ValidateSet('Yaml', 'Json')][string]$Format = 'Yaml',
-    [ValidateSet('arc_machine_names', 'sbe', 'release')][string[]]$Only,
+    [ValidateSet('arc_machine_names', 'release')][string[]]$Only,
     [string]$OutputPath
 )
 
@@ -35,14 +37,7 @@ $ErrorActionPreference = 'Stop'
 
 if (-not (Test-Path -LiteralPath $HandoffPath -PathType Leaf)) { throw "Handoff file not found: $HandoffPath" }
 $h = Get-Content -LiteralPath $HandoffPath -Raw | ConvertFrom-Json -Depth 20
-if (-not $h.PSObject.Properties['schemaVersion'] -or [int]$h.schemaVersion -ne 1) { throw "Unsupported handoff schemaVersion in $HandoffPath." }
-function ConvertTo-ZtpUtcText {
-    # ConvertFrom-Json turns ISO 8601 strings into DateTime; write them back as the UTC text they were.
-    param([AllowNull()][object]$Value)
-    if ($null -eq $Value) { return '' }
-    if ($Value -is [datetime]) { return $Value.ToUniversalTime().ToString('yyyy-MM-dd''T''HH:mm:ss''Z''') }
-    return [string]$Value
-}
+if (-not $h.PSObject.Properties['schemaVersion'] -or [int]$h.schemaVersion -notin 1, 2) { throw "Unsupported handoff schemaVersion in $HandoffPath." }
 $nodes = @($h.nodes)
 if ($nodes.Count -eq 0) { throw 'The handoff lists no nodes.' }
 $map = [ordered]@{}
@@ -52,12 +47,10 @@ foreach ($n in $nodes) {
     $map[[string]$n.name] = [string]$n.arcMachineName
 }
 if (@($map.Values | Select-Object -Unique).Count -ne $map.Count) { throw 'Two nodes share one Arc machine name.' }
-$sbe = if ($h.PSObject.Properties['sbe'] -and $h.sbe) { $h.sbe } else { $null }
-$vsr = if ($h.PSObject.Properties['solution'] -and $h.solution) { [string]$h.solution.vsrVersion } else { '' }
+$vsr = if ($h.PSObject.Properties['solution'] -and $h.solution -and $h.solution.PSObject.Properties['vsrVersion']) { [string]$h.solution.vsrVersion } else { '' }
 $all = [ordered]@{
     arc_machine_names = $map
-    sbe               = $(if ($sbe) { [ordered]@{ version = [string]$sbe.version; family = [string]$sbe.family; publisher = [string]$sbe.publisher; manifest_source = [string]$sbe.manifestSource; manifest_creation_date = (ConvertTo-ZtpUtcText $sbe.manifestCreationDate) } } else { [ordered]@{} })
-    release           = [ordered]@{ azure_local_version = $vsr; sbe_version = $(if ($sbe) { [string]$sbe.version } else { '' }) }
+    release           = [ordered]@{ azure_local_version = $vsr }
 }
 $out = [ordered]@{}
 foreach ($key in $all.Keys) { if (-not $Only -or $key -in $Only) { $out[$key] = $all[$key] } }

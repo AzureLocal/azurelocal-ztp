@@ -8,7 +8,7 @@ States of one node, in order: NotStarted -> Mounted -> Booting -> MaintenanceEnv
 ReadyForPortal. Failure states: MediaRejected, BootStalled, EnvironmentStalled, VoucherMissing, Failed.
 Evidence is only what can be read without a credential on the node: Redfish power, boot override and virtual media (read
 only), the BMC log services, the voucher in the read-write image, and Azure ARM (read only). Which of these signals is proven
-on hardware is stated in docs/bootstrap-media-and-sbe.md; the log patterns come from config/oem/<oem>.json and are
+on hardware is stated in docs/bootstrap-media.md; the log patterns come from config/oem/<oem>.json and are
 labelled unverified there. No secret is read or written; vouchers are validated and only their SHA256 is reported.
 #>
 Set-StrictMode -Version Latest

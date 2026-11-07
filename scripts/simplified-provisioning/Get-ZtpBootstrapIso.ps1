@@ -14,7 +14,7 @@ Integrity: Microsoft publishes no hash for this download. The first good downloa
 manifest (bootstrap-manifest.json: version, url, sha256, size, downloadedUtc, isoPath, isoSha256, etag, lastModified). A later
 run reuses the cached ISO only when its SHA256 still equals the manifest; a re-download of the same version whose SHA256
 differs from the manifest is refused unless -RefreshTrust. This detects corruption, truncation and a changed publication; it
-does not detect a poisoned first download (see docs/bootstrap-media-and-sbe.md).
+does not detect a poisoned first download (see docs/bootstrap-media.md).
 Without -Execute the script only resolves (read-only HEAD requests) and prints what it would download and where.
 .PARAMETER Version
 latest (default), a train (2610), a build (10.2610.0.3061) or an https download URL on a Microsoft download host.

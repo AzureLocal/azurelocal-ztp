@@ -2,12 +2,6 @@
   "oem": "HPE",
   "displayName": "HPE ProLiant (iLO)",
   "publisher": "HPE",
-  "sbe": {
-    "discoveryManifestUrl": "https://aka.ms/AzureStackSBEUpdate/HPE",
-    "releaseNotesUrl": null,
-    "downloadMethod": "vendor-connector",
-    "note": "Discovery manifest resolves (verified); package URIs are empty."
-  },
   "bmc": {
     "kind": "ilo",
     "managerId": "1",

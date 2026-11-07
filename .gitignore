@@ -103,5 +103,5 @@ ztp-cluster-inputs.json
 ztp-sonar.config.json
 ZtpDownloads/
 
-# Invoke-ZtpEnvironment.ps1 / Initialize-ZtpNode.ps1 working folder: ISO, node images, vouchers, unpacked SBE drivers, run state
+# Invoke-ZtpEnvironment.ps1 working folder (older runs): ISO, node images, vouchers, run state
 /_media/

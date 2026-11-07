@@ -165,14 +165,16 @@ if (-not $Execute) { return 'PLAN: share' }
 [CmdletBinding(SupportsShouldProcess)]
 param($ShareHost, $ShareName, $ImageNamePrefix, $ReadOnly, $RfsWriteAttribute, $Restart, $ConfirmNotClustered, $SkipCertificateCheck, $NodesFile, $Nodes, [string[]]$NodeName, $Credential, $ShareCredential, [switch]$Execute)
 if (-not $Execute) { return "PLAN: mount $($NodeName -join ',')" }
-Add-Content -LiteralPath (Join-Path $env:ZTP_TEST_BIOS_DIR 'order.txt') -Value "mount $($NodeName[0])"
+# The nodes run in parallel runspaces: retry when the other one holds the file.
+foreach ($try in 1..50) { try { Add-Content -LiteralPath (Join-Path $env:ZTP_TEST_BIOS_DIR 'order.txt') -Value "mount $($NodeName[0])" -ErrorAction Stop; break } catch { Start-Sleep -Milliseconds 20 } }
 [pscustomobject]@{ Node = $NodeName[0]; Image = "//$ShareHost/$ShareName/ztp-usb-$($NodeName[0]).img"; WriteProtected = $false }
 '@
         Set-Content -LiteralPath (Join-Path $script:bin 'Set-ZtpBios.ps1') -Value @'
 [CmdletBinding(SupportsShouldProcess)]
 param([string]$NodeName, [string]$BmcAddress, [System.Collections.IDictionary]$Attributes, $Credential, $ChangeLogPath, $TimeoutMinutes, $PollSeconds, [switch]$ConfirmNotClustered, [switch]$SkipCertificateCheck, [switch]$Execute)
 if (-not $Execute) { return "PLAN: $NodeName BIOS $(@($Attributes.Keys | ForEach-Object { "$_=$($Attributes[$_])" }) -join ', ') on $BmcAddress" }
-Add-Content -LiteralPath (Join-Path $env:ZTP_TEST_BIOS_DIR 'order.txt') -Value "bios $NodeName $ChangeLogPath"
+# The nodes run in parallel runspaces: retry when the other one holds the file.
+foreach ($try in 1..50) { try { Add-Content -LiteralPath (Join-Path $env:ZTP_TEST_BIOS_DIR 'order.txt') -Value "bios $NodeName $ChangeLogPath" -ErrorAction Stop; break } catch { Start-Sleep -Milliseconds 20 } }
 [pscustomobject]@{ Node = $NodeName; Bmc = $BmcAddress; Status = 'Changed'; Changes = @($Attributes.Keys | ForEach-Object { "${_}: Enabled -> $($Attributes[$_])" }) }
 '@
         $script:images = Join-Path $TestDrive 'boot-images'

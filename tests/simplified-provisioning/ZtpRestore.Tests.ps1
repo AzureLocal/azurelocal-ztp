@@ -17,7 +17,8 @@ BeforeAll {
 [CmdletBinding(SupportsShouldProcess)]
 param([string]$NodeName, [string]$BmcAddress, [System.Collections.IDictionary]$Attributes, [pscredential]$Credential, [string]$ChangeLogPath, [int]$TimeoutMinutes, [switch]$ConfirmNotClustered, [switch]$SkipCertificateCheck, [switch]$Execute)
 $line = [ordered]@{ node = $NodeName; bmc = $BmcAddress; attributes = $Attributes; execute = [bool]$Execute; confirm = [bool]$ConfirmNotClustered; log = $ChangeLogPath } | ConvertTo-Json -Compress -Depth 5
-Add-Content -LiteralPath $env:ZTPR_LOG -Value $line
+# One file per node: the nodes run in parallel runspaces, and two appends to one file can collide.
+Set-Content -LiteralPath "$($env:ZTPR_LOG).$NodeName.$([guid]::NewGuid().ToString('N'))" -Value $line
 if (-not $Execute) { "PLAN: $NodeName BIOS stub"; return }
 if ($env:ZTPR_FAIL -eq $NodeName) { throw "$NodeName BIOS still reports Slot2=Disabled 30 minutes after the ForceRestart." }
 $status = if ($env:ZTPR_ALREADY -eq $NodeName) { 'AlreadySet' } else { 'Changed' }
@@ -26,7 +27,7 @@ $status = if ($env:ZTPR_ALREADY -eq $NodeName) { 'AlreadySet' } else { 'Changed'
     $script:restore = Join-Path $script:bin 'Restore-ZtpBios.ps1'
     $script:bmc = [pscredential]::new('bmc-example', (ConvertTo-SecureString 'Example-Not-A-Secret-1' -AsPlainText -Force))
     $script:writeNodes = {
-        param([hashtable]$Restore1, [hashtable]$Restore2)
+        param([System.Collections.IDictionary]$Restore1, [System.Collections.IDictionary]$Restore2)
         $n1 = [ordered]@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11' }
         $n2 = [ordered]@{ name = 'node-02'; service_tag = 'EXAMPLE2'; bmc_address = '198.51.100.12' }
         if ($Restore1) { $n1.bios_restore = $Restore1 }
@@ -35,7 +36,7 @@ $status = if ($env:ZTPR_ALREADY -eq $NodeName) { 'AlreadySet' } else { 'Changed'
         @{ nodes = @($n1, $n2) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $f
         $f
     }
-    $script:calls = { if (Test-Path -LiteralPath $env:ZTPR_LOG) { @(Get-Content -LiteralPath $env:ZTPR_LOG | ForEach-Object { $_ | ConvertFrom-Json }) } else { @() } }
+    $script:calls = { @(Get-ChildItem -Path "$($env:ZTPR_LOG).*" -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc | ForEach-Object { Get-Content -LiteralPath $_.FullName | ForEach-Object { $_ | ConvertFrom-Json } }) }
     $script:eventsOf = { param($p) if (Test-Path -LiteralPath $p) { @(Get-Content -LiteralPath $p | ForEach-Object { $_ | ConvertFrom-Json }) } else { @() } }
 }
 AfterAll { Remove-Item Env:\ZTPR_LOG, Env:\ZTPR_FAIL, Env:\ZTPR_ALREADY -ErrorAction SilentlyContinue }
@@ -59,7 +60,7 @@ Describe 'Restore-ZtpBios.ps1' {
     }
 
     It 'plans without -Execute: the final value from hardware.bios, else the value saved before Boot' {
-        $nodes = & $script:writeNodes @{ Slot2 = 'Enabled'; Slot3 = '' }
+        $nodes = & $script:writeNodes ([ordered]@{ Slot2 = 'Enabled'; Slot3 = '' })
         $out = @(& $script:restore -NodeName node-01, node-02 -NodesFile $nodes -Original @{ 'node-01' = @{ Slot3 = 'Enabled'; Slot2 = 'Enabled' } })
         ($out | Where-Object { $_ -is [string] }) | Should -Be 'PLAN: node-01 Restore BIOS Slot2=Enabled (from hardware.bios), Slot3=Enabled (from the value before Boot): PATCH OnReset, restart through Redfish, wait until the BIOS reports them; then wait until the Arc machine reports Connected and the edge machine is still ready to cluster.'
         @($out | Where-Object { $_ -isnot [string] } | ForEach-Object { "$($_.Node) $($_.Status)" }) | Should -Be @('node-02 NotNeeded', 'node-01 Planned')

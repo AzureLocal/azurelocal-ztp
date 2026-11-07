@@ -6,9 +6,10 @@ Zero-touch provisioning of Azure Local machines, end to end: Resolve -> Media ->
 One orchestrator over the stage scripts in this folder. Every input is a parameter, or a key of the same name in a JSON
 settings file (-ConfigPath; see config/simplified-provisioning/ztp-provisioning.example.json). A parameter wins over the
 file; nothing is hardcoded.
-  Resolve   Get-ZtpBootstrapIso.ps1 (+ Get-ZtpSbe.ps1): finds, downloads and verifies the newest maintenance ISO into
-            -BootstrapCacheDirectory and selects the OEM's newest SBE (descriptor only: the SBE does not go on the media). Runs
-            only when -BootstrapCacheDirectory is set; otherwise -SourcePath must name the ISO and the stage is recorded as skipped.
+  Resolve   Get-ZtpBootstrapIso.ps1: finds, downloads and verifies the newest maintenance ISO into -BootstrapCacheDirectory;
+            its version, URL and SHA256 go to the stage evidence. Runs only when -BootstrapCacheDirectory is set; otherwise
+            -SourcePath must name the ISO and the stage is recorded as skipped. ZTP doesn't resolve or stage an SBE: the OS
+            install discovers its own (the ProvisionOs job's SBEDiscoveryDownload step), and staging one is OS configuration.
   Media     New-ZtpVirtualUsbImage.ps1 -NodeName: one virtual-USB image per node (<ImageNamePrefix><node>.img in
             -ImageDirectory) from the maintenance ISO (-SourcePath), GPT with one FAT32 partition labelled CDROM.
   Boot      Start-MaintenanceBoot.ps1: sets each node's BIOS attributes from the node list's bios first (Set-ZtpBios.ps1:
@@ -26,9 +27,10 @@ file; nothing is hardcoded.
             the Configurator App instead (it only works if the USB export did not happen). Then the share, its firewall
             rule and account are removed (-KeepShare keeps them).
   Device    Set-ZtpDeviceConfiguration.ps1: in the maintenance environment, before the claim, sets each static management
-            address on the port with the node's management MAC, and the host name, through the Configurator App's REST
-            service (https://<maintenance_address>:20001/BootstrapOobeService, edgeuser and -EdgeUserPassword, default
-            Password1). Nodes without a maintenance_address in the node list are skipped; Network covers them later.
+            address on the port with the node's management MAC through the Configurator App's REST service
+            (https://<maintenance address>:20001/BootstrapOobeService, edgeuser and -EdgeUserPassword, default Password1).
+            A static node without a maintenance_address is found by scanning its maintenance_scan_range (else the management
+            subnet) on TCP 20001 and matching its management MAC; dhcp and preconfigured nodes without one are skipped.
             Changes are logged to device-changes.jsonl beside -EventLogPath.
   Azure     Invoke-ZtpAzureProvisioning.ps1 stages Prereqs, Validate, Plan, Execute: site, site configuration and edge
             machines claimed with the vouchers. Refuses to submit when a voucher is missing.
@@ -38,16 +40,22 @@ file; nothing is hardcoded.
             through the edge machine's networkAdapters API (jobs/ApplyConfiguration), first moving any other adapter that
             holds the address to Dhcp. An adapter already right is left alone; dhcp and preconfigured nodes are only
             reported. Needed because the OS install ignores the MAC in the edge machine request and puts the address on the
-            first ready port. Changes are logged to network-changes.jsonl beside -EventLogPath.
+            first ready port. Changes are logged to network-changes.jsonl beside -EventLogPath. Each node's result (address
+            verified on the management port, or why not) is recorded in the state file for the handoff.
   Restore   Restore-ZtpBios.ps1: sets each BIOS value changed for the install only (the node list's bios_restore, from
             bios_during_provisioning) back to hardware.bios or to the value the Boot stage saved in the state file before
             changing it; PATCH OnReset, restart through Redfish, wait until the BIOS reports them. Then, after
             -RestoreSettleMinutes, waits until every Arc machine is Connected and every edge machine still ready to cluster
             (the Ready stage's watch and check). Events: stage Restore, BiosRestoreStarted, BiosRestored, BiosRestoreFailed.
             Without bios_during_provisioning it is a no-op that says so.
-  Handoff   New-ZtpHandoff.ps1 writes -HandoffPath (ztp-handoff.json: Arc machine names, site, solution, bootstrap and SBE versions,
-            timestamps); Convert-ZtpHandoffToClusterInputs.ps1 writes -ClusterInputsPath (the arc_machine_names block for the cluster
-            deployment environment file). Nothing is clustered here.
+  Handoff   New-ZtpHandoff.ps1 writes -HandoffPath (ztp-handoff.json: only what Azure generated during ZTP: edge machine
+            and Arc machine names and IDs, the site, the installed solution version, each node's Network result and the BIOS
+            values Restore set back); Convert-ZtpHandoffToClusterInputs.ps1 writes -ClusterInputsPath (the arc_machine_names
+            block for the cluster deployment environment file). Nothing is clustered here.
+ZTP ends here: each machine is Provisioned in Azure, Arc-connected, with its management address on the management port (by
+MAC). OS configuration (OEM drivers, the SBE in C:\SBE, DHCP off on the other ports, DNS and time, the deployment admin)
+comes next, before Validate and Deploy: azurelocal-toolkit Phase 03, documented at
+https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/.
 Plan by default: without -Execute the stage table and the command of every stage are printed, and the next stage shows its
 own plan (Media, Boot, Device, Azure, Network and Restore have a plan mode; Vouchers and Ready are waits). Nothing changes.
 With -Execute each stage runs, its result is checked (an image per node, every node booted read-write, a valid voucher per
@@ -67,7 +75,7 @@ Nodes to provision (default: every node in -NodesFile).
 .PARAMETER SourcePath
 Maintenance ISO from the Microsoft download, or a folder with its extracted contents.
 .PARAMETER BootstrapCacheDirectory
-Resolve: download cache of the maintenance ISO (and the SBE staging folder). Empty = no Resolve; -SourcePath must name the ISO.
+Resolve: download cache of the maintenance ISO. Empty = no Resolve; -SourcePath must name the ISO.
 .PARAMETER BootstrapVersion
 Resolve: latest (default), a train (2610), a build or a Microsoft download URL.
 .PARAMETER IncludePreview
@@ -75,15 +83,7 @@ Resolve: also consider preview trains.
 .PARAMETER MaxBootstrapTrain
 Resolve: highest train to consider.
 .PARAMETER Oem
-OEM definition in config/oem (default Dell): SBE discovery and BMC log signals.
-.PARAMETER SbeModel
-Resolve: hardware model for the SBE selection (for example AX760). Empty = no SBE selection.
-.PARAMETER SbeFamily
-Resolve: SBE family instead of a model.
-.PARAMETER SbeSolutionVersion
-Resolve: solution version the SBE must be validated with (latest = not checked).
-.PARAMETER SbePackagePath
-Resolve: SBE zip obtained from the OEM; its SHA256 is verified and it is staged.
+OEM definition in config/oem (default Dell): the BMC log services and signals the Bootstrap watch reads.
 .PARAMETER EventLogPath
 Bootstrap: JSON-lines event file (Sonar follows it).
 .PARAMETER BootstrapTimeoutMinutes
@@ -186,10 +186,6 @@ param(
     [switch]$IncludePreview,
     [ValidatePattern('^$|^\d{4}$')][string]$MaxBootstrapTrain,
     [ValidatePattern('^[A-Za-z0-9_-]{1,40}$')][string]$Oem = 'Dell',
-    [string]$SbeModel,
-    [string]$SbeFamily,
-    [string]$SbeSolutionVersion = 'latest',
-    [string]$SbePackagePath,
     [string]$EventLogPath = (Join-Path (Get-Location) 'ztp-events.jsonl'),
     [ValidateRange(1, 1440)][int]$BootstrapTimeoutMinutes = 120,
     [ValidateRange(1, 1440)][int]$BootstrapVoucherTimeoutMinutes = 90,
@@ -245,15 +241,18 @@ function Write-ZtpRunLog {
 }
 
 # ------------------------------------------------------------------ settings: parameter > -ConfigPath > default
-$settable = @('BootstrapCacheDirectory', 'BootstrapVersion', 'IncludePreview', 'MaxBootstrapTrain', 'Oem', 'SbeModel', 'SbeFamily', 'SbeSolutionVersion', 'SbePackagePath',
+$settable = @('BootstrapCacheDirectory', 'BootstrapVersion', 'IncludePreview', 'MaxBootstrapTrain', 'Oem',
     'EventLogPath', 'BootstrapTimeoutMinutes', 'BootstrapVoucherTimeoutMinutes', 'SkipAzureCheck', 'Location', 'HandoffPath', 'ClusterInputsPath',
     'NodesFile', 'NodeName', 'SourcePath', 'ImageDirectory', 'ImageNamePrefix', 'ShareHost', 'ShareName', 'VoucherDirectory',
     'VoucherFolder', 'VoucherWaitMinutes', 'RfsWriteAttribute', 'SkipCertificateCheck', 'KeepShare', 'SubscriptionId', 'ResourceGroupName',
     'ParameterFile', 'OsVersion', 'SiteMode', 'DeploymentName', 'ArcMachineNameMapPath', 'ReadyTimeoutMinutes', 'PollIntervalSeconds', 'DeviceTimeoutMinutes', 'NetworkTimeoutMinutes', 'RestoreSettleMinutes', 'BiosTimeoutMinutes', 'StatePath')
+# Settings of the SBE selection ZTP no longer does: an older settings file may still carry them.
+$retired = @('SbeModel', 'SbeFamily', 'SbeSolutionVersion', 'SbePackagePath')
 if ($ConfigPath) {
     $settings = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json -AsHashtable
     foreach ($key in $settings.Keys) {
         if ($key -eq '$schema') { continue }
+        if ($key -in $retired) { Write-ZtpRunLog "$key in ${ConfigPath} ignored: SBE belongs to OS configuration."; continue }
         if ($key -notin $settable) { throw "Unknown key '$key' in $ConfigPath. Keys: $($settable -join ', ')." }
         if ($PSBoundParameters.ContainsKey($key)) { continue }
         $value = $settings[$key]
@@ -322,14 +321,6 @@ function Get-ZtpStageCall {
                 if ($MaxBootstrapTrain) { $p.MaxTrain = $MaxBootstrapTrain }
                 & $actPlain $p
                 $calls.Add([pscustomobject]@{ Script = 'Get-ZtpBootstrapIso.ps1'; Parameters = $p })
-                if ($Oem -and ($SbeModel -or $SbeFamily)) {
-                    $s = [ordered]@{ Oem = $Oem; SolutionVersion = $SbeSolutionVersion; CacheDirectory = $BootstrapCacheDirectory }
-                    if ($SbeModel) { $s.Model = $SbeModel }
-                    if ($SbeFamily) { $s.Family = $SbeFamily }
-                    if ($SbePackagePath) { $s.PackagePath = $SbePackagePath }
-                    & $actPlain $s
-                    $calls.Add([pscustomobject]@{ Script = 'Get-ZtpSbe.ps1'; Parameters = $s })
-                }
             }
         }
         'Bootstrap' {
@@ -367,10 +358,12 @@ function Get-ZtpStageCall {
             $calls.Add([pscustomobject]@{ Script = 'Restore-ZtpBios.ps1'; Parameters = $p })
         }
         'Handoff' {
-            $resolved = if ($state['stages'].Contains('Resolve') -and $state['stages']['Resolve'].Contains('data')) { $state['stages']['Resolve']['data'] } else { @{} }
-            $p = [ordered]@{ SubscriptionId = $SubscriptionId; ResourceGroupName = $ResourceGroupName; NodeName = $NodeName; NodesFile = $NodesFile; EventLogPath = $EventLogPath; HandoffPath = $HandoffPath }
-            if ($resolved['bootstrapManifest']) { $p.BootstrapManifestPath = $resolved['bootstrapManifest'] }
-            if ($resolved['sbeManifest']) { $p.SbeManifestPath = $resolved['sbeManifest'] }
+            # Each node's Network result, as the Network stage recorded it in the state file. A node without one is
+            # reported as not verified by the handoff.
+            $recorded = if ($state['stages'].Contains('Network') -and $state['stages']['Network'] -is [System.Collections.IDictionary] -and $state['stages']['Network'].Contains('data') -and $state['stages']['Network']['data']) { $state['stages']['Network']['data']['managementAddress'] } else { $null }
+            $network = @(@($recorded) | Where-Object { $null -ne $_ })
+            $p = [ordered]@{ SubscriptionId = $SubscriptionId; ResourceGroupName = $ResourceGroupName; NodeName = $NodeName; NodesFile = $NodesFile; HandoffPath = $HandoffPath }
+            if ($network.Count) { $p.ManagementAddressCheck = $network }
             # The BIOS values the Restore stage set back, per node.
             if ($state['stages'].Contains('Restore') -and $state['stages']['Restore'] -is [System.Collections.IDictionary] -and $state['stages']['Restore'].Contains('data') -and $state['stages']['Restore']['data'] -and $state['stages']['Restore']['data']['restored'] -is [System.Collections.IDictionary] -and $state['stages']['Restore']['data']['restored'].Count) { $p.RestoredBios = $state['stages']['Restore']['data']['restored'] }
             & $actPlain $p
@@ -450,6 +443,7 @@ function Format-ZtpCall {
         $v = $Call.Parameters[$k]
         if ($v -is [bool]) { if ($v) { "-$k" } else { "-${k}:`$false" } }
         elseif ($v -is [securestring] -or $v -is [pscredential]) { "-$k <in memory>" }
+        elseif ($v -is [System.Collections.IEnumerable] -and $v -isnot [string] -and $v -isnot [System.Collections.IDictionary] -and @($v | Where-Object { $_ -is [System.Collections.IDictionary] -or $_ -is [System.Management.Automation.PSCustomObject] }).Count) { "-$k <$(@($v).Count) node result(s)>" }
         elseif ($v -is [System.Collections.IDictionary]) { "-$k <$($v.Count) node(s)>" }
         elseif ($v -is [System.Collections.IEnumerable] -and $v -isnot [string]) { "-$k $(@($v) -join ',')" }
         else { "-$k $v" }
@@ -464,6 +458,31 @@ function Invoke-ZtpStageScript {
     $p = @{}
     foreach ($k in $Call.Parameters.Keys) { $p[$k] = $Call.Parameters[$k] }
     & $path @p
+}
+
+function Get-ZtpManagementAddressCheck {
+    # One Network row as the handoff's per-node result: verified when the port with the management MAC carries the address
+    # the infrastructure file gives, otherwise a short reason. A static row only gets here as AlreadySet or Changed.
+    param([AllowNull()][object]$Row, [Parameter(Mandatory)][string]$Node)
+    $result = [ordered]@{ node = $Node; verified = $false; reason = $null }
+    if ($null -eq $Row) { $result.reason = 'the Network stage reported nothing for this node'; return $result }
+    $get = { param([string]$Name) if ($Row.PSObject.Properties[$Name]) { [string]$Row.$Name } else { '' } }
+    $mode = & $get 'Mode'
+    $address = & $get 'Address'
+    $expected = & $get 'ExpectedAddress'
+    $port = & $get 'AdapterName'
+    switch (& $get 'Status') {
+        { $_ -in 'AlreadySet', 'Changed' } { $result.verified = $true }
+        'NotConfigured' { $result.reason = 'no management settings in the infrastructure file' }
+        default {
+            if (-not (& $get 'MacAddress')) { $result.reason = "${mode}: no management MAC in the infrastructure file, so the port wasn't checked" }
+            elseif ($expected -and $address -eq $expected) { $result.verified = $true }
+            elseif (-not $address) { $result.reason = "${mode}: the management port $port reports no address" }
+            elseif ($expected) { $result.reason = "${mode}: the management port $port reports $address, the infrastructure file expects $expected" }
+            else { $result.reason = "${mode}: the management port $port reports $address; the infrastructure file gives no address to compare" }
+        }
+    }
+    return $result
 }
 
 function Assert-ZtpStageInput {
@@ -535,15 +554,10 @@ foreach ($name in $run) {
                 $iso = @(Invoke-ZtpStageScript -Call $calls[0] | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties['IsoPath'] }) | Select-Object -Last 1
                 if (-not $iso -or -not (Test-Path -LiteralPath $iso.IsoPath)) { throw 'Resolve: no verified maintenance ISO was produced.' }
                 $SourcePath = [string]$iso.IsoPath
-                $data = @{ isoPath = $SourcePath; bootstrapManifest = $iso.ManifestPath; bootstrapVersion = $iso.Version; isoSha256 = $iso.IsoSha256 }
-                $evidence = "maintenance ISO $($iso.Version) ($($iso.Channel)), SHA256 $($iso.IsoSha256)"
-                if ($calls.Count -gt 1) {
-                    $sbe = @(Invoke-ZtpStageScript -Call $calls[1] | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties['StagingFolder'] }) | Select-Object -First 1
-                    if ($sbe) {
-                        $data.sbeManifest = Join-Path $sbe.StagingFolder 'sbe-manifest.json'; $data.sbeVersion = $sbe.Version
-                        $evidence += "; $($sbe.Oem) SBE $($sbe.Version) ($($sbe.Status))"
-                    }
-                }
+                # The bootstrap ISO's details stay with the run (state file, stage evidence, event log), not in the handoff.
+                $url = if ($iso.PSObject.Properties['Url']) { [string]$iso.Url } else { '' }
+                $data = @{ isoPath = $SourcePath; bootstrapManifest = $iso.ManifestPath; bootstrapVersion = $iso.Version; isoSha256 = $iso.IsoSha256; bootstrapUrl = $url }
+                $evidence = "maintenance ISO $($iso.Version) ($($iso.Channel)), SHA256 $($iso.IsoSha256)$(if ($url) { ", from $url" })"
             }
         }
         'Bootstrap' {
@@ -564,7 +578,7 @@ foreach ($name in $run) {
             }
             $evidence = @($rows | ForEach-Object {
                     $r = $_
-                    $what = switch ($r.Status) { 'NotConfigured' { 'no management settings' } 'Skipped' { 'no maintenance_address, left to Network' } default { "$($r.Adapter) $($r.MacAddress) $($r.Mode) $($r.Address)".Trim() } }
+                    $what = switch ($r.Status) { 'NotConfigured' { 'no management settings' } 'Skipped' { 'not static and no maintenance_address, nothing to set' } default { "$($r.Adapter) $($r.MacAddress) $($r.Mode) $($r.Address)".Trim() } }
                     "$($r.Node) $what ($($r.Status))"
                 }) -join '; '
         }
@@ -579,6 +593,8 @@ foreach ($name in $run) {
                     $what = if ($_.Status -eq 'NotConfigured') { 'no management settings' } else { "$($_.AdapterName) $($_.MacAddress) $($_.Mode) $($_.Address)".Trim() }
                     "$($_.Node) $what ($($_.Status)$(if (@($_.Released).Count) { "; released from $(@($_.Released) -join ', ')" }))"
                 }) -join '; '
+            # Per node for the handoff: is the infrastructure file's management address on the port with the management MAC?
+            $data = @{ managementAddress = @(foreach ($node in $NodeName) { Get-ZtpManagementAddressCheck -Row ($rows | Where-Object Node -EQ $node | Select-Object -First 1) -Node $node }) }
         }
         'Restore' {
             $rows = @(Invoke-ZtpStageScript -Call $calls[0] | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties['Restored'] })
@@ -681,5 +697,8 @@ foreach ($name in $run) {
     Write-ZtpRunLog "Stage $name completed in $minutes min: $evidence"
     $results.Add([pscustomobject]@{ Stage = $name; Result = 'Completed'; Minutes = $minutes; Evidence = $evidence })
 }
-Write-ZtpRunLog "Next: cluster deployment. Paste $ClusterInputsPath (arc_machine_names) into the cluster deployment environment file; $HandoffPath has the rest. Hardware must not be clustered by this repository."
+if ('Handoff' -in $run) {
+    Write-ZtpRunLog "ZTP is done: the machines are Provisioned and Arc-connected, with the management address on the management port. $HandoffPath has the Arc machine names and IDs; $ClusterInputsPath has arc_machine_names for the cluster deployment environment file."
+    Write-ZtpRunLog 'Next: OS configuration (OEM drivers, the SBE in C:\SBE, DHCP off on the other ports, DNS and time, the deployment admin), then Validate and Deploy. ZTP does none of these. See https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/. Hardware must not be clustered by this repository.'
+}
 $results.ToArray()

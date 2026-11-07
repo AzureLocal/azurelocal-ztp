@@ -18,11 +18,11 @@ BeforeAll {
     'ShareName', 'ShareHost', 'Restart', 'ConfirmNotClustered', 'RfsWriteAttribute', 'SkipCertificateCheck', 'Credential', 'VoucherFolder',
     'TimeoutMinutes', 'Action', 'Remove', 'SharePath', 'Stage', 'SubscriptionId', 'ResourceGroupName', 'ParameterFile', 'VoucherPath', 'OsVersion',
     'SiteMode', 'Node', 'DeploymentName', 'AdminPassword', 'PollIntervalSeconds', 'RetryProvisionOs', 'ArcMachineNameMapPath', 'ExpectedMachineName',
-    'Version', 'CacheDirectory', 'IncludePreview', 'MaxTrain', 'Oem', 'SolutionVersion', 'Model', 'Family', 'PackagePath', 'EventLogPath', 'VoucherTimeoutMinutes',
-    'SkipAzureCheck', 'Location', 'HandoffPath', 'SbeManifestPath', 'BootstrapManifestPath', 'OutputPath', 'Format', 'BiosLogPath', 'ChangeLogPath', 'Original', 'RestoredBios'
+    'Version', 'CacheDirectory', 'IncludePreview', 'MaxTrain', 'Oem', 'EventLogPath', 'VoucherTimeoutMinutes',
+    'SkipAzureCheck', 'Location', 'HandoffPath', 'ManagementAddressCheck', 'OutputPath', 'Format', 'BiosLogPath', 'ChangeLogPath', 'Original', 'RestoredBios'
     $paramBlock = ($names | ForEach-Object { "[object]`$$_" }) -join ', '
     foreach ($script in 'New-ZtpVirtualUsbImage.ps1', 'Start-MaintenanceBoot.ps1', 'Wait-ZtpVoucher.ps1', 'Mount-ZtpVirtualUsb.ps1', 'Publish-MaintenanceIso.ps1',
-        'Invoke-ZtpAzureProvisioning.ps1', 'Test-ProvisionedMachines.ps1', 'Get-ZtpBootstrapIso.ps1', 'Get-ZtpSbe.ps1', 'Wait-ZtpBootstrapComplete.ps1',
+        'Invoke-ZtpAzureProvisioning.ps1', 'Test-ProvisionedMachines.ps1', 'Get-ZtpBootstrapIso.ps1', 'Wait-ZtpBootstrapComplete.ps1',
         'Set-ZtpDeviceConfiguration.ps1', 'Set-ZtpManagementAddress.ps1', 'Restore-ZtpBios.ps1', 'New-ZtpHandoff.ps1', 'Convert-ZtpHandoffToClusterInputs.ps1') {
         $body = @"
 [CmdletBinding(SupportsShouldProcess)]
@@ -45,14 +45,13 @@ if (`$global:ztpRunBehavior.ContainsKey('$script')) { & `$global:ztpRunBehavior[
     $script:healthy = {
         @{
             'New-ZtpVirtualUsbImage.ps1'      = { param($p) if ($p['Execute']) { foreach ($n in $p['NodeName']) { $f = Join-Path $p['OutputDirectory'] "ztp-usb-$n.img"; Set-Content -LiteralPath $f -Value 'img'; [pscustomobject]@{ Node = $n; ImagePath = $f; Sha256 = 'AB' } } } else { 'PLAN: build images' } }
-            'Get-ZtpBootstrapIso.ps1'         = { param($p) $iso = Join-Path $p['CacheDirectory'] 'provision-os.iso'; if ($p['Execute']) { $null = New-Item -ItemType Directory -Path $p['CacheDirectory'] -Force; Set-Content -LiteralPath $iso -Value 'iso' }; [pscustomobject]@{ Version = '10.2610.0.3061'; Channel = 'GA'; IsoPath = $iso; ManifestPath = "$iso.manifest.json"; IsoSha256 = 'CD'; Planned = (-not $p['Execute']) } }
-            'Get-ZtpSbe.ps1'                  = { param($p) [pscustomobject]@{ Oem = $p['Oem']; Version = '5.0.2606.1616'; Status = 'ManualOrConnector'; StagingFolder = (Join-Path $p['CacheDirectory'] 'sbe') } }
+            'Get-ZtpBootstrapIso.ps1'         = { param($p) $iso = Join-Path $p['CacheDirectory'] 'provision-os.iso'; if ($p['Execute']) { $null = New-Item -ItemType Directory -Path $p['CacheDirectory'] -Force; Set-Content -LiteralPath $iso -Value 'iso' }; [pscustomobject]@{ Version = '10.2610.0.3061'; Channel = 'GA'; Url = 'https://example.invalid/roe-2610.zip'; IsoPath = $iso; ManifestPath = "$iso.manifest.json"; IsoSha256 = 'CD'; Planned = (-not $p['Execute']) } }
             'Wait-ZtpBootstrapComplete.ps1'   = { param($p) foreach ($n in $p['NodeName']) { [pscustomobject]@{ Node = $n; State = 'ReadyForPortal'; Ready = $true; Evidence = 'ok'; VoucherSha256 = 'AB' } } }
             'New-ZtpHandoff.ps1'              = { param($p) if ($p['Execute']) { Set-Content -LiteralPath $p['HandoffPath'] -Value '{}' } }
             'Convert-ZtpHandoffToClusterInputs.ps1' = { param($p) Set-Content -LiteralPath $p['OutputPath'] -Value 'arc_machine_names: {}' }
             'Start-MaintenanceBoot.ps1'       = { param($p) if ($p['Execute']) { foreach ($n in $p['NodeName']) { [pscustomobject]@{ Node = $n; Image = "ztp-usb-$n.img"; WriteProtected = $false; Restarted = $true } } } }
             'Set-ZtpDeviceConfiguration.ps1'  = { param($p) if ($p['Execute']) { foreach ($n in $p['Node']) { [pscustomobject]@{ Node = $n; Mode = 'static'; Status = $(if ($n -eq 'node-01') { 'Changed' } else { 'Skipped' }); Adapter = 'eno1'; MacAddress = '00:00:5e:00:53:aa'; Address = $(if ($n -eq 'node-01') { '192.0.2.11' } else { '' }); MaintenanceAddress = $(if ($n -eq 'node-01') { '192.0.2.111' } else { '' }); Released = @() } } } else { 'PLAN: node-01: POST SetArcBootstrapDeviceConfiguration' } }
-            'Set-ZtpManagementAddress.ps1'    = { param($p) if ($p['Execute']) { foreach ($n in $p['Node']) { [pscustomobject]@{ Node = $n; Mode = 'static'; Status = $(if ($n -eq 'node-01') { 'Changed' } else { 'AlreadySet' }); Adapter = '00000000-0000-0000-0000-000000000001'; AdapterName = 'Port1'; MacAddress = '00:00:5e:00:53:aa'; Address = "192.0.2.1$($n[-1])"; Released = @(if ($n -eq 'node-01') { 'Port3' }); Changes = @() } } } else { 'PLAN: node-01: ApplyConfiguration on Port1' } }
+            'Set-ZtpManagementAddress.ps1'    = { param($p) if ($p['Execute']) { foreach ($n in $p['Node']) { [pscustomobject]@{ Node = $n; Mode = 'static'; Status = $(if ($n -eq 'node-01') { 'Changed' } else { 'AlreadySet' }); Adapter = '00000000-0000-0000-0000-000000000001'; AdapterName = 'Port1'; MacAddress = '00:00:5e:00:53:aa'; Address = "192.0.2.1$($n[-1])"; ExpectedAddress = "192.0.2.1$($n[-1])"; Released = @(if ($n -eq 'node-01') { 'Port3' }); Changes = @() } } } else { 'PLAN: node-01: ApplyConfiguration on Port1' } }
             'Wait-ZtpVoucher.ps1'             = { param($p) foreach ($n in $p['NodeName']) { $serial = if ($n -eq 'node-01') { 'EXAMPLE1' } else { 'EXAMPLE2' }; $f = Join-Path $p['OutputDirectory'] "$serial.pem"; Set-Content -LiteralPath $f -Value 'pem'; [pscustomobject]@{ Node = $n; Serial = $serial; OutputFile = $f; Valid = $true } } }
             'Invoke-ZtpAzureProvisioning.ps1' = { param($p)
                 switch ($p['Stage']) {
@@ -165,7 +164,7 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
         $device.Params.TimeoutMinutes | Should -Be 12
         $device.Params.ChangeLogPath | Should -Be (Join-Path $TestDrive 'device-changes.jsonl')
         $state = Get-Content $script:statePath -Raw | ConvertFrom-Json -AsHashtable
-        $state.stages.Device.evidence | Should -Be 'node-01 eno1 00:00:5e:00:53:aa static 192.0.2.11 (Changed); node-02 no maintenance_address, left to Network (Skipped)'
+        $state.stages.Device.evidence | Should -Be 'node-01 eno1 00:00:5e:00:53:aa static 192.0.2.11 (Changed); node-02 not static and no maintenance_address, nothing to set (Skipped)'
         $global:ztpRunBehavior['Set-ZtpDeviceConfiguration.ps1'] = { param($p) foreach ($n in $p['Node']) { [pscustomobject]@{ Node = $n; Mode = 'static'; Status = 'Planned'; MaintenanceAddress = '192.0.2.111' } } }
         { & $script:invoke @{ Execute = $true; Stage = 'Device'; Confirm = $false } } | Should -Throw '*Device: the static management address of node-01 is Planned, not set*'
     }
@@ -231,19 +230,78 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
         $changed[0].evidence | Should -Be 'Slot2: Enabled -> Disabled'
     }
 
-    It 'Resolve downloads the ISO and the SBE descriptor, Media builds from that ISO, and Handoff gets both manifests' {
+    It 'Resolve downloads the ISO and records its details as evidence, Media builds from that ISO, and no SBE is resolved' {
         $cache = Join-Path $TestDrive 'dl'
-        $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; SourcePath = $null; BootstrapCacheDirectory = $cache; SbeModel = 'AX760'; SbeSolutionVersion = '12.2609.1003.7'; MaxBootstrapTrain = '2610' }
+        $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; SourcePath = $null; BootstrapCacheDirectory = $cache; MaxBootstrapTrain = '2610' }
         $iso = $global:ztpRunCalls | Where-Object Script -EQ 'Get-ZtpBootstrapIso.ps1'
         $iso.Params.Execute | Should -BeTrue; $iso.Params.MaxTrain | Should -Be '2610'; $iso.Params.CacheDirectory | Should -Be $cache
-        ($global:ztpRunCalls | Where-Object Script -EQ 'Get-ZtpSbe.ps1').Params.Model | Should -Be 'AX760'
+        & $script:called | Should -Not -Contain 'Get-ZtpSbe.ps1'
         ($global:ztpRunCalls | Where-Object Script -EQ 'New-ZtpVirtualUsbImage.ps1').Params.SourcePath | Should -Be (Join-Path $cache 'provision-os.iso')
+        # The ISO details stay with the run (state, stage evidence, event log); the handoff gets none of them.
         $handoff = $global:ztpRunCalls | Where-Object Script -EQ 'New-ZtpHandoff.ps1'
-        $handoff.Params.BootstrapManifestPath | Should -Match 'provision-os.iso.manifest.json'
-        $handoff.Params.SbeManifestPath | Should -Match 'sbe-manifest.json'
+        $handoff.Params.Keys | Should -Not -Contain 'BootstrapManifestPath'
+        $handoff.Params.Keys | Should -Not -Contain 'EventLogPath'
         $state = Get-Content $script:statePath -Raw | ConvertFrom-Json -AsHashtable
         $state.stages.Resolve.data.bootstrapVersion | Should -Be '10.2610.0.3061'
-        $state.stages.Resolve.evidence | Should -Match 'SBE 5.0.2606.1616'
+        $state.stages.Resolve.data.bootstrapUrl | Should -Be 'https://example.invalid/roe-2610.zip'
+        $state.stages.Resolve.evidence | Should -Be 'maintenance ISO 10.2610.0.3061 (GA), SHA256 CD, from https://example.invalid/roe-2610.zip'
+        $events = @(Get-Content (Join-Path $TestDrive 'events.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
+        ($events | Where-Object { $_.state -eq 'StageCompleted' -and $_.stage -eq 'Resolve' }).evidence | Should -BeLike '*10.2610.0.3061*SHA256 CD*'
+        @($events | Where-Object stage -EQ 'Handoff' | ForEach-Object state) | Should -Be @('StageStarted', 'StageCompleted') -Because 'the timestamps of every stage stay in the event log'
+    }
+
+    It 'records each node''s Network result in the state file and hands it to the handoff' {
+        $global:ztpRunBehavior['Set-ZtpManagementAddress.ps1'] = { param($p) foreach ($n in $p['Node']) {
+                if ($n -eq 'node-01') { [pscustomobject]@{ Node = $n; Mode = 'static'; Status = 'Changed'; AdapterName = 'Port0'; MacAddress = '00:00:5e:00:53:aa'; Address = '192.0.2.11'; ExpectedAddress = '192.0.2.11'; Released = @() } }
+                else { [pscustomobject]@{ Node = $n; Mode = 'dhcp'; Status = 'Reported'; AdapterName = 'Port0'; MacAddress = '00:00:5e:00:53:bb'; Address = '192.0.2.200'; ExpectedAddress = '192.0.2.12'; Released = @() } }
+            } }
+        $null = & $script:invoke @{ Execute = $true; From = 'Network'; Confirm = $false }
+        $state = Get-Content $script:statePath -Raw | ConvertFrom-Json -AsHashtable
+        $checks = @($state.stages.Network.data.managementAddress)
+        $checks.Count | Should -Be 2
+        ($checks | Where-Object { $_.node -eq 'node-01' }).verified | Should -BeTrue
+        $two = $checks | Where-Object { $_.node -eq 'node-02' }
+        $two.verified | Should -BeFalse
+        $two.reason | Should -Be 'dhcp: the management port Port0 reports 192.0.2.200, the infrastructure file expects 192.0.2.12'
+        $handoff = $global:ztpRunCalls | Where-Object Script -EQ 'New-ZtpHandoff.ps1'
+        @($handoff.Params.ManagementAddressCheck).Count | Should -Be 2
+        (@($handoff.Params.ManagementAddressCheck) | Where-Object { $_['node'] -eq 'node-02' })['verified'] | Should -BeFalse
+        # A later -Stage Handoff reads the same result back from the state file.
+        $global:ztpRunCalls.Clear()
+        $null = & $script:invoke @{ Execute = $true; Stage = 'Handoff'; Confirm = $false }
+        $again = $global:ztpRunCalls | Where-Object Script -EQ 'New-ZtpHandoff.ps1'
+        (@($again.Params.ManagementAddressCheck) | Where-Object { $_['node'] -eq 'node-01' })['verified'] | Should -BeTrue
+    }
+
+    It 'turns each kind of Network row into a verified flag or a short reason' {
+        $global:ztpRunBehavior['Set-ZtpManagementAddress.ps1'] = { param($p) foreach ($n in $p['Node']) {
+                if ($n -eq 'node-01') { [pscustomobject]@{ Node = $n; Mode = ''; Status = 'NotConfigured'; AdapterName = ''; MacAddress = ''; Address = ''; ExpectedAddress = ''; Released = @() } }
+                else { [pscustomobject]@{ Node = $n; Mode = 'dhcp_reservation'; Status = 'Reported'; AdapterName = 'Port0'; MacAddress = '00:00:5e:00:53:bb'; Address = '192.0.2.12'; ExpectedAddress = '192.0.2.12'; Released = @() } }
+            } }
+        $null = & $script:invoke @{ Execute = $true; Stage = 'Network'; Confirm = $false }
+        $state = Get-Content $script:statePath -Raw | ConvertFrom-Json -AsHashtable
+        $checks = @($state.stages.Network.data.managementAddress)
+        $one = $checks | Where-Object { $_.node -eq 'node-01' }
+        $one.verified | Should -BeFalse; $one.reason | Should -Be 'no management settings in the infrastructure file'
+        ($checks | Where-Object { $_.node -eq 'node-02' }).verified | Should -BeTrue -Because 'a DHCP reservation that hands out the expected address is verified'
+        # The plan prints the Handoff call with the node results counted, never their contents.
+        $plan = (& $script:invoke @{ Stage = 'Handoff' } 6>&1 | ForEach-Object { "$_" }) -join "`n"
+        $plan | Should -BeLike '*New-ZtpHandoff.ps1 *-ManagementAddressCheck <2 node result(s)>*'
+    }
+
+    It 'ignores the SBE settings of an older settings file, with a note, instead of failing' {
+        $config = Join-Path $TestDrive 'settings-old.json'
+        @{ NodesFile = $script:nodesFile; SourcePath = 'D:\Media\from-file.iso'; ImageDirectory = $script:images; ShareHost = '192.0.2.20'; VoucherDirectory = $script:vouchers; SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroupName = 'rg-example'; ParameterFile = 'main.parameters.json'; SbeModel = 'AX760'; SbeSolutionVersion = 'latest'; SbePackagePath = 'D:\sbe.zip' } | ConvertTo-Json | Set-Content -LiteralPath $config
+        $out = (& $script:orchestrator -ConfigPath $config -StageScriptRoot $script:stubRoot -StatePath $script:statePath -WarningAction SilentlyContinue 6>&1 | ForEach-Object { "$_" }) -join "`n"
+        $out | Should -BeLike '*SbeModel in*ignored: SBE belongs to OS configuration.*'
+        $out | Should -BeLike '*SbePackagePath in*ignored: SBE belongs to OS configuration.*'
+        (Get-Command $script:orchestrator).Parameters.Keys | Should -Not -Contain 'SbeModel'
+    }
+
+    It 'says at the end that ZTP is done and OS configuration is next' {
+        $out = (& $script:invoke @{ Execute = $true; From = 'Handoff'; Confirm = $false; InformationAction = 'Continue' } 6>&1 | ForEach-Object { "$_" }) -join "`n"
+        $out | Should -BeLike '*ZTP is done: the machines are Provisioned and Arc-connected*'
+        $out | Should -BeLike '*Next: OS configuration*https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/*'
     }
 
     It 'resumes later stages with the ISO path recorded by Resolve' {
