@@ -119,6 +119,35 @@ if (-not $rpObjectId) { throw 'Set ztp.azl_rp_object_id: the Azure Local resourc
 
 $tags = @{}
 if ($ztp.Contains('tags') -and $ztp.tags) { foreach ($k in $ztp.tags.Keys) { $tags[[string]$k] = [string]$ztp.tags[$k] } }
+
+# Per node: the Arc machine name (default: the node name, so the Arc resource matches the host) and, for static, the
+# management port by MAC with its address. edgeMachines 2026-10-01: arcMachineResourceId and
+# siteDetails.deviceConfiguration.network.networkAdapters[] (ipAssignmentType Manual, macAddress, ipAddress, ...).
+$mgmtNet = $env_.network_intents.management
+$mgmtMode = Get-ZtpManagementAssignment -Environment $env_
+$mgmtMask = ConvertTo-ZtpSubnetMask -PrefixLength ([int](([string]$mgmtNet.subnet) -split '/')[1])
+$mgmtVlan = [string](Get-ZtpEnvValue -Environment $env_ -Path 'network_intents.management.vlan_id')
+if (-not $mgmtVlan) { $mgmtVlan = '0' }
+$bicepNodes = @($nodeList | ForEach-Object {
+        $arcName = [string](Get-ZtpEnvValue -Environment $_ -Path 'arc_machine_name')
+        [ordered]@{
+            name             = [string]$_.name
+            service_tag      = [string]$_.service_tag
+            arc_machine_name = $(if ($arcName) { $arcName } else { [string]$_.name })
+            management       = [ordered]@{
+                ip_assignment = $mgmtMode
+                # The maintenance environment (Linux) reports MACs lower case with colons, as its Arc machine does.
+                mac_address   = ([string]$_.mac_address).Replace('-', ':').ToLowerInvariant()
+                adapter_name  = [string](Get-ZtpEnvValue -Environment $_ -Path 'adapter_name')
+                ip_address    = [string]$_.ip_address
+                subnet_mask   = $mgmtMask
+                gateway       = [string]$mgmtNet.gateway
+                dns_servers   = @($mgmtNet.dns_servers | ForEach-Object { [string]$_ })
+                vlan_id       = $mgmtVlan
+            }
+        }
+    })
+Write-Output "Management addresses: $mgmtMode. Arc machine names: $(($bicepNodes | ForEach-Object { "$($_.name) -> $($_.arc_machine_name)" }) -join ', ')."
 $bicepParameters = [ordered]@{
     '$schema'      = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#'
     contentVersion = '1.0.0.0'
@@ -135,7 +164,7 @@ $bicepParameters = [ordered]@{
         admin_username            = @{ value = [string]$ztp.admin_secret.username }
         admin_secret_name         = @{ value = [string]$ztp.admin_secret.name }
         time_zone                 = @{ value = [string]$ztp.time_zone }
-        nodes                     = @{ value = @($nodeList | ForEach-Object { @{ name = [string]$_.name; service_tag = [string]$_.service_tag } }) }
+        nodes                     = @{ value = $bicepNodes }
         apply_site_settings       = @{ value = $true }
         use_key_vault_configuration = @{ value = $true }
         assign_provisioning_roles = @{ value = $true }

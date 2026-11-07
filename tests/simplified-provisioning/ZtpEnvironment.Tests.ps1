@@ -153,6 +153,10 @@ Describe 'Checking the environment file' {
         @{ Case = 'tags are a list'; Edit = { param($e) $e.ztp.tags = @('a') }; Expect = 'ztp.tags must be a mapping' }
         @{ Case = 'the location is missing'; Edit = { param($e) $e.Remove('azure_resources') }; Expect = 'azure_resources.location is required' }
         @{ Case = 'the unvalidated-SBE switch is not true or false'; Edit = { param($e) $e.ztp.node_preparation.allow_unvalidated_sbe = 'yes' }; Expect = "allow_unvalidated_sbe must be true or false, not 'yes'" }
+        @{ Case = 'the management IP assignment is unknown'; Edit = { param($e) $e.network_intents.management.ip_assignment = 'auto' }; Expect = "ip_assignment must be static, dhcp or preconfigured, not 'auto'" }
+        @{ Case = 'the management VLAN is out of range'; Edit = { param($e) $e.network_intents.management.vlan_id = 5000 }; Expect = "vlan_id must be 0-4094, not '5000'" }
+        @{ Case = 'an Arc machine name has a space'; Edit = { param($e) $e.cluster_nodes[0].arc_machine_name = 'node 01' }; Expect = "arc_machine_name 'node 01' isn't a valid Arc machine name" }
+        @{ Case = 'an Arc machine name ends in a dot'; Edit = { param($e) $e.cluster_nodes[0].arc_machine_name = 'node-01.' }; Expect = "arc_machine_name 'node-01.' isn't a valid Arc machine name" }
     ) {
         $e = Read-ZtpEnvironmentFile -Path $script:fixture
         & $Edit $e
@@ -188,6 +192,29 @@ Describe 'Checking the environment file' {
         $caught | Should -BeLike '*azure_identity.azure_tenant_id must be a GUID*'
         $caught | Should -BeLike '*ztp.resource_group is required*'
         $caught | Should -BeLike '*mac_address must be a MAC address*'
+    }
+}
+
+Describe 'Management address and Arc name settings' {
+    It 'defaults the management IP assignment to static and reads the value given' {
+        $e = Read-ZtpEnvironmentFile -Path $script:fixture
+        $e.network_intents.management.Remove('ip_assignment')
+        Get-ZtpManagementAssignment -Environment $e | Should -Be 'static'
+        foreach ($m in 'static', 'dhcp', 'preconfigured', 'DHCP') {
+            $e.network_intents.management.ip_assignment = $m
+            Get-ZtpManagementAssignment -Environment $e | Should -Be $m.ToLowerInvariant()
+            @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0 -Because "$m is a valid mode"
+        }
+    }
+    It 'accepts an Arc machine name, an adapter name and a VLAN, and leaves them optional' {
+        $e = Read-ZtpEnvironmentFile -Path $script:fixture
+        $e.cluster_nodes[0].arc_machine_name = 'node-01'; $e.cluster_nodes[0].adapter_name = 'SLOT 3 Port 1'; $e.network_intents.management.vlan_id = 711
+        @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
+    }
+    It 'turns a prefix length into a subnet mask' -ForEach @(
+        @{ Prefix = 24; Mask = '255.255.255.0' }, @{ Prefix = 22; Mask = '255.255.252.0' }, @{ Prefix = 32; Mask = '255.255.255.255' }, @{ Prefix = 0; Mask = '0.0.0.0' }, @{ Prefix = 1; Mask = '128.0.0.0' }
+    ) {
+        ConvertTo-ZtpSubnetMask -PrefixLength $Prefix | Should -Be $Mask
     }
 }
 
@@ -437,6 +464,14 @@ param($params)
         $bicep.parameters.azl_rp_app_object_id.value | Should -Be '00000000-0000-0000-0000-000000000001'
         @($bicep.parameters.nodes.value).Count | Should -Be 2
         $bicep.parameters.tags.value.purpose | Should -Be 'example'
+        # The Arc machine is named after the node, and the static management address is keyed by the port's MAC.
+        $n1 = $bicep.parameters.nodes.value[0]
+        $n1.arc_machine_name | Should -Be 'node-01'
+        $n1.management.ip_assignment | Should -Be 'static'
+        $n1.management.mac_address | Should -Be '02:00:00:00:00:11'
+        $n1.management.ip_address | Should -Be '192.0.2.11'
+        $n1.management.subnet_mask | Should -Be '255.255.255.0'
+        $n1.management.vlan_id | Should -Be '0'
 
         $global:ztpE_runs.Script | Should -Be @('Invoke-ZtpProvisioning.ps1', 'Initialize-ZtpNode.ps1')
         $global:ztpE_runs[0].Params['NodeName'] | Should -Be @('node-01', 'node-02')

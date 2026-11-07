@@ -113,6 +113,16 @@ Describe 'ZTP Azure half' {
             $null = az bicep build --file (Join-Path $script:scripts 'bicep/main.bicep') --stdout 2>&1
             $LASTEXITCODE | Should -Be 0
         }
+
+        It 'names each Arc machine and sets a static management address by MAC on the edge machine' {
+            # Without arcMachineResourceId the service names the Arc machine ROE1-<cloudId>, which can't be renamed.
+            $text = Get-Content (Join-Path $script:scripts 'bicep/main.bicep') -Raw
+            $text | Should -Match "arcMachineResourceId: '\$\{managedResourceGroupId\}/providers/Microsoft\.HybridCompute/machines/\$\{empty\(node\.\?arc_machine_name \?\? ''\) \? node\.name : node\.arc_machine_name\}'"
+            $text | Should -Match "\(node\.\?management\.\?ip_assignment \?\? ''\) == 'static'"
+            foreach ($key in 'ipAssignmentType: ''Manual''', 'macAddress: node.management.mac_address', 'ipAddress: node.management.ip_address', 'subnetMask: node.management.subnet_mask', 'gateway: node.management.gateway', 'dnsAddressArray: node.management.dns_servers') {
+                $text | Should -Match ([regex]::Escape($key))
+            }
+        }
     }
 
     Describe 'Parameters example' {

@@ -94,6 +94,9 @@ $gateway = [string]$mgmtNet.gateway
 $dns = @($mgmtNet.dns_servers | ForEach-Object { [string]$_ })
 $ntp = @($env_.onprem.ntp_servers | ForEach-Object { [string]$_ })
 $deployAdmin = [string]$env_.credentials.local_admin_username
+# static: set ip_address on the management port (the provisioning service may already have); dhcp: leave it on DHCP
+# (reserve ip_address); preconfigured: leave the port as it is. Other ports lose DHCP and gateways in every mode.
+$mgmtMode = Get-ZtpManagementAssignment -Environment $env_
 
 $envNodes = @($env_.cluster_nodes)
 $Node = @(Resolve-ZtpNodeSelection -Environment $env_ -Node $Node)
@@ -309,7 +312,8 @@ try {
         $log.Add("$($o.Name): DHCP off, address and gateway removed")
     }
     $static = Get-NetIPAddress -InterfaceIndex $nic.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -eq $p.Ip -and $_.PrefixOrigin -eq 'Manual' }
-    if ($static) { $log.Add("$($nic.Name): already static $($p.Ip)") }
+    if ($p.Mode -ne 'static') { $log.Add("$($nic.Name): management address left as it is ($($p.Mode))") }
+    elseif ($static) { $log.Add("$($nic.Name): already static $($p.Ip)") }
     else {
         try {
             Set-NetIPInterface -InterfaceIndex $nic.ifIndex -AddressFamily IPv4 -Dhcp Disabled
@@ -323,8 +327,10 @@ try {
             throw "Static address failed, DHCP turned back on: $($_.Exception.Message)"
         }
     }
-    Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses $p.Dns
-    $log.Add("$($nic.Name): DNS $($p.Dns -join ',')")
+    if ($p.Mode -eq 'static') {
+        Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses $p.Dns
+        $log.Add("$($nic.Name): DNS $($p.Dns -join ',')")
+    }
     if ($p.Ntp) {
         & w32tm.exe /config /manualpeerlist:"$($p.Ntp -join ' ')" /syncfromflags:manual /update | Out-Null
         Restart-Service w32time
@@ -369,7 +375,8 @@ foreach ($n in $Node) {
         }
         $extra = Get-ExtraGateway $before
         if (-not $Execute) {
-            Write-Step "  PLAN: drivers $(($drivers | ForEach-Object { "$($_.Inf) $($_.Version)" }) -join ', ') (signatures valid); SBE to C:\SBE; create $deployAdmin; static $ip/$prefix gw $gateway on $($before.Mgmt.Name); DHCP and gateway off on $(if ($extra) { $extra -join ', ' } else { 'none' }); DNS $($dns -join ','); time $($ntp -join ',')."
+            $addressPlan = if ($mgmtMode -eq 'static') { "static $ip/$prefix gw $gateway on $($before.Mgmt.Name)" } else { "$($before.Mgmt.Name) left as it is ($mgmtMode; expect $ip)" }
+            Write-Step "  PLAN: drivers $(($drivers | ForEach-Object { "$($_.Inf) $($_.Version)" }) -join ', ') (signatures valid); SBE to C:\SBE; create $deployAdmin; $addressPlan; DHCP and gateway off on $(if ($extra) { $extra -join ', ' } else { 'none' }); DNS $($dns -join ','); time $($ntp -join ',')."
             continue
         }
 
@@ -396,7 +403,7 @@ foreach ($n in $Node) {
         } -ArgumentList $deployAdmin, $deployPassword
         Write-Step "  $deployAdmin is in local Administrators"
 
-        $params = @{ MgmtMac = $mac; Ip = $ip; Prefix = $prefix; Gateway = $gateway; Dns = $dns; Ntp = $ntp
+        $params = @{ Mode = $mgmtMode; MgmtMac = $mac; Ip = $ip; Prefix = $prefix; Gateway = $gateway; Dns = $dns; Ntp = $ntp
             Drivers = @($drivers | ForEach-Object { @{ Inf = $_.Inf; Version = $_.Version; Ids = $_.Ids; Folder = $_.Folder } }) } | ConvertTo-Json -Depth 6
         Invoke-Command -Session $s -ScriptBlock {
             param([string]$Script, [string]$Params)
@@ -468,7 +475,8 @@ foreach ($n in $Node) {
         $afterPlan = @(Get-DriverPlan $after)
         Show-State $after $afterPlan
         $problems = @()
-        if (@($after.Mgmt.Addresses) -notcontains "$ip/$prefix Manual") { $problems += "management address isn't static $ip" }
+        if ($mgmtMode -eq 'static' -and @($after.Mgmt.Addresses) -notcontains "$ip/$prefix Manual") { $problems += "management address isn't static $ip" }
+        if ($mgmtMode -ne 'static' -and -not @($after.Mgmt.Addresses | Where-Object { $_ -like "$ip/$prefix *" })) { $problems += "management address isn't $ip ($mgmtMode)" }
         $gw = @($after.Adapters | Where-Object Gateway | ForEach-Object Name)
         $dhcpSiblings = @($after.Adapters | Where-Object { $_.Mac -ne $after.Mgmt.Mac -and $_.Id -and $_.Id -eq $after.Mgmt.Id -and $_.Dhcp -eq 'Enabled' } | ForEach-Object Name)
         if ($dhcpSiblings) { $problems += "DHCP still on for $($dhcpSiblings -join ',')" }

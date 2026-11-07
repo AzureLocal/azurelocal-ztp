@@ -49,7 +49,7 @@ param admin_username string
 param admin_secret_name string
 @description('Time zone of the site settings, for example UTC.')
 param time_zone string
-@description('nodes[]: name (edge machine name = host name); service_tag is read by the script to map vouchers.')
+@description('nodes[]: name (edge machine name = host name); service_tag is read by the script to map vouchers; arc_machine_name (optional, default name) names the Arc machine; management (optional) { ip_assignment static|dhcp|preconfigured, mac_address, adapter_name, ip_address, subnet_mask, gateway, dns_servers, vlan_id }: static sets ip_address on the port with mac_address.')
 param nodes array
 
 @description('Apply the network, time, connectivity and security site settings.')
@@ -252,6 +252,12 @@ resource hciRpRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (as
 }
 
 // ------------------------------------------------------------------ edge machines (claim with the ownership voucher)
+// arcMachineResourceId names the Arc machine (2026-10-01 spec, EdgeMachines_CreateOrUpdate example). Without it the
+// service names it ROE1-<cloudId>, and an Arc machine can't be renamed. Default: the node name, so Arc matches the host.
+// A static management address goes per machine in siteDetails.deviceConfiguration.network.networkAdapters[], keyed by
+// the port's MAC (NetworkAdapter: ipAssignmentType Manual, macAddress, adapterName, ipAddress, subnetMask, gateway,
+// dnsAddressArray, vlanId). The site's network setting stays as configured above for every other port.
+var managedResourceGroupId = configuration.properties.managedResourcesConfiguration.managedResourceGroupId
 resource edgeMachines 'Microsoft.AzureStackHCI/edgeMachines@2026-10-01' = [
   for node in selectedNodes: {
     name: node.name
@@ -261,12 +267,35 @@ resource edgeMachines 'Microsoft.AzureStackHCI/edgeMachines@2026-10-01' = [
       type: 'SystemAssigned'
     }
     properties: {
-      arcMachineResourceGroupId: configuration.properties.managedResourcesConfiguration.managedResourceGroupId
+      arcMachineResourceGroupId: managedResourceGroupId
+      arcMachineResourceId: '${managedResourceGroupId}/providers/Microsoft.HybridCompute/machines/${empty(node.?arc_machine_name ?? '') ? node.name : node.arc_machine_name}'
       siteDetails: {
         siteResourceId: site.id
-        deviceConfiguration: {
-          hostName: node.name
-        }
+        deviceConfiguration: union(
+          {
+            hostName: node.name
+          },
+          (node.?management.?ip_assignment ?? '') == 'static'
+            ? {
+                network: {
+                  networkAdapters: [
+                    union(
+                      {
+                        ipAssignmentType: 'Manual'
+                        macAddress: node.management.mac_address
+                        ipAddress: node.management.ip_address
+                        subnetMask: node.management.subnet_mask
+                        gateway: node.management.gateway
+                        dnsAddressArray: node.management.dns_servers
+                        vlanId: string(node.management.vlan_id)
+                      },
+                      empty(node.management.?adapter_name ?? '') ? {} : { adapterName: node.management.adapter_name }
+                    )
+                  ]
+                }
+              }
+            : {}
+        )
       }
       ownershipVoucherDetails: {
         ownerKeyType: 'MicrosoftManaged'

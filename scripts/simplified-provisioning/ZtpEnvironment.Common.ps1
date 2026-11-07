@@ -10,9 +10,11 @@ of the OEM's SBE discovery manifest in Test-ZtpSbeHash.
 
 The keys, by what needs them:
   Prepare (Initialize-ZtpNode.ps1) and Provision (Invoke-ZtpEnvironment.ps1, which also runs Prepare) both read
-    cluster_nodes[].name, .ip_address, .mac_address
+    cluster_nodes[].name, .ip_address, .mac_address (the management port)
+    cluster_nodes[].adapter_name, .arc_machine_name   (optional; the Arc name defaults to the node name)
     azure_identity.azure_tenant_id
     network_intents.management.subnet, .gateway, .dns_servers
+    network_intents.management.ip_assignment, .vlan_id   (optional; static, dhcp or preconfigured; default static)
     onprem.ntp_servers                         (optional)
     credentials.local_admin_username, .local_admin_password_secret   (keyvault://<vault>/<secret>)
     hardware.vendor
@@ -123,6 +125,11 @@ function Test-ZtpEnvironment {
             if ($name) { if ($seen.ContainsKey($name.ToLowerInvariant())) { $problems.Add("$label.name '$name' is used twice.") } else { $seen[$name.ToLowerInvariant()] = $true } }
             & $check $n 'ip_address' "$label.ip_address" 'ip'
             & $check $n 'mac_address' "$label.mac_address" 'mac'
+            & $check $n 'adapter_name' "$label.adapter_name" 'text' -Optional
+            & $check $n 'arc_machine_name' "$label.arc_machine_name" 'text' -Optional
+            $arcName = [string](Get-ZtpEnvValue -Environment $n -Path 'arc_machine_name')
+            # Microsoft.HybridCompute/machines name rule: 1-54 characters, letters, digits, '-', '_' and '.', not ending in '.'.
+            if ($arcName -and ($arcName -notmatch '^[A-Za-z0-9_.-]{1,54}$' -or $arcName.EndsWith('.'))) { $problems.Add("$label.arc_machine_name '$arcName' isn't a valid Arc machine name (1-54 letters, digits, '-', '_', '.').") }
             if ($For -eq 'Provision') {
                 & $check $n 'service_tag' "$label.service_tag" 'text'
                 & $check $n 'idrac_ip' "$label.idrac_ip" 'ip'
@@ -135,6 +142,11 @@ function Test-ZtpEnvironment {
     & $check $Environment 'network_intents.management.subnet' 'network_intents.management.subnet' 'cidr'
     & $check $Environment 'network_intents.management.gateway' 'network_intents.management.gateway' 'ip'
     & $check $Environment 'network_intents.management.dns_servers' 'network_intents.management.dns_servers' 'iplist'
+    $mode = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.ip_assignment'
+    if ($null -ne $mode -and [string]$mode -notin 'static', 'dhcp', 'preconfigured') { $problems.Add("network_intents.management.ip_assignment must be static, dhcp or preconfigured, not '$mode'.") }
+    $vlan = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.vlan_id'
+    $vlanNumber = 0
+    if ($null -ne $vlan -and (-not [int]::TryParse([string]$vlan, [ref]$vlanNumber) -or $vlanNumber -lt 0 -or $vlanNumber -gt 4094)) { $problems.Add("network_intents.management.vlan_id must be 0-4094, not '$vlan'.") }
     & $check $Environment 'onprem.ntp_servers' 'onprem.ntp_servers' 'textlist' -Optional
     & $check $Environment 'credentials.local_admin_username' 'credentials.local_admin_username' 'text'
     $admin = [string](Get-ZtpEnvValue -Environment $Environment -Path 'credentials.local_admin_username')
@@ -184,6 +196,30 @@ function Assert-ZtpEnvironment {
     if ($problems.Count) {
         throw "$Source is invalid ($($problems.Count) problem$(if ($problems.Count -ne 1) { 's' })):`n  - $($problems -join "`n  - ")"
     }
+}
+
+function Get-ZtpManagementAssignment {
+    <#
+    .SYNOPSIS
+    How each node's management address is set: static (the provisioning service sets ip_address on the port with
+    mac_address, and Prepare checks it), dhcp (stays DHCP; reserve ip_address for the MAC) or preconfigured (ZTP doesn't
+    change the port). Default static.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment)
+    $mode = [string](Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.ip_assignment')
+    if ($mode) { return $mode.ToLowerInvariant() }
+    return 'static'
+}
+
+function ConvertTo-ZtpSubnetMask {
+    # 24 -> 255.255.255.0
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][ValidateRange(0, 32)][int]$PrefixLength)
+    # 4294967295, not 0xFFFFFFFF: PowerShell reads that literal as Int32 -1.
+    $all = [uint64]4294967295
+    $bits = if ($PrefixLength -eq 0) { [uint64]0 } else { ([uint64]($all -shl (32 - $PrefixLength))) -band $all }
+    return (3, 2, 1, 0 | ForEach-Object { ($bits -shr (8 * $_)) -band 0xFF }) -join '.'
 }
 
 function Resolve-ZtpNodeSelection {
