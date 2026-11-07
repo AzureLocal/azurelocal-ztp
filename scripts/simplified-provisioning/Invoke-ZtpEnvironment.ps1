@@ -8,11 +8,14 @@
     reads the iDRAC login from the management vault, finds this server's address as the iDRACs reach it, then runs
     Invoke-ZtpProvisioning.ps1. Before the claim, the Device stage (Set-ZtpDeviceConfiguration.ps1) sets each static
     management address on the port with the node's management MAC in the maintenance environment, through the Configurator
-    App's REST service, for every node with a maintenance address. A failed OS install is resubmitted once automatically. After Ready to cluster, the Network
-    stage (Set-ZtpManagementAddress.ps1) puts each static management address on the port with the node's management MAC
-    through Azure's per-NIC API, because the OS install puts it on the first ready port. Then the Prepare stage
-    (Initialize-ZtpNode.ps1) installs the OEM's network drivers from the SBE, copies the SBE to C:\SBE, creates the
-    deployment admin and checks the one static management address in the OS, so the nodes are ready for Validate.
+    App's REST service; a node without a maintenance address is found by scanning for the service and matching its MAC.
+    With static_method device (the default) the site is Automatic and the claim carries no Manual adapter, so that static
+    is the only one. A failed OS install is resubmitted once automatically. After Ready to cluster, the Network stage
+    (Set-ZtpManagementAddress.ps1) checks each static management address on the port with the node's management MAC
+    through Azure's per-NIC API and moves it there if needed. The Restore stage sets the BIOS values that were changed for
+    the install only (bios_during_provisioning) back, restarts the node and waits until it is Connected again. ZTP ends
+    at the Handoff: OEM drivers, the SBE, DNS, time and the deployment admin are OS configuration (azurelocal-toolkit
+    Phase 03), which comes next. The SBE settings (hardware.sbe, ztp.node_preparation) are accepted and ignored.
 
     Without -Execute it writes the generated files and shows ZTP's plan. Nothing changes in Azure or on a node.
     With -Execute it REINSTALLS the named nodes. Run it elevated, because it creates the share, a local account and a
@@ -25,8 +28,8 @@
 .PARAMETER Node
     Nodes to provision. Defaults to every node in the environment file.
 .PARAMETER From
-    Stage to resume from: Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Handoff (each runs with every
-    later one, then Prepare), or Prepare alone.
+    Stage to resume from: Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Restore or Handoff (each runs with every
+    later one).
 .PARAMETER MediaPath
     Where the maintenance ISO, node images (about 4 GB each), vouchers, unpacked drivers and run state are kept. Overrides
     ztp.media_path; without either, %ProgramData%\AzureLocalZtp\<ztp.site_name>\media. Refused inside a git working tree;
@@ -52,7 +55,7 @@
 param(
     [Parameter(Mandatory)][string]$InfrastructureFile,
     [string[]]$Node,
-    [ValidateSet('Resolve', 'Media', 'Boot', 'Bootstrap', 'Vouchers', 'Device', 'Azure', 'Ready', 'Network', 'Handoff', 'Prepare')][string]$From,
+    [ValidateSet('Resolve', 'Media', 'Boot', 'Bootstrap', 'Vouchers', 'Device', 'Azure', 'Ready', 'Network', 'Restore', 'Handoff')][string]$From,
     [string]$MediaPath,
     [string]$EvidencePath,
     [string]$ValidatorPath,
@@ -112,36 +115,51 @@ Write-Output "Share host: $shareHost"
 
 $nodeList = @($env_.cluster_nodes)
 $Node = @(Resolve-ZtpNodeSelection -Environment $env_ -Node $Node)
-# The OEM's SBE files named in the environment file: found now, so a wrong folder fails before the long stages.
-$sbeZip = (Get-ZtpSbeBundle -Path ([string]$ztp.node_preparation.sbe_bundle)).Zip.FullName
-# Opt-in only: use an SBE the OEM hasn't validated with the pinned OS build. The SBE is still the supplied package and
-# its hash is still checked; only the OEM's solution-compatibility check is skipped, and the handoff records that.
-$allowUnvalidatedSbe = (Get-ZtpEnvValue -Environment $env_ -Path 'ztp.node_preparation.allow_unvalidated_sbe') -eq $true
-if ($allowUnvalidatedSbe) {
-    Write-Warning "ztp.node_preparation.allow_unvalidated_sbe is true: the SBE in $([string]$ztp.node_preparation.sbe_bundle) is used without checking that the OEM validated it with $([string]$ztp.os_version). The OEM doesn't support this combination; the handoff records compatibilityChecked: false."
-}
+# No SBE: the OS install discovers its own, and staging one is OS configuration (hardware.sbe is accepted and ignored).
 
 # Each set of nodes keeps its own state, so proving one node never disturbs another's run.
 $runName = $Node -join '+'
 
 # The node list the stages read. bios (hardware.bios merged with the node's own) is applied by the Boot stage.
+# Without a maintenance address, the Device stage scans this range for the maintenance environment and matches it by MAC.
+$scanRange = Get-ZtpEnvValue -Environment $env_ -Path 'network_intents.management.provisioning_dhcp_range'
+$scanText = if ($scanRange -is [System.Collections.IDictionary] -and $scanRange['start'] -and $scanRange['end']) { "$($scanRange['start'])-$($scanRange['end'])" } else { '' }
 @{ nodes = @($nodeList | ForEach-Object {
             $entry = [ordered]@{ name = [string]$_.name; service_tag = [string]$_.service_tag; bmc_address = [string]$_.idrac_ip; management_ip = [string]$_.ip_address }
             # The Device stage reaches the maintenance environment's REST service on this address.
             $maintenance = [string](Get-ZtpEnvValue -Environment $_ -Path 'maintenance_address')
             if ($maintenance) { $entry.maintenance_address = $maintenance }
-            $bios = Get-ZtpEnvironmentBios -Environment $env_ -Node $_
+            elseif ($scanText) { $entry.maintenance_scan_range = $scanText }
+            # bios: what the Boot stage applies (the final state with the temporary values merged over it).
+            $bios = Get-ZtpEnvironmentBios -Environment $env_ -Node $_ -Kind boot
             if ($bios.Count) { $entry.bios = $bios }
+            # bios_restore: what the Restore stage sets back after Network, for every temporary key: the final value, or
+            # '' for the value the BIOS had before Boot changed it (saved in the run state).
+            $final = Get-ZtpEnvironmentBios -Environment $env_ -Node $_
+            $during = Get-ZtpEnvironmentBios -Environment $env_ -Node $_ -Kind provisioning
+            if ($during.Count) {
+                $restore = [ordered]@{}
+                foreach ($k in $during.Keys) { $restore[$k] = $(if ($final.Contains($k)) { $final[$k] } else { '' }) }
+                $entry.bios_restore = $restore
+            }
             $entry
         }) } |
     ConvertTo-Json -Depth 5 | Set-Content $nodesFile
 $biosPlan = @(foreach ($n in $nodeList) {
-        $b = Get-ZtpEnvironmentBios -Environment $env_ -Node $n
+        $b = Get-ZtpEnvironmentBios -Environment $env_ -Node $n -Kind boot
         if ($b.Count) { "$($n.name) $(@($b.Keys | ForEach-Object { "$_=$($b[$_])" }) -join ', ')" }
     })
 if ($biosPlan) { Write-Output "BIOS set by the Boot stage before the maintenance boot: $($biosPlan -join '; ')." }
+$restorePlan = @(foreach ($n in $nodeList) {
+        $d = Get-ZtpEnvironmentBios -Environment $env_ -Node $n -Kind provisioning
+        $f = Get-ZtpEnvironmentBios -Environment $env_ -Node $n
+        if ($d.Count) { "$($n.name) $(@($d.Keys | ForEach-Object { "$_=$(if ($f.Contains($_)) { $f[$_] } else { '<value before Boot>' })" }) -join ', ')" }
+    })
+if ($restorePlan) { Write-Output "BIOS set back by the Restore stage after Network: $($restorePlan -join '; ')." }
 $withoutMaintenance = @($nodeList | Where-Object { $_.name -in $Node -and -not (Get-ZtpEnvValue -Environment $_ -Path 'maintenance_address') } | ForEach-Object { [string]$_.name })
-if ($withoutMaintenance) { Write-Output "Device stage (static address in the maintenance environment) skips $($withoutMaintenance -join ', '): no maintenance address in the environment file. The Network stage sets the address after the OS install." }
+if ($withoutMaintenance) { Write-Output "Device stage (static address in the maintenance environment): no maintenance address for $($withoutMaintenance -join ', '); it scans $(if ($scanText) { $scanText } else { "the management subnet $([string]$env_.network_intents.management.subnet)" }) for TCP 20001 and finds each node by its management MAC." }
+$staticMethod = Get-ZtpStaticMethod -Environment $env_
+Write-Output "Static management addresses set by: $(if ($staticMethod -eq 'device') { 'the Device stage, by MAC, before the claim (site network Automatic, no Manual adapter in the claim)' } else { 'the OS install, from the site''s Manual setting and the claim''s Manual adapter (static_method site)' }); the Network stage checks them after the install."
 $edgeSecret = Split-ZtpKeyVaultReference (Get-ZtpEnvValue -Environment $env_ -Path 'ztp.maintenance_password_secret')
 
 if ($UseManagedIdentity) {
@@ -171,6 +189,8 @@ $bicepNodes = @($nodeList | ForEach-Object {
             arc_machine_name = $(if ($arcName) { $arcName } else { [string]$_.name })
             management       = [ordered]@{
                 ip_assignment = (Get-ZtpManagementAssignment -Environment $env_ -Node $_)
+                # device: the claim carries no Manual adapter (the Device stage sets it); site: it does.
+                static_method = $staticMethod
                 # The maintenance environment (Linux) reports MACs lower case with colons, as its Arc machine does.
                 mac_address   = ([string]$_.mac_address).Replace('-', ':').ToLowerInvariant()
                 adapter_name  = [string](Get-ZtpEnvValue -Environment $_ -Path 'adapter_name')
@@ -182,13 +202,13 @@ $bicepNodes = @($nodeList | ForEach-Object {
             }
         }
     })
-# The site's network setting follows the management mode: Manual with the nodes' range for static, Automatic otherwise.
+# The site's network setting: Manual with the nodes' range only for static with static_method site, Automatic otherwise.
 $siteNetwork = Get-ZtpSiteNetwork -Environment $env_
 $provisioningNetwork = [string](Get-ZtpEnvValue -Environment $env_ -Path 'network_intents.management.provisioning_network')
 if (-not $provisioningNetwork) { $provisioningNetwork = 'dhcp' }
 Write-Output "Site network: $($siteNetwork.IpAssignmentType)$(if ($siteNetwork.Range) { " $($siteNetwork.Range), gateway $($siteNetwork.Ipv4.defaultGateway), mask $($siteNetwork.Ipv4.subnetMask), DNS $($siteNetwork.Ipv4.dnsServers -join ', '), VLAN $($siteNetwork.Ipv4.vLanId)" }). Maintenance environment to Azure: $provisioningNetwork."
 $modes = @($bicepNodes | ForEach-Object { $_.management.ip_assignment } | Select-Object -Unique)
-if ($modes.Count -gt 1) { $mgmtMode = 'per node (' + (($bicepNodes | ForEach-Object { "$($_.name) $($_.management.ip_assignment)" }) -join ', ') + ')'; Write-Warning "The management addresses mix $($modes -join ' and '); the site's network setting is Manual over the static ones." }
+if ($modes.Count -gt 1) { $mgmtMode = 'per node (' + (($bicepNodes | ForEach-Object { "$($_.name) $($_.management.ip_assignment)" }) -join ', ') + ')'; Write-Warning "The management addresses mix $($modes -join ' and ')$(if ($staticMethod -eq 'site') { "; the site's network setting is Manual over the static ones" })." }
 Write-Output "Management addresses: $mgmtMode. Arc machine names: $(($bicepNodes | ForEach-Object { "$($_.name) -> $($_.arc_machine_name)" }) -join ', ')."
 $bicepParameters = [ordered]@{
     '$schema'      = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#'
@@ -228,11 +248,6 @@ $bicepParameters | ConvertTo-Json -Depth 10 | Set-Content $parameters
     BootstrapVersion               = [string]$ztp.provisioning_iso
     IncludePreview                 = $false
     Oem                            = [string]$env_.hardware.vendor
-    SbeModel                       = ([string]$env_.hardware.model -replace '-', '')
-    # The SBE in ztp.node_preparation.sbe_bundle, so the handoff's SBE values match what Prepare copies to C:\SBE,
-    # checked for compatibility with the pinned OS build unless ztp.node_preparation.allow_unvalidated_sbe is true.
-    SbeSolutionVersion             = $(if ($allowUnvalidatedSbe) { 'latest' } else { [string]$ztp.os_version })
-    SbePackagePath                 = $sbeZip
     NodesFile                      = $nodesFile
     ImageDirectory                 = Join-Path (Resolve-Path $media).Path 'ztp-virtual-usb'
     ImageNamePrefix                = 'ztp-usb-'
@@ -264,14 +279,8 @@ $bicepParameters | ConvertTo-Json -Depth 10 | Set-Content $parameters
 } | ConvertTo-Json | Set-Content $config
 
 $orchestrator = Join-Path $PSScriptRoot 'Invoke-ZtpProvisioning.ps1'
-# After Ready to cluster: drivers, SBE files, deployment admin and one management address, so the nodes pass Validate.
-$prepare = Join-Path $PSScriptRoot 'Initialize-ZtpNode.ps1'
-$driverStaging = Join-Path $media 'sbe-drivers'
 if (-not $Execute) {
-    if ($From -eq 'Prepare') { & $prepare -InfrastructureFile $InfrastructureFile -Node $Node -DriverStagingPath $driverStaging -EventLogPath $events; return }
     & $orchestrator -ConfigPath $config -NodeName $Node
-    Write-Output '--- Prepare (after Ready to cluster)'
-    try { & $prepare -InfrastructureFile $InfrastructureFile -Node $Node -DriverStagingPath $driverStaging -EventLogPath $events } catch { Write-Warning $_.Exception.Message }
     return
 }
 
@@ -279,11 +288,6 @@ if (-not $Execute) {
 $transcript = Join-Path $evidence ("$runName.{0}.transcript.log" -f (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ'))
 $null = Start-Transcript -LiteralPath $transcript -IncludeInvocationHeader
 try {
-    if ($From -eq 'Prepare') {
-        & $prepare -InfrastructureFile $InfrastructureFile -Node $Node -DriverStagingPath $driverStaging -EventLogPath $events -Execute
-        return
-    }
-
     Set-AzContext -Tenant $tenant -Subscription $vaultSub -Scope Process -WarningAction SilentlyContinue | Out-Null
     # The BMC user name: the name itself (bmc_secret.username), or a secret, in username_vault when it isn't the password's vault.
     $user = if ($ztp.bmc_secret.Contains('username') -and $ztp.bmc_secret.username) { [string]$ztp.bmc_secret.username }
@@ -314,6 +318,5 @@ try {
     # A run that builds media (from the start, Resolve or Media) is a fresh provisioning, so replace this tool's own images.
     if (-not $From -or $From -in 'Resolve', 'Media') { $run.RebuildImages = $true }
     & $orchestrator @run
-    & $prepare -InfrastructureFile $InfrastructureFile -Node $Node -DriverStagingPath $driverStaging -EventLogPath $events -Execute
 }
 finally { $null = Stop-Transcript -ErrorAction SilentlyContinue }

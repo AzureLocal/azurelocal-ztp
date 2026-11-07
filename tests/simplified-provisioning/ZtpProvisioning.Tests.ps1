@@ -19,11 +19,11 @@ BeforeAll {
     'TimeoutMinutes', 'Action', 'Remove', 'SharePath', 'Stage', 'SubscriptionId', 'ResourceGroupName', 'ParameterFile', 'VoucherPath', 'OsVersion',
     'SiteMode', 'Node', 'DeploymentName', 'AdminPassword', 'PollIntervalSeconds', 'RetryProvisionOs', 'ArcMachineNameMapPath', 'ExpectedMachineName',
     'Version', 'CacheDirectory', 'IncludePreview', 'MaxTrain', 'Oem', 'SolutionVersion', 'Model', 'Family', 'PackagePath', 'EventLogPath', 'VoucherTimeoutMinutes',
-    'SkipAzureCheck', 'Location', 'HandoffPath', 'SbeManifestPath', 'BootstrapManifestPath', 'OutputPath', 'Format', 'BiosLogPath', 'ChangeLogPath'
+    'SkipAzureCheck', 'Location', 'HandoffPath', 'SbeManifestPath', 'BootstrapManifestPath', 'OutputPath', 'Format', 'BiosLogPath', 'ChangeLogPath', 'Original', 'RestoredBios'
     $paramBlock = ($names | ForEach-Object { "[object]`$$_" }) -join ', '
     foreach ($script in 'New-ZtpVirtualUsbImage.ps1', 'Start-MaintenanceBoot.ps1', 'Wait-ZtpVoucher.ps1', 'Mount-ZtpVirtualUsb.ps1', 'Publish-MaintenanceIso.ps1',
         'Invoke-ZtpAzureProvisioning.ps1', 'Test-ProvisionedMachines.ps1', 'Get-ZtpBootstrapIso.ps1', 'Get-ZtpSbe.ps1', 'Wait-ZtpBootstrapComplete.ps1',
-        'Set-ZtpDeviceConfiguration.ps1', 'Set-ZtpManagementAddress.ps1', 'New-ZtpHandoff.ps1', 'Convert-ZtpHandoffToClusterInputs.ps1') {
+        'Set-ZtpDeviceConfiguration.ps1', 'Set-ZtpManagementAddress.ps1', 'Restore-ZtpBios.ps1', 'New-ZtpHandoff.ps1', 'Convert-ZtpHandoffToClusterInputs.ps1') {
         $body = @"
 [CmdletBinding(SupportsShouldProcess)]
 param($paramBlock)
@@ -108,12 +108,12 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
         { & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; Confirm = $false } } | Should -Throw '*Boot*BmcCredential*'
     }
 
-    It 'runs Resolve (skipped) -> Media -> Boot -> Bootstrap -> Vouchers -> Device -> Azure -> Ready -> Network -> Handoff in order and records every stage' {
+    It 'runs Resolve (skipped) -> Media -> Boot -> Bootstrap -> Vouchers -> Device -> Azure -> Ready -> Network -> Restore -> Handoff in order and records every stage' {
         $rows = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false }
         & $script:called | Should -Be @('New-ZtpVirtualUsbImage.ps1', 'Start-MaintenanceBoot.ps1', 'Wait-ZtpBootstrapComplete.ps1', 'Wait-ZtpVoucher.ps1', 'Publish-MaintenanceIso.ps1',
             'Set-ZtpDeviceConfiguration.ps1', 'Invoke-ZtpAzureProvisioning.ps1', 'Invoke-ZtpAzureProvisioning.ps1', 'Invoke-ZtpAzureProvisioning.ps1', 'Invoke-ZtpAzureProvisioning.ps1',
-            'Invoke-ZtpAzureProvisioning.ps1', 'Test-ProvisionedMachines.ps1', 'Set-ZtpManagementAddress.ps1', 'New-ZtpHandoff.ps1', 'Convert-ZtpHandoffToClusterInputs.ps1')
-        @($rows | ForEach-Object Stage) | Should -Be @('Resolve', 'Media', 'Boot', 'Bootstrap', 'Vouchers', 'Device', 'Azure', 'Ready', 'Network', 'Handoff')
+            'Invoke-ZtpAzureProvisioning.ps1', 'Test-ProvisionedMachines.ps1', 'Set-ZtpManagementAddress.ps1', 'Restore-ZtpBios.ps1', 'New-ZtpHandoff.ps1', 'Convert-ZtpHandoffToClusterInputs.ps1')
+        @($rows | ForEach-Object Stage) | Should -Be @('Resolve', 'Media', 'Boot', 'Bootstrap', 'Vouchers', 'Device', 'Azure', 'Ready', 'Network', 'Restore', 'Handoff')
         @($global:ztpRunCalls | Where-Object Script -EQ 'Invoke-ZtpAzureProvisioning.ps1' | ForEach-Object { $_.Params.Stage }) | Should -Be @('Prereqs', 'Validate', 'Plan', 'Execute', 'Watch')
         $boot = $global:ztpRunCalls | Where-Object Script -EQ 'Start-MaintenanceBoot.ps1'
         $boot.Params.Restart | Should -BeTrue
@@ -122,7 +122,7 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
         $test.Params.ResourceGroupName | Should -Be 'rg-example'
         $test.Params.ExpectedMachineName | Should -Be @('00000000-0000-0000-0000-000000000000-1', '00000000-0000-0000-0000-000000000000-2')
         $state = Get-Content $script:statePath -Raw | ConvertFrom-Json -AsHashtable
-        @($state.stages.Keys).Count | Should -Be 10
+        @($state.stages.Keys).Count | Should -Be 11
         $state.stages.Resolve.evidence | Should -Match 'skipped'
     }
 
@@ -170,9 +170,41 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
         { & $script:invoke @{ Execute = $true; Stage = 'Device'; Confirm = $false } } | Should -Throw '*Device: the static management address of node-01 is Planned, not set*'
     }
 
-    It 'runs -From Network: Network then Handoff' {
+    It 'runs -From Network: Network, Restore (a no-op here) then Handoff' {
         $null = & $script:invoke @{ Execute = $true; From = 'Network'; Confirm = $false }
-        & $script:called | Should -Be @('Set-ZtpManagementAddress.ps1', 'New-ZtpHandoff.ps1', 'Convert-ZtpHandoffToClusterInputs.ps1')
+        & $script:called | Should -Be @('Set-ZtpManagementAddress.ps1', 'Restore-ZtpBios.ps1', 'New-ZtpHandoff.ps1', 'Convert-ZtpHandoffToClusterInputs.ps1')
+        $state = Get-Content $script:statePath -Raw | ConvertFrom-Json -AsHashtable
+        $state.stages.Restore.evidence | Should -Be 'nothing to restore: no bios_during_provisioning'
+    }
+
+    It 'Boot saves each BIOS attribute''s original value once, Restore sets it back and waits for Connected and ready, and the handoff records it' {
+        $nodes = Join-Path $TestDrive "nodes-restore-$([guid]::NewGuid().ToString('N')).json"
+        @{ nodes = @(@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11'; bios = @{ Slot2 = 'Disabled' }; bios_restore = @{ Slot2 = '' } }, @{ name = 'node-02'; service_tag = 'EXAMPLE2'; bmc_address = '198.51.100.12' }) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $nodes
+        $global:ztpRunBehavior['Start-MaintenanceBoot.ps1'] = { param($p) foreach ($n in $p['NodeName']) { [pscustomobject]@{ Node = $n; Image = "ztp-usb-$n.img"; WriteProtected = $false; Restarted = $true; Bios = @(); BiosOriginal = $(if ($n -eq 'node-01') { [ordered]@{ Slot2 = $global:ztpRunSlot2 } } else { [ordered]@{} }) } } }
+        $global:ztpRunBehavior['Restore-ZtpBios.ps1'] = { param($p) foreach ($n in $p['NodeName']) { if ($n -eq 'node-01') { [pscustomobject]@{ Node = $n; Status = 'Restored'; Restored = [ordered]@{ Slot2 = [string]$p['Original']['node-01']['Slot2'] }; Changes = @('Slot2: Disabled -> Enabled') } } else { [pscustomobject]@{ Node = $n; Status = 'NotNeeded'; Restored = [ordered]@{}; Changes = @() } } } }
+        $global:ztpRunSlot2 = 'Enabled'
+        $null = & $script:invoke @{ Execute = $true; Stage = 'Boot'; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; NodesFile = $nodes }
+        # A second Boot reads the already-changed value; the saved original must not change.
+        $global:ztpRunSlot2 = 'Disabled'
+        $null = & $script:invoke @{ Execute = $true; Stage = 'Boot'; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; NodesFile = $nodes }
+        $state = Get-Content $script:statePath -Raw | ConvertFrom-Json -AsHashtable
+        $state.biosOriginal['node-01']['Slot2'] | Should -Be 'Enabled'
+        $global:ztpRunCalls.Clear()
+        $null = & $script:invoke @{ Execute = $true; From = 'Restore'; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; NodesFile = $nodes; RestoreSettleMinutes = 0 }
+        & $script:called | Should -Be @('Restore-ZtpBios.ps1', 'Invoke-ZtpAzureProvisioning.ps1', 'Test-ProvisionedMachines.ps1', 'New-ZtpHandoff.ps1', 'Convert-ZtpHandoffToClusterInputs.ps1')
+        $restore = $global:ztpRunCalls | Where-Object Script -EQ 'Restore-ZtpBios.ps1'
+        $restore.Params.Original['node-01']['Slot2'] | Should -Be 'Enabled'
+        $restore.Params.Credential | Should -Be $script:bmc
+        $restore.Params.Execute | Should -BeTrue
+        $restore.Params.BiosLogPath | Should -Be (Join-Path $TestDrive 'bios-changes.jsonl')
+        ($global:ztpRunCalls | Where-Object Script -EQ 'Invoke-ZtpAzureProvisioning.ps1').Params.Stage | Should -Be 'Watch'
+        $handoff = $global:ztpRunCalls | Where-Object Script -EQ 'New-ZtpHandoff.ps1'
+        $handoff.Params.RestoredBios['node-01']['Slot2'] | Should -Be 'Enabled'
+        $state = Get-Content $script:statePath -Raw | ConvertFrom-Json -AsHashtable
+        $state.stages.Restore.evidence | Should -Be 'BIOS set back: node-01 Slot2=Enabled; Connected and ready again: node-01'
+        # Restore needs the BMC credential only when there is something to restore.
+        { & $script:invoke @{ Execute = $true; Stage = 'Restore'; Confirm = $false; NodesFile = $nodes } } | Should -Throw '*Stage Restore: no value for BmcCredential*'
+        Remove-Variable ztpRunSlot2 -Scope Global
     }
 
     It 'writes StageStarted and StageCompleted events for every stage and StageFailed with the reason when a stage throws' {
@@ -256,7 +288,7 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
         $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; NodeName = 'node-01' }
         $global:ztpRunCalls.Clear()
         $null = & $script:invoke @{ Execute = $true; From = 'Azure'; Confirm = $false; NodeName = 'node-01' }
-        (& $script:called | Select-Object -Unique) | Should -Be @('Invoke-ZtpAzureProvisioning.ps1', 'Test-ProvisionedMachines.ps1', 'Set-ZtpManagementAddress.ps1', 'New-ZtpHandoff.ps1', 'Convert-ZtpHandoffToClusterInputs.ps1')
+        (& $script:called | Select-Object -Unique) | Should -Be @('Invoke-ZtpAzureProvisioning.ps1', 'Test-ProvisionedMachines.ps1', 'Set-ZtpManagementAddress.ps1', 'Restore-ZtpBios.ps1', 'New-ZtpHandoff.ps1', 'Convert-ZtpHandoffToClusterInputs.ps1')
         { & $script:invoke @{ Execute = $true; From = 'Ready'; Confirm = $false } } | Should -Throw '*records nodes node-01*'
     }
 

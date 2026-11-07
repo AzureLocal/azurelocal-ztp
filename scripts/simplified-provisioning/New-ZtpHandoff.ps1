@@ -26,6 +26,8 @@ sbe-manifest.json written by Get-ZtpSbe.ps1 -Execute (optional).
 bootstrap-manifest.json written by Get-ZtpBootstrapIso.ps1 -Execute (optional).
 .PARAMETER EventLogPath
 The bootstrap event file; its first and last timestamps are recorded (optional).
+.PARAMETER RestoredBios
+Node name -> (BIOS attribute -> value) the Restore stage set back; recorded as nodes[].biosRestored.
 .PARAMETER HandoffPath
 Output file (default ./ztp-handoff.json).
 .PARAMETER ApiVersion
@@ -45,6 +47,7 @@ param(
     [string]$SbeManifestPath,
     [string]$BootstrapManifestPath,
     [string]$EventLogPath,
+    [System.Collections.IDictionary]$RestoredBios = @{},
     [string]$HandoffPath = (Join-Path (Get-Location) 'ztp-handoff.json'),
     [string]$ApiVersion = '2026-10-01',
     [switch]$Execute
@@ -65,7 +68,7 @@ $vsr = [System.Collections.Generic.HashSet[string]]::new()
 $site = $null
 foreach ($name in $NodeName) {
     $machine = Invoke-ZtpArm -Method GET -Path "$rgPath/$name" -ApiVersion $ApiVersion -AllowNotFound
-    $job = if ($machine) { Invoke-ZtpArm -Method GET -Path "$rgPath/$name/jobs/ProvisionOs" -ApiVersion $ApiVersion -AllowNotFound } else { $null }
+    $job = if ($machine) { Invoke-ZtpArm -Method GET -Path "$rgPath/$name/jobs/ProvisionOs" -ApiVersion $ApiVersion -AllowNotFound -NotFoundStatus 404, 409 } else { $null }
     $status = Get-ZtpEdgeMachineStatus -Name $name -Machine $machine -Job $job
     if (-not $status.Ready) { $notReady.Add("$name ($($status.Lifecycle)$(if ($status.FailureReason) { ": $($status.FailureReason)" }))"); continue }
     $arcId = [string]$status.ArcMachineResourceId
@@ -82,6 +85,7 @@ foreach ($name in $NodeName) {
             arcMachineResourceGroup = $arcRg
             connectivity          = $status.Connectivity
             ready                 = $true
+            biosRestored          = $(if ($RestoredBios.Contains($name)) { $RestoredBios[$name] } else { [ordered]@{} })
         })
 }
 if ($notReady.Count -gt 0) { throw "Not ready to cluster: $($notReady -join '; '). No handoff written; rerun Wait-ZtpMachineReady.ps1." }

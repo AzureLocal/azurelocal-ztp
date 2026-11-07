@@ -49,7 +49,7 @@ param admin_username string
 param admin_secret_name string
 @description('Time zone of the site settings, for example UTC.')
 param time_zone string
-@description('nodes[]: name (edge machine name = host name); service_tag is read by the script to map vouchers; arc_machine_name (optional, default name) names the Arc machine; management (optional) { ip_assignment static|dhcp|preconfigured, mac_address, adapter_name, ip_address, subnet_mask, gateway, dns_servers, vlan_id }: static sets ip_address on the port with mac_address.')
+@description('nodes[]: name (edge machine name = host name); service_tag is read by the script to map vouchers; arc_machine_name (optional, default name) names the Arc machine; management (optional) { ip_assignment static|dhcp|preconfigured, static_method device|site (default device), mac_address, adapter_name, ip_address, subnet_mask, gateway, dns_servers, vlan_id }: static with static_method site sends a Manual adapter keyed by mac_address in the claim; with device (the Device stage sets it) the claim carries none.')
 param nodes array
 
 @description('Apply the network, time, connectivity and security site settings.')
@@ -64,7 +64,7 @@ param assign_hci_rp_role bool = true
 param managed_resource_group_name string = ''
 @description('Network settings: LAN or WLAN kind.')
 param network_kind string = 'LAN'
-@description('Network settings: Automatic (DHCP) or Manual. Invoke-ZtpEnvironment.ps1 sets Manual when the management addresses are static, Automatic otherwise.')
+@description('Network settings: Automatic (DHCP) or Manual. Invoke-ZtpEnvironment.ps1 sets Manual only when the management addresses are static with static_method site, Automatic otherwise.')
 param ip_assignment_type string = 'Automatic'
 @description('Network settings for Manual assignment: addressRange { startIp, endIp } (site_ip_range, default the nodes\' lowest to highest management address), defaultGateway, dnsServers, subnetMask, vLanId (integer).')
 param ipv4 object = {}
@@ -256,9 +256,14 @@ resource hciRpRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (as
 // so Arc matches the host. Open research item: in live runs (2026-11) the service overwrote it at claim time, and the Arc
 // machines still came out as ROE1-<id> and then <device-id>-1. It is sent anyway, and the handoff reads the name the
 // service actually used from the edge machine after Ready.
-// A static management address goes per machine in siteDetails.deviceConfiguration.network.networkAdapters[], keyed by
-// the port's MAC (NetworkAdapter: ipAssignmentType Manual, macAddress, adapterName, ipAddress, subnetMask, gateway,
-// dnsAddressArray, vlanId). It pins each machine to its own address; the site's Manual range above is what the portal shows.
+// static_method device (the default): the claim carries no Manual adapter. The Device stage has already set the static
+// address on the port with the management MAC in the maintenance environment, and the site is Automatic, so the OS
+// install has no static of its own to put on the first ready port (a Manual adapter's MAC is ignored by the install;
+// seen live on a Dell AX-760, where the address landed on a ConnectX port).
+// static_method site: a static management address goes per machine in siteDetails.deviceConfiguration.network.
+// networkAdapters[], keyed by the port's MAC (NetworkAdapter: ipAssignmentType Manual, macAddress, adapterName, ipAddress,
+// subnetMask, gateway, dnsAddressArray, vlanId), with the site's Manual range above. For environments without the
+// Device stage; the Network stage moves the address to the right port after the install.
 // For dhcp and preconfigured the entry is left out, not sent as Automatic: Automatic is what the service applies to every
 // port without an entry (a provisioned edge machine reports networkAdapters [{ ipAssignmentType: Automatic }]), so an
 // Automatic entry would change nothing, and leaving it out keeps the request to the shape proven in live runs.
@@ -280,7 +285,7 @@ resource edgeMachines 'Microsoft.AzureStackHCI/edgeMachines@2026-10-01' = [
           {
             hostName: node.name
           },
-          (node.?management.?ip_assignment ?? '') == 'static'
+          (node.?management.?ip_assignment ?? '') == 'static' && (node.?management.?static_method ?? 'device') == 'site'
             ? {
                 network: {
                   networkAdapters: [

@@ -28,7 +28,10 @@ BeforeAll {
         if ($address -notin $global:devT_up) { throw "No connection could be made to $address" }
         if ($Credential.GetNetworkCredential().Password -ne $global:devT_password) { throw 'Response status code does not indicate success: 401 (Unauthorized).' }
         switch ($operation) {
-            'GetNetworkAdapters' { return ([ordered]@{ NetworkAdapters = @($global:devT_adapters) } | ConvertTo-Json -Depth 10 | ConvertFrom-Json) }
+            'GetNetworkAdapters' {
+                $list = if ($global:devT_other.ContainsKey($address)) { $global:devT_other[$address] } else { $global:devT_adapters }
+                return ([ordered]@{ NetworkAdapters = @($list) } | ConvertTo-Json -Depth 10 | ConvertFrom-Json)
+            }
             'SetArcBootstrapDeviceConfiguration' { $global:devT_pending = $Body | ConvertFrom-Json -AsHashtable; $global:devT_statusIndex = 0; return $null }
             'GetArcBootstrapDeviceConfigurationStatus' {
                 $sequence = @($global:devT_status)
@@ -49,8 +52,15 @@ BeforeAll {
         throw "unexpected operation $operation"
     }
 
+    function global:Test-ZtpTcpPort {
+        param([string[]]$Address, [int]$Port, [int]$TimeoutMilliseconds)
+        $global:devT_sweeps++
+        $global:devT_probes.Add([pscustomobject]@{ Count = @($Address).Count; First = @($Address)[0]; Last = @($Address)[-1]; Port = $Port })
+        if ($global:devT_sweeps -lt $global:devT_appearAt) { return @() }
+        @($Address | Where-Object { $_ -in $global:devT_up })
+    }
     $script:writeInputs = {
-        param([System.Collections.IDictionary]$Management, [string]$Maintenance = '192.0.2.111')
+        param([System.Collections.IDictionary]$Management, [string]$Maintenance = '192.0.2.111', [string]$ScanRange)
         $id = [guid]::NewGuid().ToString('N')
         $params = Join-Path $TestDrive "params-$id.json"
         $node = [ordered]@{ name = 'node-01'; service_tag = 'EXAMPLE1' }
@@ -59,6 +69,7 @@ BeforeAll {
         $nodes = Join-Path $TestDrive "nodes-$id.json"
         $entry = [ordered]@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11' }
         if ($Maintenance) { $entry.maintenance_address = $Maintenance }
+        if ($ScanRange) { $entry.maintenance_scan_range = $ScanRange }
         @{ nodes = @($entry) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $nodes
         @{ ParameterFile = $params; NodesFile = $nodes }
     }
@@ -77,7 +88,7 @@ BeforeAll {
 }
 
 AfterAll {
-    Remove-Item 'Function:global:New-DevTAdapter' -ErrorAction SilentlyContinue
+    Remove-Item 'Function:global:New-DevTAdapter', 'Function:global:Test-ZtpTcpPort' -ErrorAction SilentlyContinue
     Get-Variable -Scope Global -Name 'devT_*' -ErrorAction SilentlyContinue | Remove-Variable -Scope Global -Force -ErrorAction SilentlyContinue
 }
 
@@ -90,6 +101,10 @@ Describe 'Set-ZtpDeviceConfiguration.ps1' {
         $global:devT_status = @('Succeeded')
         $global:devT_statusIndex = 0
         $global:devT_pending = $null
+        $global:devT_other = @{}
+        $global:devT_sweeps = 0
+        $global:devT_appearAt = 1
+        $global:devT_probes = [System.Collections.Generic.List[object]]::new()
         # As in the live failure: the LOM named by MAC on DHCP, the provisioning lease on a storage port.
         $global:devT_adapters = @(
             (New-DevTAdapter -Name 'eno1' -Mac '00005e0053aa' -Dhcp $true -Ip '192.0.2.200' -Mask '255.255.255.0' -Gateway '192.0.2.1' -Dns '192.0.2.53' -Index 0)
@@ -106,7 +121,7 @@ Describe 'Set-ZtpDeviceConfiguration.ps1' {
         $out = @(& $script:run (& $script:writeInputs (& $script:static)))
         & $script:posts | Should -BeNullOrEmpty
         $plan = @($out | Where-Object { $_ -is [string] })
-        $plan | Should -BeLike 'PLAN: node-01: POST SetArcBootstrapDeviceConfiguration to 192.0.2.111: host name node-01, eno1 (00:00:5e:00:53:aa) static 192.0.2.11 255.255.255.0 gw 192.0.2.1 DNS 192.0.2.53,192.0.2.54 VLAN 0 (reports DHCP 192.0.2.200 now)*'
+        $plan | Should -BeLike 'PLAN: node-01: POST SetArcBootstrapDeviceConfiguration to 192.0.2.111: eno1 (00:00:5e:00:53:aa) static 192.0.2.11 255.255.255.0 gw 192.0.2.1 DNS 192.0.2.53,192.0.2.54 VLAN 0 (reports DHCP 192.0.2.200 now)*'
         ($out | Where-Object { $_ -isnot [string] }).Status | Should -Be 'Planned'
         Test-Path -LiteralPath $script:changeLog | Should -BeFalse
         Test-Path -LiteralPath $script:events | Should -BeFalse
@@ -135,7 +150,7 @@ Describe 'Set-ZtpDeviceConfiguration.ps1' {
         $post.Count | Should -Be 1
         $post[0].Uri | Should -Be 'https://192.0.2.111:20001/BootstrapOobeService/SetArcBootstrapDeviceConfiguration'
         $body = $post[0].Body | ConvertFrom-Json
-        $body.HostName | Should -Be 'node-01'
+        $body.PSObject.Properties.Name | Should -Be @('Network') -Because 'the request shape verified live carries Network only, no HostName'
         @($body.Network.NetworkAdapters).Count | Should -Be 1
         $a = $body.Network.NetworkAdapters[0]
         $a.MacAddress | Should -BeExactly '00005e0053aa'
@@ -218,11 +233,74 @@ Describe 'Set-ZtpDeviceConfiguration.ps1' {
         { & $script:run (& $script:writeInputs (& $script:static)) } | Should -Throw "*REST service at 192.0.2.111:20001 doesn't answer*"
     }
 
-    It 'skips a node without a maintenance address, without calling anything' {
+    It 'finds a node without a maintenance address by scanning its range for TCP 20001 and matching the management MAC' {
+        # Another machine answers in the range too; the node itself answers on a port that isn't the management port.
+        $global:devT_up = @('192.0.2.140', '192.0.2.150', '192.0.2.11')
+        $global:devT_other['192.0.2.140'] = @(New-DevTAdapter -Name 'eno1' -Mac '00005e0053ee' -Ip '192.0.2.140')
+        $global:devT_adapters[1].IpAddress = '192.0.2.150'
+        $row = & $script:run (& $script:writeInputs (& $script:static) -Maintenance '' -ScanRange '192.0.2.100-192.0.2.250') @{ Execute = $true; Confirm = $false }
+        $row.Status | Should -Be 'Changed'
+        $row.MaintenanceAddress | Should -Be '192.0.2.150'
+        $global:devT_probes[0].Count | Should -Be 151; $global:devT_probes[0].First | Should -Be '192.0.2.100'; $global:devT_probes[0].Last | Should -Be '192.0.2.250'; $global:devT_probes[0].Port | Should -Be 20001
+        (& $script:posts)[0].Uri | Should -Be 'https://192.0.2.150:20001/BootstrapOobeService/SetArcBootstrapDeviceConfiguration'
+        @(& $script:eventsOf | ForEach-Object state)[0] | Should -Be 'MaintenanceEnvironmentFound'
+        (& $script:eventsOf)[0].evidence | Should -Be 'maintenance environment found by its management MAC 00:00:5e:00:53:aa at 192.0.2.150 (scan of 192.0.2.100-192.0.2.250)'
+    }
+
+    It 'prefers a lease that is not on the management port, which moves when the static address is applied' {
+        $global:devT_up = @('192.0.2.111', '192.0.2.200', '192.0.2.11')
+        $row = & $script:run (& $script:writeInputs (& $script:static) -Maintenance '' -ScanRange '192.0.2.100-192.0.2.250') @{ Execute = $true; Confirm = $false }
+        $row.MaintenanceAddress | Should -Be '192.0.2.111' -Because '192.0.2.200 is the management port''s own lease'
+    }
+
+    It 'keeps scanning until the node answers, because it may still be booting' {
+        $global:devT_appearAt = 3
+        $row = & $script:run (& $script:writeInputs (& $script:static) -Maintenance '' -ScanRange '192.0.2.100-192.0.2.120') @{ Execute = $true; Confirm = $false }
+        $row.Status | Should -Be 'Changed'
+        $global:devT_sweeps | Should -Be 3
+    }
+
+    It 'stops with what it scanned when no maintenance environment has the MAC by the deadline, and a plan scans once' {
+        $global:devT_up = @('192.0.2.140')
+        $global:devT_other['192.0.2.140'] = @(New-DevTAdapter -Name 'eno1' -Mac '00005e0053ee' -Ip '192.0.2.140')
+        { & $script:run (& $script:writeInputs (& $script:static) -Maintenance '' -ScanRange '192.0.2.100-192.0.2.250') @{ Execute = $true; Confirm = $false; TimeoutMinutes = 0 } } |
+            Should -Throw '*node-01: no maintenance environment with the management MAC 00:00:5e:00:53:aa answers on TCP 20001 in 192.0.2.100-192.0.2.250 within 0 minutes (1 scan(s))*'
+        & $script:posts | Should -BeNullOrEmpty
+        $global:devT_sweeps = 0
+        $out = @(& $script:run (& $script:writeInputs (& $script:static) -Maintenance '' -ScanRange '192.0.2.100-192.0.2.250'))
+        $global:devT_sweeps | Should -Be 1
+        ($out | Where-Object { $_ -is [string] }) | Should -BeLike 'PLAN: node-01: no maintenance environment*answers on TCP 20001 in 192.0.2.100-192.0.2.250 now*With -Execute the Device stage scans for up to 5 minutes.'
+        ($out | Where-Object { $_ -isnot [string] }).Status | Should -Be 'Planned'
+    }
+
+    It 'scans the management subnet when the node list gives no range, and refuses a range that is too big' {
+        $global:devT_up = @('192.0.2.150')
+        $global:devT_adapters[1].IpAddress = '192.0.2.150'
         $row = & $script:run (& $script:writeInputs (& $script:static) -Maintenance '') @{ Execute = $true; Confirm = $false }
+        $row.MaintenanceAddress | Should -Be '192.0.2.150'
+        @($global:devT_probes[0].Count, $global:devT_probes[0].First, $global:devT_probes[0].Last) -join ' ' | Should -Be '254 192.0.2.1 192.0.2.254'
+        { & $script:run (& $script:writeInputs (& $script:static) -Maintenance '' -ScanRange '192.0.0.1-192.0.20.1') @{ Execute = $true; Confirm = $false } } | Should -Throw '*more than 4096 addresses*provisioning_dhcp_range*'
+    }
+
+    It 'does not scan for a dhcp or preconfigured node without a maintenance address' {
+        $m = & $script:static; $m.ip_assignment = 'dhcp'
+        $row = & $script:run (& $script:writeInputs $m -Maintenance '') @{ Execute = $true; Confirm = $false }
         $row.Status | Should -Be 'Skipped'
         $global:devT_calls.Count | Should -Be 0
-        (& $script:eventsOf).state | Should -Be 'DeviceConfigurationSkipped'
+        $global:devT_sweeps | Should -Be 0
+    }
+
+    It 'reads the status in the shape the service returned live, and stops on a failed step' {
+        $live = '{"Response":{"DetailedResponse":[{"Name":"NetworkConfig","Status":"Succeeded"},{"Name":"RemoteConfig","Status":"NotApplicable"}],"Name":"Bootstrap","Status":"Succeeded"},"Version":"V1"}'
+        $a = & $script:argsFor (& $script:writeInputs (& $script:static)) @{ Execute = $true; Confirm = $false }
+        $global:devT_liveStatus = $live
+        Mock Invoke-RestMethod { if ($Uri -like '*GetArcBootstrapDeviceConfigurationStatus') { $null = & $global:devT_handler ([string]$Uri) ([string]$Method) ([string]$Body) $Credential; return ($global:devT_liveStatus | ConvertFrom-Json) }; & $global:devT_handler ([string]$Uri) ([string]$Method) ([string]$Body) $Credential }
+        $row = & $script:setDevice @a -InformationVariable info
+        $row.Status | Should -Be 'Changed'
+        (@($info | ForEach-Object { [string]$_.MessageData }) -join "`n") | Should -Match 'status: Bootstrap Succeeded \(NetworkConfig Succeeded, RemoteConfig NotApplicable\)'
+        $global:devT_adapters[0].EnableDhcp = $true; $global:devT_adapters[0].IpAddress = '192.0.2.200'
+        $global:devT_liveStatus = $live.Replace('"NetworkConfig","Status":"Succeeded"', '"NetworkConfig","Status":"Failed"').Replace('"Bootstrap","Status":"Succeeded"', '"Bootstrap","Status":"InProgress"')
+        { & $script:setDevice @a } | Should -Throw '*SetArcBootstrapDeviceConfiguration failed: Bootstrap InProgress (NetworkConfig Failed*'
     }
 
     It 'only reports the management adapter for dhcp and preconfigured' {

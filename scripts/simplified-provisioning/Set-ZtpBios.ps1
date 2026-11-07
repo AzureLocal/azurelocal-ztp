@@ -11,8 +11,9 @@ Sets a node's BIOS attributes through its BMC's Redfish service before the maint
 3. Applies them: powers the node on (On) when it is off, otherwise restarts it (ForceRestart). A BIOS change only takes
    effect at a reset, and the Boot stage reinstalls the machine anyway, so -ConfirmNotClustered is required.
 4. Waits until the Bios resource reports every value, then reads it once more.
-Every change is appended to -ChangeLogPath (JSON lines: time, node, BMC, attribute, before, after, phase requested and
-applied). Without -Execute it prints the plan: with -Credential, the current values and what would change; without it,
+Every change is appended to -ChangeLogPath (JSON lines: time, node, BMC, attribute, before, after, phase original (the
+value found, before the first change), requested and applied). The result's Original holds every requested attribute's
+value as found, which the orchestrator keeps in its run state for the Restore stage. Without -Execute it prints the plan: with -Credential, the current values and what would change; without it,
 the values it would set. Dell examples: Slot2 Disabled (turns off the card in PCIe slot 2), EmbNic1Nic2 Enabled (the
 embedded LOM ports when they show as DisabledOs).
 .PARAMETER NodeName
@@ -60,7 +61,10 @@ if (-not (Get-Command New-ZtpRedfishSession -ErrorAction SilentlyContinue)) { . 
 
 $want = [ordered]@{}
 foreach ($k in $Attributes.Keys) { $want[[string]$k] = [string]$Attributes[$k] }
-$row = { param([string]$Status, [object[]]$Changes) [pscustomobject]@{ Node = $NodeName; Bmc = $BmcAddress; Status = $Status; Changes = @($Changes | ForEach-Object { "$($_.Attribute): $($_.Current) -> $($_.Desired)" }) } }
+# Original: every requested attribute's value as the BIOS reported it before this run changed anything (the Restore
+# stage sets temporary values back to it).
+$original = [ordered]@{}
+$row = { param([string]$Status, [object[]]$Changes) [pscustomobject]@{ Node = $NodeName; Bmc = $BmcAddress; Status = $Status; Changes = @($Changes | ForEach-Object { "$($_.Attribute): $($_.Current) -> $($_.Desired)" }); Original = $original } }
 if ($want.Count -eq 0) { return (& $row 'None' @()) }
 $text = ($want.Keys | ForEach-Object { "$_=$($want[$_])" }) -join ', '
 if ($Execute -and -not $Credential) { throw '-Credential (the BMC account) is required with -Execute.' }
@@ -89,6 +93,7 @@ try {
     $biosPath = if ($system.PSObject.Properties['Bios'] -and $system.Bios.PSObject.Properties['@odata.id']) { [string]$system.Bios.'@odata.id' } else { "$($system.'@odata.id')/Bios" }
     $bios = Invoke-ZtpRedfish -Session $session -Path $biosPath
     $changes = @(Get-ZtpBiosChange -Current $bios.Attributes -Desired $want)
+    foreach ($k in $want.Keys) { $v = $bios.Attributes.$k; $original[$k] = $(if ($v -is [bool]) { $v.ToString().ToLowerInvariant() } else { [string]$v }) }
     if ($changes.Count -eq 0) {
         Write-Information -MessageData "$NodeName BIOS: already $text." -InformationAction Continue
         return (& $row 'AlreadySet' @())
@@ -99,6 +104,8 @@ try {
         return
     }
     if (-not $PSCmdlet.ShouldProcess("$NodeName ($BmcAddress)", "Set BIOS $(@($changes | ForEach-Object { "$($_.Attribute)=$($_.Desired)" }) -join ', ') and restart to apply")) { return }
+    # Before the first change: each attribute's value as found, so it can be set back.
+    Write-BiosLog 'original' @($changes | ForEach-Object { [pscustomobject]@{ Attribute = $_.Attribute; Current = $_.Current; Desired = $_.Current } })
 
     $settingsPath = if ($bios.PSObject.Properties['@Redfish.Settings'] -and $bios.'@Redfish.Settings'.SettingsObject.'@odata.id') { [string]$bios.'@Redfish.Settings'.SettingsObject.'@odata.id' } else { "$biosPath/Settings" }
     # A value already pending (an earlier run stopped before the reset) isn't sent again: the BMC refuses a second job.

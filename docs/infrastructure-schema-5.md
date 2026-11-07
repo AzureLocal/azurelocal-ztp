@@ -28,8 +28,11 @@ The older [environment-file layout](environment-file.md) still works and is depr
 | Management VLAN | `networking.management.vlan_id`, the VLAN the host tags (0 for an access port). |
 | Serial number, BMC address | `nodes[].serial_number`, `nodes[].bmc.ip_address` |
 | Arc machine name | `nodes[].arc_machine_name`, default the node name. The service currently overwrites it at claim time (open research item). |
-| BIOS settings | `hardware.bios`, with `nodes[].bios` merged over it |
-| Maintenance address (the Device stage) | The `ip_address` of the node's port with role `provisioning` (and not `management`), for example a `dhcp_reservation` port. Without one the Device stage skips the node. |
+| BIOS settings (final) | `hardware.bios`, with `nodes[].bios` merged over it |
+| BIOS settings for the install only | `hardware.bios_during_provisioning`, with `nodes[].bios_during_provisioning` merged over it: Boot applies them over the final ones, Restore sets them back |
+| Maintenance address (the Device stage) | `nodes[].maintenance_address`, else the `ip_address` of the node's port with role `provisioning` (and not `management`), for example a `dhcp_reservation` port. Without either, the Device stage scans `networking.management.provisioning_dhcp_range` (default: the management subnet) and finds the node by its management MAC. |
+| Who sets a static management address | `networking.management.static_method`: `device` (default) or `site` |
+| Where the Device stage scans | `networking.management.provisioning_dhcp_range` (`start`, `end`) |
 | The maintenance environment's `edgeuser` password | `provisioning.simplified.maintenance_password` (`keyvault://<vault>/<secret>`, in `key_vaults`, in the provisioning admin vault's subscription). **The toolkit's schema 5.2 doesn't list this key yet** and `provisioning.simplified` allows no other keys, so a file with it fails the toolkit's validation until the schema adds it. Without it: `Password1`. |
 | The other ports | `nodes[].network_adapters`: Prepare leaves DHCP on a port without role `management` only when its `ip_assignment` is `dhcp` or `dhcp_reservation`. |
 | Subnet, gateway, DNS servers | `networking.management.subnet`, `gateway`, `dns_servers` |
@@ -45,7 +48,7 @@ The older [environment-file layout](environment-file.md) still works and is depr
 | Provisioning administrator | `provisioning.simplified.admin.username`; the vault and secret from `admin.password` (`keyvault://<vault>/<secret>`), and that vault's `subscription_id` and `resource_group` from `key_vaults[]` |
 | BMC login | `hardware.bmc.username` (a `keyvault://` reference or the name itself) and `hardware.bmc.password` |
 | Deployment admin | `identity.local_admin.username`, `password` |
-| Vendor, model, SBE | `hardware.vendor`, `model`, `sbe.bundle_path`, `sbe.allow_unvalidated` |
+| Vendor | `hardware.vendor`. `hardware.sbe` belongs to OS configuration and deployment: ZTP accepts it, ignores it with a note, and doesn't require it. |
 | Resource provider object ID | `azure.hci_resource_provider_object_id` |
 | Tags | `tags` |
 
@@ -59,7 +62,7 @@ Limits of the mapping, which the check names: ZTP reads every secret in the prov
 
 **The Network stage.** After Ready, `Set-ZtpManagementAddress.ps1` moves a static management address to the port named by its MAC, through Azure (`edgeMachines/<node>/networkAdapters` and `jobs/ApplyConfiguration`, api-version 2026-10-01). It matches the management port's `mac_address` against each adapter's reported MAC, whatever the separators and case, and stops when none matches. If another port reports the node's address, that port goes to DHCP first; then the management port gets the address, the mask from `networking.management.subnet`, the gateway, the DNS servers and the VLAN. A port already reporting all of that is left alone. For `dhcp`, `dhcp_reservation` and `preconfigured` it changes nothing and shows what the port reports. Changes go to `<evidence_path>\network-changes.jsonl`. See [The Network stage](environment-file.md#the-network-stage).
 
-**The site's network setting.** `Manual` when any management address is static, over `site_ip_range` (default: the lowest to the highest static address); `Automatic` otherwise. See [The site's network setting](environment-file.md#the-sites-network-setting).
+**The site's network setting.** `Automatic` with `static_method: device` (the default): the Device stage sets the static address by MAC, and the claim carries no `Manual` adapter. With `static_method: site`, `Manual` when any management address is static, over `site_ip_range` (default: the lowest to the highest static address); `Automatic` otherwise. See [The site's network setting](environment-file.md#the-sites-network-setting).
 
 **The maintenance environment.** It reaches Azure through a port with role `provisioning`, before the machine is claimed, and takes DHCP there (`provisioning_network: dhcp`). On a machine whose management network has no DHCP, mark data ports that do get DHCP as `provisioning`, as `lom-management-ztp.yml` does. A static address in the maintenance environment (`provisioning_network: static`) is a warning: Learn documents only the Configurator app for it, and whether the USB image can carry a preset address is an open research item.
 

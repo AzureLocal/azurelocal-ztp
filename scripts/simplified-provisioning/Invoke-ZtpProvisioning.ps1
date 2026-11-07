@@ -1,7 +1,7 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-Zero-touch provisioning of Azure Local machines, end to end: Resolve -> Media -> Boot -> Bootstrap -> Vouchers -> Device -> Azure -> Ready -> Network -> Handoff.
+Zero-touch provisioning of Azure Local machines, end to end: Resolve -> Media -> Boot -> Bootstrap -> Vouchers -> Device -> Azure -> Ready -> Network -> Restore -> Handoff.
 .DESCRIPTION
 One orchestrator over the stage scripts in this folder. Every input is a parameter, or a key of the same name in a JSON
 settings file (-ConfigPath; see config/simplified-provisioning/ztp-provisioning.example.json). A parameter wins over the
@@ -39,11 +39,17 @@ file; nothing is hardcoded.
             holds the address to Dhcp. An adapter already right is left alone; dhcp and preconfigured nodes are only
             reported. Needed because the OS install ignores the MAC in the edge machine request and puts the address on the
             first ready port. Changes are logged to network-changes.jsonl beside -EventLogPath.
+  Restore   Restore-ZtpBios.ps1: sets each BIOS value changed for the install only (the node list's bios_restore, from
+            bios_during_provisioning) back to hardware.bios or to the value the Boot stage saved in the state file before
+            changing it; PATCH OnReset, restart through Redfish, wait until the BIOS reports them. Then, after
+            -RestoreSettleMinutes, waits until every Arc machine is Connected and every edge machine still ready to cluster
+            (the Ready stage's watch and check). Events: stage Restore, BiosRestoreStarted, BiosRestored, BiosRestoreFailed.
+            Without bios_during_provisioning it is a no-op that says so.
   Handoff   New-ZtpHandoff.ps1 writes -HandoffPath (ztp-handoff.json: Arc machine names, site, solution, bootstrap and SBE versions,
             timestamps); Convert-ZtpHandoffToClusterInputs.ps1 writes -ClusterInputsPath (the arc_machine_names block for the cluster
             deployment environment file). Nothing is clustered here.
 Plan by default: without -Execute the stage table and the command of every stage are printed, and the next stage shows its
-own plan (Media, Boot, Device, Azure and Network have a plan mode; Vouchers and Ready are waits). Nothing changes.
+own plan (Media, Boot, Device, Azure, Network and Restore have a plan mode; Vouchers and Ready are waits). Nothing changes.
 With -Execute each stage runs, its result is checked (an image per node, every node booted read-write, a valid voucher per
 node, deployment accepted, every node ready and its Arc machine verified) and recorded in the state file; the next stage
 starts only after that. A rerun resumes at the first stage that did not complete. -Stage runs one stage again; -From runs
@@ -147,6 +153,11 @@ Ready and Network: poll interval.
 Device: how long the maintenance environment may take to report the static address.
 .PARAMETER NetworkTimeoutMinutes
 Network: how long each ApplyConfiguration job may take, and then the adapter to report its result.
+.PARAMETER RestoreSettleMinutes
+Restore: how long to wait after the BIOS restart before checking that the Arc machines are Connected again (an Arc
+machine reads Connected for a while after its host went down).
+.PARAMETER BiosTimeoutMinutes
+Restore: how long to wait for a node's BIOS to report the restored values after the restart.
 .PARAMETER StatePath
 Run state file (default ./ztp-provisioning.state.json).
 .PARAMETER ResetState
@@ -164,8 +175,8 @@ Change the machines, this host's share and Azure. Without it only the plan is sh
 #>
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
-    [ValidateSet('Resolve', 'Media', 'Boot', 'Bootstrap', 'Vouchers', 'Device', 'Azure', 'Ready', 'Network', 'Handoff', 'All')][string]$Stage = 'All',
-    [ValidateSet('Resolve', 'Media', 'Boot', 'Bootstrap', 'Vouchers', 'Device', 'Azure', 'Ready', 'Network', 'Handoff')][string]$From,
+    [ValidateSet('Resolve', 'Media', 'Boot', 'Bootstrap', 'Vouchers', 'Device', 'Azure', 'Ready', 'Network', 'Restore', 'Handoff', 'All')][string]$Stage = 'All',
+    [ValidateSet('Resolve', 'Media', 'Boot', 'Bootstrap', 'Vouchers', 'Device', 'Azure', 'Ready', 'Network', 'Restore', 'Handoff')][string]$From,
     [string]$ConfigPath,
     [string]$NodesFile,
     [string[]]$NodeName,
@@ -213,6 +224,8 @@ param(
     [ValidateRange(0, 3600)][int]$PollIntervalSeconds = 60,
     [ValidateRange(0, 1440)][int]$DeviceTimeoutMinutes = 30,
     [ValidateRange(0, 1440)][int]$NetworkTimeoutMinutes = 60,
+    [ValidateRange(0, 120)][int]$RestoreSettleMinutes = 5,
+    [ValidateRange(1, 240)][int]$BiosTimeoutMinutes = 30,
     [string]$StatePath = (Join-Path (Get-Location) 'ztp-provisioning.state.json'),
     [switch]$ResetState,
     [string]$StageScriptRoot = $PSScriptRoot,
@@ -224,7 +237,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'ZtpVirtualUsb.Common.ps1')
 . (Join-Path $PSScriptRoot 'ZtpEvents.Common.ps1')
 
-$order = @('Resolve', 'Media', 'Boot', 'Bootstrap', 'Vouchers', 'Device', 'Azure', 'Ready', 'Network', 'Handoff')
+$order = @('Resolve', 'Media', 'Boot', 'Bootstrap', 'Vouchers', 'Device', 'Azure', 'Ready', 'Network', 'Restore', 'Handoff')
 function Write-ZtpRunLog {
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Message, [ValidateSet('Info', 'Warning')][string]$Level = 'Info')
     $line = "[$([datetime]::UtcNow.ToString('HH:mm:ss'))Z] [ztp] $Message"
@@ -236,7 +249,7 @@ $settable = @('BootstrapCacheDirectory', 'BootstrapVersion', 'IncludePreview', '
     'EventLogPath', 'BootstrapTimeoutMinutes', 'BootstrapVoucherTimeoutMinutes', 'SkipAzureCheck', 'Location', 'HandoffPath', 'ClusterInputsPath',
     'NodesFile', 'NodeName', 'SourcePath', 'ImageDirectory', 'ImageNamePrefix', 'ShareHost', 'ShareName', 'VoucherDirectory',
     'VoucherFolder', 'VoucherWaitMinutes', 'RfsWriteAttribute', 'SkipCertificateCheck', 'KeepShare', 'SubscriptionId', 'ResourceGroupName',
-    'ParameterFile', 'OsVersion', 'SiteMode', 'DeploymentName', 'ArcMachineNameMapPath', 'ReadyTimeoutMinutes', 'PollIntervalSeconds', 'DeviceTimeoutMinutes', 'NetworkTimeoutMinutes', 'StatePath')
+    'ParameterFile', 'OsVersion', 'SiteMode', 'DeploymentName', 'ArcMachineNameMapPath', 'ReadyTimeoutMinutes', 'PollIntervalSeconds', 'DeviceTimeoutMinutes', 'NetworkTimeoutMinutes', 'RestoreSettleMinutes', 'BiosTimeoutMinutes', 'StatePath')
 if ($ConfigPath) {
     $settings = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json -AsHashtable
     foreach ($key in $settings.Keys) {
@@ -282,6 +295,18 @@ else {
     $first = @($order | Where-Object { -not $state['stages'].Contains($_) } | Select-Object -First 1)
     if ($first.Count -eq 0) { @() } else { @($order[([array]::IndexOf($order, $first[0]))..($order.Count - 1)]) }
 })
+
+# ------------------------------------------------------------------ BIOS restore
+# The node list's bios_restore (attribute -> final value, or '' for the value before Boot) of the nodes in this run.
+function Get-ZtpRestoreNeed {
+    if (-not $NodesFile -or -not (Test-Path -LiteralPath $NodesFile)) { return @() }
+    $doc = Get-Content -LiteralPath $NodesFile -Raw | ConvertFrom-Json -AsHashtable
+    @(foreach ($n in @($doc['nodes'])) { if ($n -is [System.Collections.IDictionary] -and [string]$n['name'] -in $NodeName -and $n['bios_restore'] -is [System.Collections.IDictionary] -and $n['bios_restore'].Count) { [string]$n['name'] } })
+}
+function Get-ZtpBiosOriginal {
+    if ($state.Contains('biosOriginal') -and $state['biosOriginal'] -is [System.Collections.IDictionary]) { return $state['biosOriginal'] }
+    return [ordered]@{}
+}
 
 # ------------------------------------------------------------------ stage calls
 function Get-ZtpStageCall {
@@ -332,11 +357,22 @@ function Get-ZtpStageCall {
             & $act $p
             $calls.Add([pscustomobject]@{ Script = 'Set-ZtpManagementAddress.ps1'; Parameters = $p })
         }
+        'Restore' {
+            $p = [ordered]@{ NodeName = $NodeName; NodesFile = $NodesFile; Original = (Get-ZtpBiosOriginal); TimeoutMinutes = $BiosTimeoutMinutes }
+            if ($BmcCredential) { $p.Credential = $BmcCredential }
+            if ($ConfirmNotClustered) { $p.ConfirmNotClustered = $true }
+            if ($SkipCertificateCheck) { $p.SkipCertificateCheck = $true }
+            if ($EventLogPath) { $p.EventLogPath = $EventLogPath; $p.BiosLogPath = Join-Path (Split-Path -Parent ([IO.Path]::GetFullPath($EventLogPath))) 'bios-changes.jsonl' }
+            & $act $p
+            $calls.Add([pscustomobject]@{ Script = 'Restore-ZtpBios.ps1'; Parameters = $p })
+        }
         'Handoff' {
             $resolved = if ($state['stages'].Contains('Resolve') -and $state['stages']['Resolve'].Contains('data')) { $state['stages']['Resolve']['data'] } else { @{} }
             $p = [ordered]@{ SubscriptionId = $SubscriptionId; ResourceGroupName = $ResourceGroupName; NodeName = $NodeName; NodesFile = $NodesFile; EventLogPath = $EventLogPath; HandoffPath = $HandoffPath }
             if ($resolved['bootstrapManifest']) { $p.BootstrapManifestPath = $resolved['bootstrapManifest'] }
             if ($resolved['sbeManifest']) { $p.SbeManifestPath = $resolved['sbeManifest'] }
+            # The BIOS values the Restore stage set back, per node.
+            if ($state['stages'].Contains('Restore') -and $state['stages']['Restore'] -is [System.Collections.IDictionary] -and $state['stages']['Restore'].Contains('data') -and $state['stages']['Restore']['data'] -and $state['stages']['Restore']['data']['restored'] -is [System.Collections.IDictionary] -and $state['stages']['Restore']['data']['restored'].Count) { $p.RestoredBios = $state['stages']['Restore']['data']['restored'] }
             & $actPlain $p
             $calls.Add([pscustomobject]@{ Script = 'New-ZtpHandoff.ps1'; Parameters = $p })
             $c = [ordered]@{ HandoffPath = $HandoffPath; OutputPath = $ClusterInputsPath; Format = $(if ($ClusterInputsPath -like '*.json') { 'Json' } else { 'Yaml' }) }
@@ -414,6 +450,7 @@ function Format-ZtpCall {
         $v = $Call.Parameters[$k]
         if ($v -is [bool]) { if ($v) { "-$k" } else { "-${k}:`$false" } }
         elseif ($v -is [securestring] -or $v -is [pscredential]) { "-$k <in memory>" }
+        elseif ($v -is [System.Collections.IDictionary]) { "-$k <$($v.Count) node(s)>" }
         elseif ($v -is [System.Collections.IEnumerable] -and $v -isnot [string]) { "-$k $(@($v) -join ',')" }
         else { "-$k $v" }
     }
@@ -438,6 +475,7 @@ function Assert-ZtpStageInput {
         'Device' { $need.ParameterFile = $ParameterFile }
         'Network' { $need.SubscriptionId = $SubscriptionId; $need.ResourceGroupName = $ResourceGroupName; $need.ParameterFile = $ParameterFile }
         'Handoff' { $need.SubscriptionId = $SubscriptionId; $need.ResourceGroupName = $ResourceGroupName }
+        'Restore' { if ($ForExecute -and @(Get-ZtpRestoreNeed).Count) { $need.BmcCredential = $BmcCredential; $need.SubscriptionId = $SubscriptionId; $need.ResourceGroupName = $ResourceGroupName; $need.ParameterFile = $ParameterFile; $need.VoucherDirectory = $VoucherDirectory } }
         'Media' { if (-not $BootstrapCacheDirectory) { $need.SourcePath = $SourcePath }; $need.ImageDirectory = $ImageDirectory }
         'Boot' { $need.ImageDirectory = $ImageDirectory; $need.ShareHost = $ShareHost; if ($ForExecute) { $need.BmcCredential = $BmcCredential } }
         'Vouchers' { $need.VoucherDirectory = $VoucherDirectory; if (-not $VoucherFolder) { $need.ImageDirectory = $ImageDirectory }; if ($ForExecute) { $need.BmcCredential = $BmcCredential } }
@@ -465,7 +503,7 @@ if (-not $Execute) {
     $SourcePath = $planSourcePath
     $next = @($run | Where-Object { $_ -ne 'Resolve' -or $BootstrapCacheDirectory })[0]
     if ($run[0] -eq 'Resolve' -and -not $BootstrapCacheDirectory) { Write-ZtpRunLog "Resolve is skipped: no BootstrapCacheDirectory, so -SourcePath ($SourcePath) is used as it is." }
-    if ($next -in 'Resolve', 'Media', 'Boot', 'Device', 'Azure', 'Network') {
+    if ($next -in 'Resolve', 'Media', 'Boot', 'Device', 'Azure', 'Network', 'Restore') {
         Write-ZtpRunLog "Plan of the next stage ($next), from its own script:"
         try { foreach ($call in (Get-ZtpStageCall -Name $next)) { Invoke-ZtpStageScript -Call $call | Where-Object { $_ -is [string] } } }
         catch { Write-ZtpRunLog "The $next stage would fail now: $($_.Exception.Message)" -Level Warning }
@@ -542,6 +580,26 @@ foreach ($name in $run) {
                     "$($_.Node) $what ($($_.Status)$(if (@($_.Released).Count) { "; released from $(@($_.Released) -join ', ')" }))"
                 }) -join '; '
         }
+        'Restore' {
+            $rows = @(Invoke-ZtpStageScript -Call $calls[0] | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties['Restored'] })
+            $restarted = @($rows | Where-Object Status -EQ 'Restored')
+            if ($restarted.Count) {
+                # The Arc machine reads Connected for a while after its host went down: let it notice the restart first.
+                Write-ZtpRunLog "Restore: BIOS set back on $(@($restarted.Node) -join ', '); waiting $RestoreSettleMinutes min, then until the Arc machines are Connected and the edge machines ready to cluster."
+                if ($RestoreSettleMinutes -gt 0) { Start-Sleep -Seconds ($RestoreSettleMinutes * 60) }
+                $watch = @(Get-ZtpStageCall -Name 'Ready' -ForExecute)[0]
+                $arcRows = @(Invoke-ZtpStageScript -Call $watch | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties['ArcMachineName'] -and $_.PSObject.Properties['ArcResourceGroup'] })
+                foreach ($node in $NodeName) { if (@($arcRows | Where-Object { $_.Node -eq $node -and $_.ArcMachineName }).Count -ne 1) { throw "Restore: $node isn't ready to cluster after the BIOS restart." } }
+                foreach ($group in @($arcRows | Group-Object ArcResourceGroup)) {
+                    $test = [ordered]@{ SubscriptionId = $SubscriptionId; ResourceGroupName = $group.Name; ExpectedMachineName = @($group.Group.ArcMachineName) }
+                    $null = Invoke-ZtpStageScript -Call ([pscustomobject]@{ Script = 'Test-ProvisionedMachines.ps1'; Parameters = $test })
+                }
+            }
+            $restored = [ordered]@{}
+            foreach ($r in @($rows | Where-Object { $_.Status -in 'Restored', 'AlreadySet' })) { $restored[$r.Node] = $r.Restored }
+            $data = @{ restored = $restored }
+            $evidence = if ($restored.Count) { "BIOS set back: $(@($restored.Keys | ForEach-Object { $n = $_; "$n $(@($restored[$n].Keys | ForEach-Object { "$_=$($restored[$n][$_])" }) -join ', ')" }) -join '; ')$(if ($restarted.Count) { "; Connected and ready again: $(@($restarted.Node) -join ', ')" })" } else { 'nothing to restore: no bios_during_provisioning' }
+        }
         'Handoff' {
             $null = Invoke-ZtpStageScript -Call $calls[0]
             $null = Invoke-ZtpStageScript -Call $calls[1]
@@ -565,6 +623,14 @@ foreach ($name in $run) {
                 if (-not [bool]$row[0].Restarted) { throw "Boot: $node was not restarted into the maintenance environment." }
             }
             $bios = @(foreach ($r in $rows) { if ($r.PSObject.Properties['Bios'] -and @($r.Bios).Count) { "$($r.Node) $(@($r.Bios) -join ', ')" } })
+            # Each attribute's value as found, before Boot changed it: the Restore stage sets temporary values back to it.
+            # Saved once: a later Boot run reads the already-changed value and must not overwrite it.
+            if (-not $state.Contains('biosOriginal') -or $state['biosOriginal'] -isnot [System.Collections.IDictionary]) { $state['biosOriginal'] = [ordered]@{} }
+            foreach ($r in @($rows | Where-Object { $_.PSObject.Properties['BiosOriginal'] -and $_.BiosOriginal })) {
+                if (-not $state['biosOriginal'].Contains($r.Node)) { $state['biosOriginal'][$r.Node] = [ordered]@{} }
+                foreach ($k in @($r.BiosOriginal.Keys)) { if (-not $state['biosOriginal'][$r.Node].Contains($k)) { $state['biosOriginal'][$r.Node][$k] = [string]$r.BiosOriginal[$k] } }
+            }
+            Save-ZtpRunState
             foreach ($r in @($rows | Where-Object { $_.PSObject.Properties['Bios'] -and @($_.Bios).Count })) {
                 Write-ZtpEvent -Path $EventLogPath -Node $r.Node -State 'BiosChanged' -Evidence (@($r.Bios) -join '; ') -NextAction '' -Stage 'Boot'
             }

@@ -15,10 +15,22 @@ The keys, by what needs them:
     azure_identity.azure_tenant_id
     network_intents.management.subnet, .gateway, .dns_servers
     network_intents.management.ip_assignment, .vlan_id   (optional; static, dhcp or preconfigured; default static)
-    network_intents.management.site_ip_range.start, .end (optional; the site's Manual range; default the nodes' range)
+    network_intents.management.static_method             (optional; device (default) or site; who sets a static
+                                                          address: the Device stage by MAC, with the site Automatic and
+                                                          no Manual adapter in the claim, or Microsoft's OS install from
+                                                          the site's Manual setting and the claim)
+    network_intents.management.site_ip_range.start, .end (optional; the site's Manual range with static_method site;
+                                                          default the nodes' range)
+    network_intents.management.provisioning_dhcp_range.start, .end (optional; where the Device stage scans for the
+                                                          maintenance environment of a node without maintenance_address;
+                                                          default the management subnet)
     network_intents.management.provisioning_network      (optional; dhcp or static; how the maintenance environment
                                                           reaches Azure; static is a warning, ZTP can't set it)
-    hardware.bios, cluster_nodes[].bios                  (optional; BIOS attribute -> string value, set by the Boot stage)
+    hardware.bios, cluster_nodes[].bios                  (optional; BIOS attribute -> string value: the machine's final
+                                                          state, set by the Boot stage)
+    hardware.bios_during_provisioning, cluster_nodes[].bios_during_provisioning (optional; temporary values for the
+                                                          install only: Boot applies them over hardware.bios, Restore sets
+                                                          each back to hardware.bios or the value saved before Boot)
     onprem.ntp_servers                         (optional)
     credentials.local_admin_username, .local_admin_password_secret   (keyvault://<vault>/<secret>)
     hardware.vendor
@@ -131,6 +143,7 @@ function Test-ZtpEnvironment {
         }
     }
     & $checkBios (Get-ZtpEnvValue -Environment $Environment -Path 'hardware.bios') 'hardware.bios'
+    & $checkBios (Get-ZtpEnvValue -Environment $Environment -Path 'hardware.bios_during_provisioning') 'hardware.bios_during_provisioning'
 
     $nodes = Get-ZtpEnvValue -Environment $Environment -Path 'cluster_nodes'
     if ($nodes -isnot [System.Collections.IList] -or @($nodes).Count -eq 0) { $problems.Add('cluster_nodes is required: a list with one entry per node.') }
@@ -157,6 +170,7 @@ function Test-ZtpEnvironment {
                 & $check $n 'maintenance_address' "$label.maintenance_address" 'ip' -Optional
             }
             & $checkBios (Get-ZtpEnvValue -Environment $n -Path 'bios') "$label.bios"
+            & $checkBios (Get-ZtpEnvValue -Environment $n -Path 'bios_during_provisioning') "$label.bios_during_provisioning"
             $nodeMode = Get-ZtpEnvValue -Environment $n -Path 'ip_assignment'
             if ($null -ne $nodeMode -and [string]$nodeMode -notin 'static', 'dhcp', 'preconfigured') { $problems.Add("$label.ip_assignment must be static, dhcp or preconfigured, not '$nodeMode'.") }
             # The node's other ports (the schema 5 reader fills this in): Prepare leaves DHCP on the ones marked dhcp.
@@ -211,7 +225,7 @@ function Test-ZtpEnvironment {
             $ip = [string]$n['ip_address']
             if (& $isIp $ip) {
                 if ($subnetOk -and -not (Test-ZtpAddressInSubnet $ip $subnetText)) { $problems.Add("cluster_nodes[$i] ($($n['name'])).ip_address $ip isn't in network_intents.management.subnet $subnetText.") }
-                elseif ($rangeOk -and ((ConvertTo-ZtpIpNumber $ip) -lt (ConvertTo-ZtpIpNumber $range['start']) -or (ConvertTo-ZtpIpNumber $ip) -gt (ConvertTo-ZtpIpNumber $range['end']))) {
+                elseif ($rangeOk -and (Get-ZtpStaticMethod -Environment $Environment) -eq 'site' -and ((ConvertTo-ZtpIpNumber $ip) -lt (ConvertTo-ZtpIpNumber $range['start']) -or (ConvertTo-ZtpIpNumber $ip) -gt (ConvertTo-ZtpIpNumber $range['end']))) {
                     $problems.Add("cluster_nodes[$i] ($($n['name'])).ip_address $ip is outside network_intents.management.site_ip_range $($range['start'])-$($range['end']); with ip_assignment static every node address is in the site range.")
                 }
             }
@@ -220,6 +234,24 @@ function Test-ZtpEnvironment {
     }
     $provisioning = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.provisioning_network'
     if ($null -ne $provisioning -and [string]$provisioning -notin 'dhcp', 'static') { $problems.Add("network_intents.management.provisioning_network must be dhcp or static, not '$provisioning'.") }
+    # Who sets a static management address: the Device stage by MAC (device, the default), or Microsoft's OS install from
+    # the site's Manual setting and the claim's Manual adapter (site, for environments without the Device stage).
+    $method = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.static_method'
+    if ($null -ne $method -and "$method" -ne '' -and ([string]$method).ToLowerInvariant() -notin 'device', 'site') { $problems.Add("network_intents.management.static_method must be device or site, not '$method'.") }
+    # Where the Device stage scans for a maintenance environment it has no address for (the DHCP pool of the provisioning network).
+    $scan = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.provisioning_dhcp_range'
+    if ($null -ne $scan) {
+        if ($scan -isnot [System.Collections.IDictionary]) { $problems.Add('network_intents.management.provisioning_dhcp_range must be a mapping with start and end.') }
+        else {
+            & $check $scan 'start' 'network_intents.management.provisioning_dhcp_range.start' 'ip'
+            & $check $scan 'end' 'network_intents.management.provisioning_dhcp_range.end' 'ip'
+            if ((& $isIp ([string]$scan['start'])) -and (& $isIp ([string]$scan['end']))) {
+                $size = (ConvertTo-ZtpIpNumber $scan['end']) - (ConvertTo-ZtpIpNumber $scan['start'])
+                if ($size -lt 0) { $problems.Add("network_intents.management.provisioning_dhcp_range starts at $($scan['start']), after its end $($scan['end']).") }
+                elseif ($size -ge 4096) { $problems.Add("network_intents.management.provisioning_dhcp_range $($scan['start'])-$($scan['end']) has more than 4096 addresses; narrow it to the DHCP pool.") }
+            }
+        }
+    }
     & $check $Environment 'onprem.ntp_servers' 'onprem.ntp_servers' 'textlist' -Optional
     & $check $Environment 'credentials.local_admin_username' 'credentials.local_admin_username' 'text'
     $admin = [string](Get-ZtpEnvValue -Environment $Environment -Path 'credentials.local_admin_username')
@@ -232,7 +264,8 @@ function Test-ZtpEnvironment {
     & $check $Environment 'ztp.resource_group' 'ztp.resource_group' 'text'
     & $check $Environment 'ztp.admin_secret.subscription_id' 'ztp.admin_secret.subscription_id' 'guid'
     foreach ($k in 'vault', 'name', 'username') { & $check $Environment "ztp.admin_secret.$k" "ztp.admin_secret.$k" 'text' }
-    & $check $Environment 'ztp.node_preparation.sbe_bundle' 'ztp.node_preparation.sbe_bundle' 'text'
+    # The SBE belongs to OS configuration: only the standalone Initialize-ZtpNode.ps1 (-For Prepare) still needs it.
+    if ($For -eq 'Prepare') { & $check $Environment 'ztp.node_preparation.sbe_bundle' 'ztp.node_preparation.sbe_bundle' 'text' }
     foreach ($k in 'media_path', 'evidence_path') {
         & $check $Environment "ztp.$k" "ztp.$k" 'text' -Optional
         $p = Get-ZtpEnvValue -Environment $Environment -Path "ztp.$k"
@@ -261,8 +294,6 @@ function Test-ZtpEnvironment {
         & $check $Environment 'ztp.azl_rp_object_id' 'ztp.azl_rp_object_id' 'guid' -Optional
         $tags = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.tags'
         if ($null -ne $tags -and $tags -isnot [System.Collections.IDictionary]) { $problems.Add('ztp.tags must be a mapping of tag names to values.') }
-        $allow = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.node_preparation.allow_unvalidated_sbe'
-        if ($null -ne $allow -and $allow -isnot [bool]) { $problems.Add("ztp.node_preparation.allow_unvalidated_sbe must be true or false, not '$allow'.") }
         # The maintenance environment's edgeuser password: preset in the image and used by the Device stage. Default Password1.
         $edge = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.maintenance_password_secret'
         if ($null -ne $edge -and "$edge" -ne '' -and [string]$edge -notmatch '^keyvault://([^/]+)/(.+)$') { $problems.Add('ztp.maintenance_password_secret must be keyvault://<vault>/<secret>.') }
@@ -294,6 +325,21 @@ function Assert-ZtpEnvironment {
         throw "$Source is invalid ($($problems.Count) problem$(if ($problems.Count -ne 1) { 's' })):`n  - $($problems -join "`n  - ")"
     }
     foreach ($w in $warnings) { Write-Warning $w }
+    if ($For -eq 'Provision') { foreach ($n in @(Get-ZtpEnvironmentNote -Environment $Environment)) { Write-Information -MessageData "Note: $n" -InformationAction Continue } }
+}
+
+function Get-ZtpEnvironmentNote {
+    <#
+    .SYNOPSIS
+    One line per setting a file carries that provisioning accepts and ignores, because a later phase owns it.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment)
+    $origin = $Environment['_source']
+    $schema5 = $origin -is [System.Collections.IDictionary] -and $origin['format'] -eq 'schema5'
+    $prep = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.node_preparation'
+    if ($prep -is [System.Collections.IDictionary] -and @($prep.Keys).Count) { "$(if ($schema5) { 'hardware.sbe' } else { 'ztp.node_preparation' }) ignored: SBE belongs to OS configuration." }
 }
 
 function Get-ZtpEnvironmentWarning {
@@ -335,9 +381,14 @@ function Get-ZtpSiteNetwork {
     The site's network setting for simplified provisioning (Microsoft.Edge/configurations/networkConfigurations), from
     the management mode.
     .DESCRIPTION
-    static: Manual, with ipv4 { addressRange { startIp, endIp }, defaultGateway, dnsServers, subnetMask, vLanId }. The
-    range is network_intents.management.site_ip_range, else the lowest to the highest node address. Each edge machine
-    still pins its own address on its management port (networkAdapters, by MAC); the site range is what the portal shows.
+    static with static_method device (the default): Automatic. The Device stage sets the static address on the port with
+    the management MAC before the claim, and the claim carries no Manual adapter: a Manual site makes Microsoft's OS
+    install put the static address on the first ready port and ignore the MAC (seen live on a Dell AX-760: a ConnectX
+    port), so with Automatic the only static is ZTP's. The Network stage checks it after the install.
+    static with static_method site: Manual, with ipv4 { addressRange { startIp, endIp }, defaultGateway, dnsServers,
+    subnetMask, vLanId }. The range is network_intents.management.site_ip_range, else the lowest to the highest node
+    address. Each edge machine also gets a Manual adapter keyed by MAC in the claim. For environments without the Device
+    stage; the Network stage moves the address to the right port after the install.
     dhcp: Automatic. preconfigured: Automatic too: ZTP doesn't manage the address, and the freshly installed OS takes DHCP
     until whatever preconfigures the port does so.
     .OUTPUTS
@@ -349,7 +400,7 @@ function Get-ZtpSiteNetwork {
     param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment)
     $nodeValue = Get-ZtpEnvValue -Environment $Environment -Path 'cluster_nodes'
     $static = @(@($nodeValue) | Where-Object { $_ -is [System.Collections.IDictionary] -and (Get-ZtpManagementAssignment -Environment $Environment -Node $_) -eq 'static' })
-    if ($static.Count -eq 0) {
+    if ($static.Count -eq 0 -or (Get-ZtpStaticMethod -Environment $Environment) -eq 'device') {
         return [pscustomobject]@{ IpAssignmentType = 'Automatic'; Ipv4 = [ordered]@{}; Range = '' }
     }
     $mgmt = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management'
@@ -368,6 +419,21 @@ function Get-ZtpSiteNetwork {
         vLanId         = $(if ($null -ne $vlan -and "$vlan" -ne '') { [int]$vlan } else { 0 })
     }
     return [pscustomobject]@{ IpAssignmentType = 'Manual'; Ipv4 = $ipv4; Range = "$start-$end" }
+}
+
+function Get-ZtpStaticMethod {
+    <#
+    .SYNOPSIS
+    Who sets a static management address: device (the default; the Device stage, by MAC, before the claim, with the site
+    Automatic and no Manual adapter in the claim) or site (Microsoft's OS install, from the site's Manual setting and the
+    claim's Manual adapter). network_intents.management.static_method.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment)
+    $method = [string](Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.static_method')
+    if ($method) { return $method.ToLowerInvariant() }
+    return 'device'
 }
 
 function Get-ZtpManagementAssignment {
@@ -391,12 +457,24 @@ function Get-ZtpEnvironmentBios {
     .SYNOPSIS
     A node's BIOS attributes from the environment file: hardware.bios with cluster_nodes[].bios merged over it (the node
     wins). An ordered dictionary of strings; empty when neither is set.
+    .PARAMETER Kind
+    final (default): hardware.bios and cluster_nodes[].bios, the machine's final state. provisioning:
+    hardware.bios_during_provisioning and cluster_nodes[].bios_during_provisioning, the temporary values for the install
+    only (the Boot stage applies them over the final ones; the Restore stage undoes them). boot: what the Boot stage
+    applies, final with provisioning merged over it.
     #>
     [CmdletBinding()]
     [OutputType([System.Collections.Specialized.OrderedDictionary])]
-    param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment, [Parameter(Mandatory)][System.Collections.IDictionary]$Node)
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Environment,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Node,
+        [ValidateSet('final', 'provisioning', 'boot')][string]$Kind = 'final'
+    )
+    $keys = @(if ($Kind -ne 'provisioning') { 'bios' }) + @(if ($Kind -ne 'final') { 'bios_during_provisioning' })
+    $sources = [System.Collections.Generic.List[object]]::new()
+    foreach ($k in $keys) { $sources.Add((Get-ZtpEnvValue -Environment $Environment -Path "hardware.$k")); $sources.Add((Get-ZtpEnvValue -Environment $Node -Path $k)) }
     $merged = [ordered]@{}
-    foreach ($source in (Get-ZtpEnvValue -Environment $Environment -Path 'hardware.bios'), (Get-ZtpEnvValue -Environment $Node -Path 'bios')) {
+    foreach ($source in $sources) {
         if ($source -is [System.Collections.IDictionary]) { foreach ($k in $source.Keys) { $merged[[string]$k] = [string]$source[$k] } }
     }
     return $merged
@@ -683,9 +761,11 @@ function ConvertFrom-ZtpInfrastructureV5 {
         # The maintenance environment's address (the Device stage): the ip_address of the node's port with role
         # provisioning that the file gives one (its DHCP reservation), when that port isn't the management port.
         $provisioning = @(@($n['network_adapters']) | Where-Object { $_ -is [System.Collections.IDictionary] -and 'provisioning' -in @($_['roles']) -and 'management' -notin @($_['roles']) -and $_['ip_address'] })
-        if ($provisioning.Count -ge 1) { & $put $node 'maintenance_address' ([string]$provisioning[0]['ip_address']) }
+        if ($n['maintenance_address']) { & $put $node 'maintenance_address' ([string]$n['maintenance_address']) }
+        elseif ($provisioning.Count -ge 1) { & $put $node 'maintenance_address' ([string]$provisioning[0]['ip_address']) }
         if ($n['rack_position']) { $node['rack_position'] = $n['rack_position'] }
         if ($n['bios'] -is [System.Collections.IDictionary]) { $node['bios'] = $n['bios'] }
+        if ($n['bios_during_provisioning'] -is [System.Collections.IDictionary]) { $node['bios_during_provisioning'] = $n['bios_during_provisioning'] }
         if ($n.Contains('network_adapters')) {
             $node['network_adapters'] = @(@($n['network_adapters']) | Where-Object { $_ -is [System.Collections.IDictionary] } | ForEach-Object {
                     $a = [ordered]@{ name = [string]$_['name']; roles = @($_['roles']); ip_assignment = [string]$_['ip_assignment'] }
@@ -697,7 +777,7 @@ function ConvertFrom-ZtpInfrastructureV5 {
     }
 
     $mgmt = [ordered]@{}
-    foreach ($k in 'subnet', 'gateway', 'dns_servers', 'site_ip_range', 'provisioning_network') { & $put $mgmt $k (& $v "networking.management.$k") }
+    foreach ($k in 'subnet', 'gateway', 'dns_servers', 'site_ip_range', 'provisioning_network', 'static_method', 'provisioning_dhcp_range') { & $put $mgmt $k (& $v "networking.management.$k") }
     $distinct = @($modes | Select-Object -Unique)
     $mgmt['ip_assignment'] = if ($distinct.Count -eq 1) { $distinct[0] } else { 'static' }
     $siteVlan = & $v 'networking.management.vlan_id'
@@ -710,6 +790,7 @@ function ConvertFrom-ZtpInfrastructureV5 {
     $env_['hardware'] = [ordered]@{}
     foreach ($k in 'vendor', 'model') { & $put $env_.hardware $k (& $v "hardware.$k") }
     if ((& $v 'hardware.bios') -is [System.Collections.IDictionary]) { $env_.hardware['bios'] = & $v 'hardware.bios' }
+    if ((& $v 'hardware.bios_during_provisioning') -is [System.Collections.IDictionary]) { $env_.hardware['bios_during_provisioning'] = & $v 'hardware.bios_during_provisioning' }
     $env_['credentials'] = [ordered]@{}
     & $put $env_.credentials 'local_admin_username' (& $v 'identity.local_admin.username')
     & $put $env_.credentials 'local_admin_password_secret' (& $v 'identity.local_admin.password')

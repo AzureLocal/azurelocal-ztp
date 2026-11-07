@@ -163,13 +163,17 @@ Describe 'Checking the environment file' {
         @{ Case = 'the deployment secret is not a Key Vault reference'; Edit = { param($e) $e.credentials.local_admin_password_secret = 'plaintext' }; Expect = 'must be keyvault://<vault>/<secret>' }
         @{ Case = 'the subscription is not a GUID'; Edit = { param($e) $e.ztp.subscription_id = 'sub' }; Expect = 'ztp.subscription_id must be a GUID' }
         @{ Case = 'the admin secret has no vault'; Edit = { param($e) $e.ztp.admin_secret.Remove('vault') }; Expect = 'ztp.admin_secret.vault is required' }
-        @{ Case = 'the SBE folder is not named'; Edit = { param($e) $e.ztp.Remove('node_preparation') }; Expect = 'ztp.node_preparation.sbe_bundle is required' }
         @{ Case = 'no share host is given'; Edit = { param($e) $e.ztp.Remove('share_host') }; Expect = 'ztp.share_host or ztp.share_host_adapter is required' }
         @{ Case = 'the BMC secret is missing'; Edit = { param($e) $e.ztp.Remove('bmc_secret') }; Expect = 'ztp.bmc_secret.vault is required' }
         @{ Case = 'the resource provider object ID is not a GUID'; Edit = { param($e) $e.ztp.azl_rp_object_id = 'x' }; Expect = 'ztp.azl_rp_object_id must be a GUID' }
         @{ Case = 'tags are a list'; Edit = { param($e) $e.ztp.tags = @('a') }; Expect = 'ztp.tags must be a mapping' }
         @{ Case = 'the location is missing'; Edit = { param($e) $e.Remove('azure_resources') }; Expect = 'azure_resources.location is required' }
-        @{ Case = 'the unvalidated-SBE switch is not true or false'; Edit = { param($e) $e.ztp.node_preparation.allow_unvalidated_sbe = 'yes' }; Expect = "allow_unvalidated_sbe must be true or false, not 'yes'" }
+        @{ Case = 'the static method is unknown'; Edit = { param($e) $e.network_intents.management['static_method'] = 'azure' }; Expect = "network_intents.management.static_method must be device or site, not 'azure'" }
+        @{ Case = 'the provisioning DHCP range starts after its end'; Edit = { param($e) $e.network_intents.management['provisioning_dhcp_range'] = [ordered]@{ start = '192.0.2.250'; end = '192.0.2.100' } }; Expect = 'network_intents.management.provisioning_dhcp_range starts at 192.0.2.250, after its end 192.0.2.100' }
+        @{ Case = 'the provisioning DHCP range is too big'; Edit = { param($e) $e.network_intents.management['provisioning_dhcp_range'] = [ordered]@{ start = '10.0.0.1'; end = '10.1.0.1' } }; Expect = 'has more than 4096 addresses' }
+        @{ Case = 'the provisioning DHCP range has no end'; Edit = { param($e) $e.network_intents.management['provisioning_dhcp_range'] = [ordered]@{ start = '192.0.2.100' } }; Expect = 'network_intents.management.provisioning_dhcp_range.end is required' }
+        @{ Case = 'a provisioning-only BIOS value is not a string'; Edit = { param($e) $e.hardware['bios_during_provisioning'] = [ordered]@{ Slot2 = $false } }; Expect = "hardware.bios_during_provisioning.Slot2 must be a string" }
+        @{ Case = 'a node''s provisioning-only BIOS is a list'; Edit = { param($e) $e.cluster_nodes[0]['bios_during_provisioning'] = @('Slot2') }; Expect = 'cluster_nodes[0] (node-01).bios_during_provisioning must be a mapping' }
         @{ Case = 'the management IP assignment is unknown'; Edit = { param($e) $e.network_intents.management.ip_assignment = 'auto' }; Expect = "ip_assignment must be static, dhcp or preconfigured, not 'auto'" }
         @{ Case = 'the management VLAN is out of range'; Edit = { param($e) $e.network_intents.management.vlan_id = 5000 }; Expect = "vlan_id must be 0-4094, not '5000'" }
         @{ Case = 'an Arc machine name has a space'; Edit = { param($e) $e.cluster_nodes[0].arc_machine_name = 'node 01' }; Expect = "arc_machine_name 'node 01' isn't a valid Arc machine name" }
@@ -179,7 +183,7 @@ Describe 'Checking the environment file' {
         @{ Case = 'the site range starts after its end'; Edit = { param($e) $e.network_intents.management['site_ip_range'] = [ordered]@{ start = '192.0.2.20'; end = '192.0.2.10' } }; Expect = 'network_intents.management.site_ip_range starts at 192.0.2.20, after its end 192.0.2.10' }
         @{ Case = 'the site range leaves the subnet'; Edit = { param($e) $e.network_intents.management['site_ip_range'] = [ordered]@{ start = '192.0.2.10'; end = '192.0.3.10' } }; Expect = "network_intents.management.site_ip_range 192.0.2.10-192.0.3.10 isn't inside network_intents.management.subnet 192.0.2.0/24" }
         @{ Case = 'the site range has no end'; Edit = { param($e) $e.network_intents.management['site_ip_range'] = [ordered]@{ start = '192.0.2.10' } }; Expect = 'network_intents.management.site_ip_range.end is required' }
-        @{ Case = 'a static node address is outside the site range'; Edit = { param($e) $e.network_intents.management['site_ip_range'] = [ordered]@{ start = '192.0.2.11'; end = '192.0.2.11' } }; Expect = 'cluster_nodes[1] (node-02).ip_address 192.0.2.12 is outside network_intents.management.site_ip_range 192.0.2.11-192.0.2.11' }
+        @{ Case = 'a static node address is outside the site range'; Edit = { param($e) $e.network_intents.management['static_method'] = 'site'; $e.network_intents.management['site_ip_range'] = [ordered]@{ start = '192.0.2.11'; end = '192.0.2.11' } }; Expect = 'cluster_nodes[1] (node-02).ip_address 192.0.2.12 is outside network_intents.management.site_ip_range 192.0.2.11-192.0.2.11' }
         @{ Case = 'a static node address is outside the subnet'; Edit = { param($e) $e.cluster_nodes[1].ip_address = '198.51.100.12' }; Expect = "cluster_nodes[1] (node-02).ip_address 198.51.100.12 isn't in network_intents.management.subnet 192.0.2.0/24" }
         @{ Case = 'the provisioning network is unknown'; Edit = { param($e) $e.network_intents.management['provisioning_network'] = 'wifi' }; Expect = "provisioning_network must be dhcp or static, not 'wifi'" }
         @{ Case = 'a BIOS value is not a string'; Edit = { param($e) $e.hardware['bios'] = [ordered]@{ Slot2 = $true } }; Expect = "hardware.bios.Slot2 must be a string; quote it ('True')" }
@@ -198,12 +202,43 @@ Describe 'Checking the environment file' {
         $e.ztp.Remove('tags'); $e.ztp.Remove('azl_rp_object_id'); $e.onprem.Remove('ntp_servers')
         @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
     }
-    It 'accepts allow_unvalidated_sbe as true or false, and leaves it optional' {
+    It 'accepts a file without the SBE for provisioning, ignores one that carries it with a one-line note, and still needs it for the standalone Prepare' {
         $e = Read-ZtpEnvironmentFile -Path $script:fixture
-        foreach ($v in $true, $false) {
-            $e.ztp.node_preparation.allow_unvalidated_sbe = $v
-            @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
+        $e.ztp.node_preparation['allow_unvalidated_sbe'] = 'not a boolean'
+        @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
+        @(Get-ZtpEnvironmentNote -Environment $e) | Should -Be @('ztp.node_preparation ignored: SBE belongs to OS configuration.')
+        $info = $null
+        Assert-ZtpEnvironment -Environment $e -InformationVariable info -InformationAction SilentlyContinue
+        @($info | ForEach-Object { [string]$_.MessageData }) | Should -Contain 'Note: ztp.node_preparation ignored: SBE belongs to OS configuration.'
+        $e.ztp.Remove('node_preparation')
+        @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
+        @(Get-ZtpEnvironmentNote -Environment $e).Count | Should -Be 0
+        (@(Test-ZtpEnvironment -Environment $e -For Prepare) -join "`n") | Should -BeLike '*ztp.node_preparation.sbe_bundle is required*'
+    }
+    It 'accepts static_method device or site and the provisioning DHCP range, and leaves both optional' {
+        $e = Read-ZtpEnvironmentFile -Path $script:fixture
+        Get-ZtpStaticMethod -Environment $e | Should -Be 'device'
+        foreach ($m in 'device', 'site', 'SITE') {
+            $e.network_intents.management['static_method'] = $m
+            Get-ZtpStaticMethod -Environment $e | Should -Be $m.ToLowerInvariant()
+            @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0 -Because "$m is valid"
         }
+        $e.network_intents.management['provisioning_dhcp_range'] = [ordered]@{ start = '192.0.2.100'; end = '192.0.2.250' }
+        @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
+    }
+    It 'merges the provisioning-only BIOS values over the final ones for Boot, and keeps them apart' {
+        $e = Read-ZtpEnvironmentFile -Path $script:fixture
+        $e.hardware['bios'] = [ordered]@{ Slot2 = 'Enabled'; EmbNic1Nic2 = 'Enabled' }
+        $e.hardware['bios_during_provisioning'] = [ordered]@{ Slot2 = 'Disabled' }
+        $e.cluster_nodes[1]['bios_during_provisioning'] = [ordered]@{ Slot3 = 'Disabled' }
+        @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
+        $n2 = $e.cluster_nodes[1]
+        $boot = Get-ZtpEnvironmentBios -Environment $e -Node $n2 -Kind boot
+        @($boot.Keys | ForEach-Object { "$_=$($boot[$_])" }) | Should -Be @('Slot2=Disabled', 'EmbNic1Nic2=Enabled', 'Slot3=Disabled')
+        $final = Get-ZtpEnvironmentBios -Environment $e -Node $n2
+        @($final.Keys | ForEach-Object { "$_=$($final[$_])" }) | Should -Be @('Slot2=Enabled', 'EmbNic1Nic2=Enabled')
+        $during = Get-ZtpEnvironmentBios -Environment $e -Node $n2 -Kind provisioning
+        @($during.Keys | ForEach-Object { "$_=$($during[$_])" }) | Should -Be @('Slot2=Disabled', 'Slot3=Disabled')
     }
     It 'checks only what Initialize-ZtpNode.ps1 reads for Prepare, so provisioning-only keys can be missing' {
         $e = Read-ZtpEnvironmentFile -Path $script:fixture
@@ -239,8 +274,16 @@ Describe 'Management address and Arc name settings' {
         $e.cluster_nodes[0].arc_machine_name = 'node-01'; $e.cluster_nodes[0].adapter_name = 'SLOT 3 Port 1'; $e.network_intents.management.vlan_id = 711
         @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
     }
-    It 'sets the site network to Manual for static addresses, over the nodes'' range by default' {
+    It 'sets the site network to Automatic for static addresses by default: the Device stage sets them, by MAC' {
         $e = Read-ZtpEnvironmentFile -Path $script:fixture
+        $site = Get-ZtpSiteNetwork -Environment $e
+        $site.IpAssignmentType | Should -Be 'Automatic'
+        @($site.Ipv4.Keys).Count | Should -Be 0
+        $site.Range | Should -Be ''
+    }
+    It 'sets the site network to Manual for static addresses with static_method site, over the nodes'' range by default' {
+        $e = Read-ZtpEnvironmentFile -Path $script:fixture
+        $e.network_intents.management['static_method'] = 'site'
         # Out of order in the file: the range still runs from the lowest to the highest.
         $e.cluster_nodes[0].ip_address = '192.0.2.40'; $e.network_intents.management['vlan_id'] = 711
         $site = Get-ZtpSiteNetwork -Environment $e
@@ -255,6 +298,7 @@ Describe 'Management address and Arc name settings' {
     }
     It 'uses site_ip_range when the file gives it, and VLAN 0 when it gives none' {
         $e = Read-ZtpEnvironmentFile -Path $script:fixture
+        $e.network_intents.management['static_method'] = 'site'
         $e.network_intents.management['site_ip_range'] = [ordered]@{ start = '192.0.2.10'; end = '192.0.2.19' }
         $site = Get-ZtpSiteNetwork -Environment $e
         $site.Range | Should -Be '192.0.2.10-192.0.2.19'
@@ -526,8 +570,7 @@ param($params)
         $cfg.ShareHost | Should -Be '192.0.2.10'
         $cfg.ShareName | Should -Be 'ztp-example'
         $cfg.Oem | Should -Be 'Contoso'
-        $cfg.SbeModel | Should -Be 'AX760'
-        $cfg.SbePackagePath | Should -Be (Join-Path $sbe 'SBE_Contoso_1.0.0.0.zip')
+        foreach ($k in 'SbeModel', 'SbeSolutionVersion', 'SbePackagePath') { $cfg.PSObject.Properties.Name | Should -Not -Contain $k -Because 'ZTP selects no SBE' }
         $cfg.ResourceGroupName | Should -Be 'rg-example'
         $cfg.StatePath | Should -Be (Join-Path $script:media 'ztp-state/node-01+node-02.ztp-provisioning.state.json')
         $cfg.VoucherDirectory | Should -Be (Join-Path $script:media 'vouchers')
@@ -547,22 +590,16 @@ param($params)
         $n1.management.ip_address | Should -Be '192.0.2.11'
         $n1.management.subnet_mask | Should -Be '255.255.255.0'
         $n1.management.vlan_id | Should -Be '0'
-        # The site's network setting follows the static mode: Manual over the nodes' range.
-        $bicep.parameters.ip_assignment_type.value | Should -Be 'Manual'
-        $bicep.parameters.ipv4.value.addressRange.startIp | Should -Be '192.0.2.11'
-        $bicep.parameters.ipv4.value.addressRange.endIp | Should -Be '192.0.2.12'
-        $bicep.parameters.ipv4.value.defaultGateway | Should -Be '192.0.2.1'
-        $bicep.parameters.ipv4.value.subnetMask | Should -Be '255.255.255.0'
-        @($bicep.parameters.ipv4.value.dnsServers) | Should -Be @('192.0.2.53', '192.0.2.54')
-        $bicep.parameters.ipv4.value.vLanId | Should -Be 0
+        # static_method device (the default): the Device stage sets the static by MAC; the site is Automatic and the claim
+        # carries no Manual adapter (the template sends one only for site).
+        $n1.management.static_method | Should -Be 'device'
+        $bicep.parameters.ip_assignment_type.value | Should -Be 'Automatic'
+        @($bicep.parameters.ipv4.value.PSObject.Properties).Count | Should -Be 0
 
-        $global:ztpE_runs.Script | Should -Be @('Invoke-ZtpProvisioning.ps1', 'Initialize-ZtpNode.ps1')
+        $global:ztpE_runs.Script | Should -Be @('Invoke-ZtpProvisioning.ps1') -Because 'ZTP ends after Handoff; Prepare is OS configuration'
         $global:ztpE_runs[0].Params['NodeName'] | Should -Be @('node-01', 'node-02')
         $global:ztpE_runs[0].Params.ContainsKey('Execute') | Should -BeFalse
-        $global:ztpE_runs[1].Params['DriverStagingPath'] | Should -Be (Join-Path $script:media 'sbe-drivers')
-        $global:ztpE_runs[1].Params['EventLogPath'] | Should -Be ([IO.Path]::GetFullPath((Join-Path $TestDrive 'data-env-plan/evidence/ztp-events.jsonl'))) -Because 'Prepare reports its gates to the event file Sonar follows, in the evidence folder'
-        $cfg.EventLogPath | Should -Be $global:ztpE_runs[1].Params['EventLogPath']
-        $global:ztpE_runs[1].Params.ContainsKey('Execute') | Should -BeFalse
+        $cfg.EventLogPath | Should -Be ([IO.Path]::GetFullPath((Join-Path $TestDrive 'data-env-plan/evidence/ztp-events.jsonl')))
         # Plan mode creates nothing in Azure and reads no secret.
         ($global:ztpE_calls -join "`n") | Should -Not -BeLike '*New-AzResourceGroup*'
         ($global:ztpE_calls -join "`n") | Should -Not -BeLike '*Get-AzKeyVaultSecret*'
@@ -663,9 +700,47 @@ param($params)
         { & $script:envScript -InfrastructureFile (Join-Path $TestDrive 'absent.yml') } | Should -Throw "*doesn't exist*"
     }
 
-    It 'fails when the SBE folder named in the file is wrong' {
+    It 'accepts a file whose SBE folder is missing, notes that it ignores it, and runs no Prepare' {
         $infra = New-TestEnvironment -Name 'env-no-sbe' -Sbe (Join-Path $TestDrive 'not-there')
-        { & $script:envScript -InfrastructureFile $infra -MediaPath $script:media } | Should -Throw "*SBE folder*doesn't exist*"
+        $text = Get-StepText (& $script:envScript -InfrastructureFile $infra -MediaPath $script:media *>&1)
+        $text | Should -BeLike '*Note: ztp.node_preparation ignored: SBE belongs to OS configuration.*'
+        $global:ztpE_runs.Script | Should -Be @('Invoke-ZtpProvisioning.ps1')
+    }
+
+    It 'writes Manual site settings and the claim''s static_method site only when the file asks for it' {
+        $infra = New-TestEnvironment -Name 'env-site-static' -Edit { param($e) $e.network_intents.management['static_method'] = 'site' }
+        $text = Get-StepText (& $script:envScript -InfrastructureFile $infra -MediaPath $script:media *>&1)
+        $text | Should -BeLike '*Site network: Manual 192.0.2.11-192.0.2.12*'
+        $text | Should -BeLike '*Static management addresses set by: the OS install, from the site''s Manual setting*'
+        $bicep = Get-Content -LiteralPath (Join-Path $script:envRoot 'scripts/simplified-provisioning/bicep/main.parameters.json') -Raw | ConvertFrom-Json
+        $bicep.parameters.ip_assignment_type.value | Should -Be 'Manual'
+        $bicep.parameters.ipv4.value.addressRange.startIp | Should -Be '192.0.2.11'
+        $bicep.parameters.nodes.value[0].management.static_method | Should -Be 'site'
+    }
+
+    It 'gives the Device stage the scan range for a node without a maintenance address' {
+        $infra = New-TestEnvironment -Name 'env-scan' -Edit { param($e) $e.network_intents.management['provisioning_dhcp_range'] = [ordered]@{ start = '192.0.2.100'; end = '192.0.2.250' }; $e.cluster_nodes[0]['maintenance_address'] = '192.0.2.111' }
+        $text = Get-StepText (& $script:envScript -InfrastructureFile $infra -MediaPath $script:media *>&1)
+        $nodes = Get-Content -LiteralPath (Join-Path $script:envRoot 'config/simplified-provisioning/nodes.json') -Raw | ConvertFrom-Json
+        $nodes.nodes[0].maintenance_address | Should -Be '192.0.2.111'
+        $nodes.nodes[0].PSObject.Properties.Name | Should -Not -Contain 'maintenance_scan_range'
+        $nodes.nodes[1].maintenance_scan_range | Should -Be '192.0.2.100-192.0.2.250'
+        $text | Should -BeLike '*no maintenance address for node-02; it scans 192.0.2.100-192.0.2.250 for TCP 20001 and finds each node by its management MAC*'
+    }
+
+    It 'writes the BIOS Boot applies (provisioning-only values over the final ones) and what Restore sets back' {
+        $infra = New-TestEnvironment -Name 'env-bios-restore' -Edit {
+            param($e)
+            $e.hardware['bios'] = [ordered]@{ Slot2 = 'Enabled'; EmbNic1Nic2 = 'Enabled' }
+            $e.hardware['bios_during_provisioning'] = [ordered]@{ Slot2 = 'Disabled'; Slot3 = 'Disabled' }
+        }
+        $text = Get-StepText (& $script:envScript -InfrastructureFile $infra -MediaPath $script:media *>&1)
+        $nodes = Get-Content -LiteralPath (Join-Path $script:envRoot 'config/simplified-provisioning/nodes.json') -Raw | ConvertFrom-Json
+        "$($nodes.nodes[0].bios.Slot2) $($nodes.nodes[0].bios.EmbNic1Nic2) $($nodes.nodes[0].bios.Slot3)" | Should -Be 'Disabled Enabled Disabled'
+        $nodes.nodes[0].bios_restore.Slot2 | Should -Be 'Enabled' -Because 'hardware.bios gives the final value'
+        $nodes.nodes[0].bios_restore.Slot3 | Should -Be '' -Because 'no final value: Restore uses the value saved before Boot'
+        $nodes.nodes[0].bios_restore.PSObject.Properties.Name | Should -Not -Contain 'EmbNic1Nic2'
+        $text | Should -BeLike '*BIOS set back by the Restore stage after Network: node-01 Slot2=Enabled, Slot3=<value before Boot>*'
     }
 
     It 'treats the external validator as optional and parameterized' {
@@ -706,20 +781,13 @@ param($params)
         $null = & $script:envScript -InfrastructureFile $infra -MediaPath $script:media -Node node-01 -Execute *>&1
         $global:ztpE_calls | Should -Contain 'New-AzResourceGroup rg-example'
         $global:ztpE_calls | Should -Contain 'Get-AzKeyVaultSecret kv-example/bmc-username'
-        $global:ztpE_runs.Script | Should -Be @('Invoke-ZtpProvisioning.ps1', 'Initialize-ZtpNode.ps1')
+        $global:ztpE_runs.Script | Should -Be @('Invoke-ZtpProvisioning.ps1')
         $run = $global:ztpE_runs[0].Params
         $run['Execute'] | Should -BeTrue
         $run['RebuildImages'] | Should -BeTrue
         $run['RetryProvisionOs'] | Should -BeTrue
         $run['NodeName'] | Should -Be @('node-01')
         $run['BmcCredential'].UserName | Should -Be 'bmc-example'
-        $global:ztpE_runs[1].Params['Execute'] | Should -BeTrue
-        $global:ztpE_runs[1].Params['Node'] | Should -Be @('node-01')
-
-        $global:ztpE_calls.Clear(); $global:ztpE_runs.Clear()
-        $null = & $script:envScript -InfrastructureFile $infra -MediaPath $script:media -From Prepare -Execute *>&1
-        $global:ztpE_runs.Script | Should -Be @('Initialize-ZtpNode.ps1')
-        $global:ztpE_calls | Should -Not -Contain 'New-AzResourceGroup rg-example'
 
         $global:ztpE_calls.Clear(); $global:ztpE_runs.Clear()
         $null = & $script:envScript -InfrastructureFile $infra -MediaPath $script:media -From Azure -Execute *>&1
@@ -738,7 +806,7 @@ param($params)
         $nodes = Get-Content -LiteralPath (Join-Path $script:envRoot 'config/simplified-provisioning/nodes.json') -Raw | ConvertFrom-Json
         $nodes.nodes[0].maintenance_address | Should -Be '192.0.2.111'
         $nodes.nodes[1].PSObject.Properties['maintenance_address'] | Should -BeNullOrEmpty
-        $text | Should -BeLike '*Device stage (static address in the maintenance environment) skips node-02*'
+        $text | Should -BeLike '*Device stage (static address in the maintenance environment): no maintenance address for node-02; it scans the management subnet 192.0.2.0/24*'
         $cfg = Get-Content -LiteralPath (Join-Path $script:envRoot 'config/simplified-provisioning/ztp-provisioning.json') -Raw | ConvertFrom-Json
         $cfg.DeviceTimeoutMinutes | Should -Be 30
         $bad = New-TestEnvironment -Name 'env-device-bad' -Edit { param($e) $e.ztp['maintenance_password_secret'] = 'Password1'; $e.cluster_nodes[0]['maintenance_address'] = 'console' }
@@ -789,18 +857,18 @@ Describe 'Schema 5 infrastructure.yml' {
         "$($z.bmc_secret.vault) $($z.bmc_secret.username_name) $($z.bmc_secret.password_name)" | Should -Be 'kv-example bmc-username bmc-password'
         $z.tags.purpose | Should -Be 'example'
         $z.media_path | Should -BeLike '*data-v5-map*media'
-        (Get-ZtpSiteNetwork -Environment $e).Range | Should -Be '192.0.2.11-192.0.2.12'
+        (Get-ZtpSiteNetwork -Environment $e).IpAssignmentType | Should -Be 'Automatic' -Because 'static_method device is the default'
     }
 
     It 'maps <Case>' -ForEach @(
         @{ Case = 'a DHCP reservation to ZTP''s dhcp, and the site network to Automatic'; Edit = { param($d) foreach ($n in $d.nodes) { $n.network_adapters[0].ip_assignment = 'dhcp_reservation' } }; Check = { param($e) $e.cluster_nodes[0].ip_assignment | Should -Be 'dhcp'; $e.network_intents.management.ip_assignment | Should -Be 'dhcp'; (Get-ZtpSiteNetwork -Environment $e).IpAssignmentType | Should -Be 'Automatic' } }
-        @{ Case = 'mixed modes per node, the site network Manual over the static node only'; Edit = { param($d) $d.nodes[1].network_adapters[0].ip_assignment = 'dhcp_reservation' }; Check = { param($e) $e.cluster_nodes[1].ip_assignment | Should -Be 'dhcp'; (Get-ZtpSiteNetwork -Environment $e).Range | Should -Be '192.0.2.11-192.0.2.11' } }
+        @{ Case = 'mixed modes per node, the site network Manual over the static node only'; Edit = { param($d) $d.networking.management['static_method'] = 'site'; $d.nodes[1].network_adapters[0].ip_assignment = 'dhcp_reservation' }; Check = { param($e) $e.cluster_nodes[1].ip_assignment | Should -Be 'dhcp'; (Get-ZtpSiteNetwork -Environment $e).Range | Should -Be '192.0.2.11-192.0.2.11' } }
         @{ Case = 'a tagged management port to its VLAN'; Edit = { param($d) $d.networking.management.Remove('vlan_id'); foreach ($n in $d.nodes) { $n.network_adapters[0].vlan_mode = 'tagged' } }; Check = { param($e) $e.network_intents.management.vlan_id | Should -Be 711 } }
         @{ Case = 'a 5.0 node with management only'; Edit = { param($d) foreach ($n in $d.nodes) { $mac = $n.network_adapters[0].mac_address; $ip = $n.network_adapters[0].ip_address; $n.Remove('network_adapters'); $n['management'] = [ordered]@{ ip_address = $ip; mac_address = $mac; adapter_name = 'Port1' } } }; Check = { param($e) $e.cluster_nodes[0].adapter_name | Should -Be 'Port1'; $e.cluster_nodes[0].Contains('network_adapters') | Should -BeFalse; $e.cluster_nodes[0].ip_assignment | Should -Be 'static' } }
         @{ Case = 'a BMC user name that is not a secret, and BIOS settings'; Edit = { param($d) $d.hardware.bmc.username = 'root'; $d.hardware['bios'] = [ordered]@{ Slot2 = 'Disabled' }; $d.nodes[1]['bios'] = [ordered]@{ Slot2 = 'Enabled' } }; Check = { param($e) $e.ztp.bmc_secret.username | Should -Be 'root'; $e.ztp.bmc_secret.Contains('username_name') | Should -BeFalse; (Get-ZtpEnvironmentBios -Environment $e -Node $e.cluster_nodes[1])['Slot2'] | Should -Be 'Enabled'; (Get-ZtpEnvironmentBios -Environment $e -Node $e.cluster_nodes[0])['Slot2'] | Should -Be 'Disabled' } }
         @{ Case = 'the BMC user name secret in its own vault'; Edit = { param($d) $d.key_vaults.Add([ordered]@{ name = 'kv-example-bmc'; subscription_id = '00000000-0000-0000-0000-000000000000'; resource_group = 'rg-example-vault' }); $d.hardware.bmc.username = 'keyvault://kv-example-bmc/bmc-user' }; Check = { param($e) $e.ztp.bmc_secret.username_vault | Should -Be 'kv-example-bmc'; $e.ztp.bmc_secret.username_name | Should -Be 'bmc-user'; @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0 } }
         @{ Case = 'the maintenance address from the provisioning port, and the edgeuser password secret'; Edit = { param($d) $d.nodes[0].network_adapters.Add([ordered]@{ name = 'Port 3'; mac_address = '02:00:00:00:00:33'; roles = @('provisioning'); ip_assignment = 'dhcp_reservation'; ip_address = '192.0.2.111' }); $d.provisioning.simplified['maintenance_password'] = 'keyvault://kv-example/edgeuser-password' }; Check = { param($e) $e.cluster_nodes[0].maintenance_address | Should -Be '192.0.2.111'; $e.cluster_nodes[1].Contains('maintenance_address') | Should -BeFalse; $e.ztp.maintenance_password_secret | Should -Be 'keyvault://kv-example/edgeuser-password'; @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0 } }
-        @{ Case = 'the site range, the run folders and a provisioning subscription'; Edit = { param($d) $d.networking.management['site_ip_range'] = [ordered]@{ start = '192.0.2.10'; end = '192.0.2.19' }; $d.provisioning.simplified['subscription_id'] = '00000000-0000-0000-0000-000000000002'; $d.provisioning.simplified['resource_group'] = 'rg-example-ztp' }; Check = { param($e) (Get-ZtpSiteNetwork -Environment $e).Range | Should -Be '192.0.2.10-192.0.2.19'; $e.ztp.subscription_id | Should -Be '00000000-0000-0000-0000-000000000002'; $e.ztp.resource_group | Should -Be 'rg-example-ztp' } }
+        @{ Case = 'the site range, the run folders and a provisioning subscription'; Edit = { param($d) $d.networking.management['static_method'] = 'site'; $d.networking.management['site_ip_range'] = [ordered]@{ start = '192.0.2.10'; end = '192.0.2.19' }; $d.provisioning.simplified['subscription_id'] = '00000000-0000-0000-0000-000000000002'; $d.provisioning.simplified['resource_group'] = 'rg-example-ztp' }; Check = { param($e) (Get-ZtpSiteNetwork -Environment $e).Range | Should -Be '192.0.2.10-192.0.2.19'; $e.ztp.subscription_id | Should -Be '00000000-0000-0000-0000-000000000002'; $e.ztp.resource_group | Should -Be 'rg-example-ztp' } }
     ) {
         $e = & $script:read (New-TestInfrastructureV5 -Name "v5-case-$([guid]::NewGuid().ToString('N'))" -Edit $Edit)
         & $Check $e
@@ -816,7 +884,9 @@ Describe 'Schema 5 infrastructure.yml' {
         @{ Case = 'an unlisted admin vault'; Edit = { param($d) $d.provisioning.simplified.admin.password = 'keyvault://kv-other/ztp-admin-password' }; Expect = "names vault 'kv-other', which isn't in key_vaults" }
         @{ Case = 'a node with its own BMC login'; Edit = { param($d) $d.nodes[1].bmc['username'] = 'other'; $d.nodes[1].bmc['password'] = 'keyvault://kv-example/other-bmc' }; Expect = 'nodes[1] (node-02).bmc has its own login; ZTP uses one BMC login' }
         @{ Case = 'secrets in another subscription'; Edit = { param($d) $d.key_vaults.Add([ordered]@{ name = 'kv-example-two'; subscription_id = '00000000-0000-0000-0000-000000000003'; resource_group = 'rg-x' }); $d.identity.local_admin.password = 'keyvault://kv-example-two/deploy-admin-password' }; Expect = 'identity.local_admin.password is in vault ''kv-example-two'', in another subscription' }
-        @{ Case = 'a missing SBE folder'; Edit = { param($d) $d.hardware.Remove('sbe') }; Expect = 'hardware.sbe.bundle_path is required' }
+        @{ Case = 'an unknown static method'; Edit = { param($d) $d.networking.management['static_method'] = 'azure' }; Expect = "networking.management.static_method must be device or site, not 'azure'" }
+        @{ Case = 'a provisioning DHCP range backwards'; Edit = { param($d) $d.networking.management['provisioning_dhcp_range'] = [ordered]@{ start = '192.0.2.250'; end = '192.0.2.100' } }; Expect = 'networking.management.provisioning_dhcp_range starts at 192.0.2.250' }
+        @{ Case = 'a node''s maintenance address that is no address'; Edit = { param($d) $d.nodes[0]['maintenance_address'] = 'console' }; Expect = "nodes[0] (node-01) provisioning port ip_address must be an IPv4 address, not 'console'" }
         @{ Case = 'a BIOS value that is not a string'; Edit = { param($d) $d.hardware['bios'] = [ordered]@{ Slot2 = 0 } }; Expect = 'hardware.bios.Slot2 must be a string' }
     ) {
         $text = & $script:assertText (New-TestInfrastructureV5 -Name "v5-bad-$([guid]::NewGuid().ToString('N'))" -Edit $Edit)
@@ -863,18 +933,53 @@ Export-ModuleMember -Function Test-AzlInfrastructure
         foreach ($stub in 'Invoke-ZtpProvisioning.ps1', 'Initialize-ZtpNode.ps1') { Set-Content -LiteralPath (Join-Path $bin $stub) -Value '[CmdletBinding(SupportsShouldProcess)] param($ConfigPath, $NodeName, $BmcCredential, $InfrastructureFile, $Node, $DriverStagingPath, $EventLogPath, $From, [switch]$ConfirmNotClustered, [switch]$SkipCertificateCheck, [switch]$RetryProvisionOs, [switch]$RebuildImages, [switch]$Execute)' }
         $infra = New-TestInfrastructureV5 -Name 'v5-invoke' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-v5-invoke')) -Edit { param($d) $d.hardware['bios'] = [ordered]@{ EmbNic1Nic2 = 'Enabled' } }
         $text = Get-StepText (& (Join-Path $bin 'Invoke-ZtpEnvironment.ps1') -InfrastructureFile $infra *>&1)
-        $text | Should -BeLike '*Site network: Manual 192.0.2.11-192.0.2.12*'
+        $text | Should -BeLike '*Site network: Automatic.*'
+        $text | Should -BeLike '*Note: hardware.sbe ignored: SBE belongs to OS configuration.*'
         $nodes = Get-Content -LiteralPath (Join-Path $root 'config/simplified-provisioning/nodes.json') -Raw | ConvertFrom-Json
         "$($nodes.nodes[1].name) $($nodes.nodes[1].service_tag) $($nodes.nodes[1].bmc_address) $($nodes.nodes[1].management_ip) $($nodes.nodes[1].bios.EmbNic1Nic2)" | Should -Be 'node-02 EXAMPLE2 198.51.100.12 192.0.2.12 Enabled'
         $bicep = Get-Content -LiteralPath (Join-Path $bin 'bicep/main.parameters.json') -Raw | ConvertFrom-Json
         $m = $bicep.parameters.nodes.value[0].management
         "$($m.ip_assignment) $($m.mac_address) $($m.adapter_name) $($m.ip_address) $($m.subnet_mask) $($m.vlan_id)" | Should -Be 'static 02:00:00:00:00:11 Embedded NIC 1 192.0.2.11 255.255.255.0 0'
-        $bicep.parameters.ip_assignment_type.value | Should -Be 'Manual'
+        $bicep.parameters.ip_assignment_type.value | Should -Be 'Automatic'
+        $bicep.parameters.nodes.value[0].management.static_method | Should -Be 'device'
         $bicep.parameters.key_vault_resource_group.value | Should -Be 'rg-example-vault'
         $bicep.parameters.admin_secret_name.value | Should -Be 'ztp-admin-password'
         $cfg = Get-Content -LiteralPath (Join-Path $root 'config/simplified-provisioning/ztp-provisioning.json') -Raw | ConvertFrom-Json
-        "$($cfg.Oem) $($cfg.SbeModel) $($cfg.ShareHost) $($cfg.ShareName) $($cfg.ResourceGroupName) $($cfg.Location)" | Should -Be 'Contoso AX760 192.0.2.10 ztp-example rg-example eastus'
+        "$($cfg.Oem) $($cfg.ShareHost) $($cfg.ShareName) $($cfg.ResourceGroupName) $($cfg.Location)" | Should -Be 'Contoso 192.0.2.10 ztp-example rg-example eastus'
+        $cfg.PSObject.Properties.Name | Should -Not -Contain 'SbeModel'
         $cfg.BootstrapCacheDirectory | Should -BeLike '*data-v5-invoke*media'
+    }
+
+    It 'maps every schema 5.3 key ZTP reads: static_method, provisioning_dhcp_range, bios_during_provisioning, maintenance_address and the maintenance password; accepts _metadata.scope and ignores hardware.sbe' {
+        $file = New-TestInfrastructureV5 -Name 'v5-53' -Edit {
+            param($d)
+            $d._metadata['schema_version'] = '5.3.0'; $d._metadata['scope'] = 'ztp'
+            $d.networking.management['static_method'] = 'site'
+            $d.networking.management['provisioning_dhcp_range'] = [ordered]@{ start = '192.0.2.100'; end = '192.0.2.250' }
+            $d.hardware['bios'] = [ordered]@{ Slot2 = 'Enabled'; EmbNic1Nic2 = 'Enabled' }
+            $d.hardware['bios_during_provisioning'] = [ordered]@{ Slot2 = 'Disabled' }
+            $d.nodes[1]['bios_during_provisioning'] = [ordered]@{ Slot3 = 'Disabled' }
+            $d.nodes[0]['maintenance_address'] = '192.0.2.120'
+            $d.provisioning.simplified['maintenance_password'] = 'keyvault://kv-example/edgeuser-password'
+        }
+        $e = & $script:read $file
+        @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0
+        & $script:assertText $file | Should -Be ''
+        $m = $e.network_intents.management
+        $m.static_method | Should -Be 'site'
+        "$($m.provisioning_dhcp_range.start)-$($m.provisioning_dhcp_range.end)" | Should -Be '192.0.2.100-192.0.2.250'
+        $e.hardware.bios_during_provisioning.Slot2 | Should -Be 'Disabled'
+        $e.cluster_nodes[1].bios_during_provisioning.Slot3 | Should -Be 'Disabled'
+        $e.cluster_nodes[0].maintenance_address | Should -Be '192.0.2.120'
+        $e.ztp.maintenance_password_secret | Should -Be 'keyvault://kv-example/edgeuser-password'
+        (Split-ZtpKeyVaultReference $e.ztp.maintenance_password_secret).Secret | Should -Be 'edgeuser-password'
+        (Get-ZtpSiteNetwork -Environment $e).IpAssignmentType | Should -Be 'Manual'
+        $boot = Get-ZtpEnvironmentBios -Environment $e -Node $e.cluster_nodes[1] -Kind boot
+        "$($boot.Slot2) $($boot.EmbNic1Nic2) $($boot.Slot3)" | Should -Be 'Disabled Enabled Disabled'
+        @(Get-ZtpEnvironmentNote -Environment $e) | Should -Be @('hardware.sbe ignored: SBE belongs to OS configuration.')
+        # Without hardware.sbe the file is just as valid.
+        $nosbe = New-TestInfrastructureV5 -Name 'v5-53-nosbe' -Edit { param($d) $d.hardware.Remove('sbe') }
+        & $script:assertText $nosbe | Should -Be ''
     }
 
     It 'runs Prepare from a schema 5 file: finds the management port by MAC, and keeps DHCP only where the file says so' {

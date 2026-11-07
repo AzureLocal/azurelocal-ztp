@@ -9,7 +9,8 @@ One run in one process, because the share credential lives only in memory.
      (in place, no copy), change rights for one generated account, TCP 445 only from the nodes' BMC addresses;
   2. For a node whose list entry has bios (attribute -> value), Set-ZtpBios.ps1 sets those BIOS attributes over Redfish
      first: it changes only those that differ, applies them with a power-on or restart and waits until the BIOS reports
-     them, logging each change to -BiosLogPath. A node whose BIOS already matches isn't restarted for it.
+     them, logging each change to -BiosLogPath. A node whose BIOS already matches isn't restarted for it. Each row's
+     BiosOriginal holds the values found before any change, which the Restore stage sets temporary values back to.
   3. Mount-ZtpVirtualUsb.ps1 inserts each node's image on its USB-stick slot read-write, proves the attach, sets a
      one-time boot to that slot and, with -Restart, power-cycles the node. Every node runs in its own worker, at once. Leave the media inserted:
      Wait-ZtpVoucher.ps1 waits for the voucher in the image, ejects it and extracts <serial>.pem.
@@ -128,6 +129,7 @@ $shareCredential = $share.Credential
 $booted = @($NodeName | ForEach-Object -ThrottleLimit ([Math]::Max(1, @($NodeName).Count)) -Parallel {
         $node = $_
         $bios = @()
+        $original = [ordered]@{}
         try {
             # The BIOS first: its reset must not consume the one-time boot to the virtual USB that the mount sets.
             $settings = ([hashtable]$using:biosByNode)[$node]
@@ -135,13 +137,13 @@ $booted = @($NodeName | ForEach-Object -ThrottleLimit ([Math]::Max(1, @($NodeNam
                 $b = ([hashtable]$using:biosArgs).Clone()
                 $target = @(([object[]]$using:targets) | Where-Object Node -EQ $node)[0]
                 $result = @(& $using:setBios @b -NodeName $node -BmcAddress $target.Address -Attributes $settings -Credential $using:Credential -Execute -Confirm:$false) | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties['Changes'] } | Select-Object -Last 1
-                if ($result) { $bios = @($result.Changes) }
+                if ($result) { $bios = @($result.Changes); if ($result.PSObject.Properties['Original']) { $original = $result.Original } }
             }
             $a = ([hashtable]$using:usbArgs).Clone()
             $out = @(& $using:mountUsb @a -NodeName $node -Credential $using:Credential -ShareCredential $using:shareCredential -Execute -Confirm:$false)
-            [pscustomobject]@{ Node = $node; Row = @($out | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties['Image'] })[-1]; Bios = $bios; Error = $null }
+            [pscustomobject]@{ Node = $node; Row = @($out | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties['Image'] })[-1]; Bios = $bios; BiosOriginal = $original; Error = $null }
         }
-        catch { [pscustomobject]@{ Node = $node; Row = $null; Bios = $bios; Error = $_.Exception.Message } }
+        catch { [pscustomobject]@{ Node = $node; Row = $null; Bios = $bios; BiosOriginal = $original; Error = $_.Exception.Message } }
     })
 $failed = @($booted | Where-Object Error)
 if ($failed.Count -gt 0) { throw "Boot failed on $(@($failed | ForEach-Object { "$($_.Node): $($_.Error)" }) -join ' | ')" }
@@ -149,5 +151,5 @@ foreach ($node in $NodeName) {
     $done = @($booted | Where-Object Node -EQ $node)[0]
     $row = $done.Row
     $hash = @($share.Images | Where-Object { $_.ImagePath -like "*/$(Get-ZtpNodeImageName -NodeName $node -Prefix $ImageNamePrefix)" })[0].Sha256
-    [pscustomobject]@{ Node = $node; Image = $row.Image; Sha256 = $hash; WriteProtected = $row.WriteProtected; Restarted = [bool]$Restart; Bios = @($done.Bios) }
+    [pscustomobject]@{ Node = $node; Image = $row.Image; Sha256 = $hash; WriteProtected = $row.WriteProtected; Restarted = [bool]$Restart; Bios = @($done.Bios); BiosOriginal = $done.BiosOriginal }
 }

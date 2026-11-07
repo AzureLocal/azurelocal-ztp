@@ -1,28 +1,42 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-Sets each node's static management address on the port with its management MAC, and its host name, in the maintenance
-environment, before the Azure claim. The Device stage, between Vouchers and Azure.
+Sets each node's static management address on the port with its management MAC in the maintenance environment, before
+the Azure claim. The Device stage, between Vouchers and Azure.
 .DESCRIPTION
 The maintenance environment runs the Configurator App's REST service (BootstrapOobeService, CoreWCF WebHttp, JSON,
 Basic auth) at https://<maintenance address>:20001/BootstrapOobeService/<Operation>. This script uses it the way the
 Configurator App does, so the address is on the right port before the OS install instead of on the first ready port.
+With static_method device (the default of Invoke-ZtpEnvironment.ps1) this is the only static the node gets: the site is
+Automatic and the claim carries no Manual adapter.
+Finding the maintenance environment: the node list's maintenance_address when it has one. Otherwise the script scans for
+it: every address of the node's maintenance_scan_range (start-end; Invoke-ZtpEnvironment.ps1 writes it from
+network_intents.management.provisioning_dhcp_range), else of the management subnet (the parameters file's ip_address and
+subnet_mask), is probed on TCP -Port in parallel; each one that answers is asked GET GetNetworkAdapters, and the node is
+the one whose adapters include its management MAC. The scan repeats every -PollIntervalSeconds until every node is found
+or -TimeoutMinutes passes (the node may still be booting); a plan scans once. Each node of the maintenance environment
+takes a DHCP lease on every port, so it answers on several addresses; one not on the management port is preferred.
+Verified live (Dell AX-760, 2026-11-07, maintenance environment on DHCP with no reservation): found by MAC in a .100-.250
+scan.
 Per node:
 1. GET GetNetworkAdapters (verified live: HTTP 200, { NetworkAdapters: [ { MacAddress, Name, EnableDhcp, IpAddress,
    Gateway, SubnetMask, DnsAddressArray, VlanId, ... } ] }, MACs as 12 lower-case hex digits) and finds the adapter with
    the management MAC of the parameters file (separators and case don't matter). No match stops the node, listing the
    MACs found.
 2. static: an adapter that already reports EnableDhcp false with the address, mask, gateway, DNS and VLAN is left
-   alone. Otherwise POST SetArcBootstrapDeviceConfiguration with { HostName, Network: { NetworkAdapters: [ { MacAddress,
-   EnableDhcp false, IpAddress, SubnetMask, Gateway, DnsAddressArray, VlanId } ] } }; another adapter that holds the
-   address statically gets an entry { MacAddress, EnableDhcp true } in the same request. The request body follows the
-   service's data contract; it isn't proven live yet.
-3. Polls GET GetArcBootstrapDeviceConfigurationStatus (response shape not verified live: a property named Status, State,
-   ConfigurationStatus or DeploymentStatus that reads Failed stops the node) and GET GetNetworkAdapters until the
-   management adapter reports the static configuration, or -TimeoutMinutes passes. When the management port is the one
-   the maintenance address is on, the service answers on the new address afterwards, so both are tried.
-dhcp, dhcp_reservation and preconfigured nodes are only reported. A node without a maintenance address in the node list
-(maintenance_address) is skipped: the Network stage after the OS install sets the address through Azure instead.
+   alone. Otherwise POST SetArcBootstrapDeviceConfiguration with { Network: { NetworkAdapters: [ { MacAddress (12
+   lower-case hex digits, as GetNetworkAdapters reports it), EnableDhcp false, IpAddress, SubnetMask, Gateway,
+   DnsAddressArray, VlanId 0 } ] } }. Verified live (2026-11-07): the response and the status report NetworkConfig
+   Succeeded, and GetNetworkAdapters then reads the static address back on the LOM. No HostName is sent (the claim sets
+   the host name; the verified request had none). Another adapter that holds the address statically gets an entry
+   { MacAddress, EnableDhcp true } in the same request; that entry isn't proven live.
+3. Polls GET GetArcBootstrapDeviceConfigurationStatus (verified live: { Response: { Name: Bootstrap, Status,
+   DetailedResponse: [ { Name: NetworkConfig | RemoteConfig | WebProxy | TimeServer | HostName, Status } ] }, Version };
+   a Status that reads Failed stops the node) and GET GetNetworkAdapters until the management adapter reports the static
+   configuration, or -TimeoutMinutes passes. When the management port is the one the maintenance address is on, the
+   service answers on the new address afterwards, so both are tried.
+dhcp, dhcp_reservation and preconfigured nodes are only reported, and only when the node list gives their maintenance
+address; they aren't scanned for.
 The service's certificate is self-signed by the maintenance environment and there is no CA to check it against, so this
 script, and only this script's calls, skip the certificate check. The password is the edgeuser password the image was
 built with (-EdgeUserPassword of the Media stage); without one, the maintenance environment's default Password1.
@@ -33,7 +47,8 @@ The parameters file of bicep/main.bicep (JSON, or a .bicepparam compiled with az
 management block (ip_assignment, mac_address, ip_address, subnet_mask, gateway, dns_servers, vlan_id).
 .PARAMETER NodesFile
 The node list (see config/simplified-provisioning/nodes.example.json): maintenance_address per node, the address the
-maintenance environment has on its provisioning port (the address its console shows; give it a DHCP reservation).
+maintenance environment has on its provisioning port (the address its console shows), or maintenance_scan_range
+(start-end) to scan when the address isn't known in advance. With neither, the management subnet is scanned.
 .PARAMETER Node
 Nodes to handle (default: every node in the parameters file).
 .PARAMETER EdgeUserPassword
@@ -41,9 +56,12 @@ The edgeuser password of the maintenance environment. Without it, Password1.
 .PARAMETER Port
 The REST service port.
 .PARAMETER TimeoutMinutes
-How long to wait for the configuration to show on the management adapter. 0 checks once.
+How long to scan for a maintenance environment without an address, and then to wait for the configuration to show on
+the management adapter. 0 checks once.
 .PARAMETER PollIntervalSeconds
-How often to read the status and the adapters while waiting.
+How often to scan again, and to read the status and the adapters while waiting.
+.PARAMETER ProbeTimeoutMilliseconds
+How long one TCP probe of the scan waits for a connection.
 .PARAMETER RequestTimeoutSeconds
 Timeout of one REST call.
 .PARAMETER EventLogPath
@@ -69,6 +87,7 @@ param(
     [ValidateRange(0, 1440)][int]$TimeoutMinutes = 30,
     [ValidateRange(0, 3600)][int]$PollIntervalSeconds = 15,
     [ValidateRange(5, 600)][int]$RequestTimeoutSeconds = 30,
+    [ValidateRange(50, 10000)][int]$ProbeTimeoutMilliseconds = 500,
     [string]$EventLogPath,
     [string]$ChangeLogPath,
     [switch]$Execute
@@ -162,9 +181,17 @@ function Test-OobeStatic([object]$Adapter, [string]$Ip, [string]$Mask, [string]$
     -not $Adapter.EnableDhcp -and $Adapter.Ip -eq $Ip -and $Adapter.Mask -eq $Mask -and $Adapter.Gateway -eq $Gateway -and (@($Adapter.Dns) -join ',') -eq (@($Dns) -join ',') -and $Adapter.Vlan -eq $Vlan
 }
 function Get-OobeStatus([object]$Response) {
-    # GetArcBootstrapDeviceConfigurationStatus: the response shape isn't verified live, so read any status-like property.
+    # GetArcBootstrapDeviceConfigurationStatus, verified live: { Response: { Name: Bootstrap, Status, DetailedResponse:
+    # [ { Name, Status } ] }, Version }. A flat status-like property is read too.
     if ($null -eq $Response) { return [pscustomobject]@{ Text = 'no status'; Failed = $false } }
     if ($Response -is [string]) { return [pscustomobject]@{ Text = $Response; Failed = ($Response -match 'Fail') } }
+    $inner = Get-ZtpPropertyValue $Response 'Response'
+    if ($null -ne $inner -and $inner -isnot [string]) {
+        $overall = [string](Get-ZtpPropertyValue $inner 'Status' '')
+        $steps = @(foreach ($s in @(Get-ZtpPropertyValue $inner 'DetailedResponse' @())) { if ($null -ne $s) { [pscustomobject]@{ Name = [string](Get-ZtpPropertyValue $s 'Name' ''); Status = [string](Get-ZtpPropertyValue $s 'Status' '') } } })
+        $text = "$(Get-ZtpPropertyValue $inner 'Name' 'Bootstrap') $(if ($overall) { $overall } else { 'no status' })$(if ($steps) { " ($(@($steps | ForEach-Object { "$($_.Name) $($_.Status)" }) -join ', '))" })"
+        return [pscustomobject]@{ Text = $text; Failed = ($overall -match 'Fail' -or [bool]@($steps | Where-Object { $_.Status -match 'Fail' }).Count) }
+    }
     $values = @(foreach ($k in 'Status', 'State', 'ConfigurationStatus', 'DeploymentStatus') { $v = Get-ZtpPropertyValue $Response $k; if ($null -ne $v -and "$v" -ne '') { "$k $v" } })
     $text = if ($values) { $values -join ', ' } else { ($Response | ConvertTo-Json -Compress -Depth 5) }
     if ($text.Length -gt 300) { $text = $text.Substring(0, 300) + '...' }
@@ -178,8 +205,101 @@ function Find-OobeManagementAdapter([string]$NodeName, [object[]]$Adapters, [str
     throw "${NodeName}: $($match.Count) network adapters in the maintenance environment report the management MAC $(Format-ZtpMac $MacKey): $found."
 }
 
+# ------------------------------------------------------------------ finding a maintenance environment by MAC
+function ConvertTo-IpNumber([string]$Address) {
+    $b = [ipaddress]::Parse($Address).GetAddressBytes()
+    return [uint64]$b[0] * 16777216 + [uint64]$b[1] * 65536 + [uint64]$b[2] * 256 + [uint64]$b[3]
+}
+function ConvertFrom-IpNumber([uint64]$Value) { (3, 2, 1, 0 | ForEach-Object { ($Value -shr (8 * $_)) -band 255 }) -join '.' }
+function Get-ScanAddress([string]$Range, [string]$Ip, [string]$Mask) {
+    # The addresses to probe: start-end, else every host of the management subnet. At most 4096.
+    if ($Range) {
+        if ($Range -notmatch '^\s*(\d{1,3}(\.\d{1,3}){3})\s*-\s*(\d{1,3}(\.\d{1,3}){3})\s*$') { throw "maintenance_scan_range '$Range' isn't start-end (for example 192.0.2.100-192.0.2.250)." }
+        $first = ConvertTo-IpNumber $Matches[1]; $last = ConvertTo-IpNumber $Matches[3]
+    }
+    else {
+        if (-not $Ip -or -not $Mask) { throw 'no maintenance_address, no maintenance_scan_range and no management ip_address and subnet_mask to scan the subnet of.' }
+        $m = ConvertTo-IpNumber $Mask
+        $network = (ConvertTo-IpNumber $Ip) -band $m
+        $broadcast = $network + (4294967295 - $m)
+        $first = $network + 1; $last = $broadcast - 1
+    }
+    if ($last -lt $first) { throw "the scan range $(ConvertFrom-IpNumber $first)-$(ConvertFrom-IpNumber $last) is empty." }
+    if ($last - $first -ge 4096) { throw "the scan range $(ConvertFrom-IpNumber $first)-$(ConvertFrom-IpNumber $last) has more than 4096 addresses; set network_intents.management.provisioning_dhcp_range to the DHCP pool." }
+    @(for ($v = $first; $v -le $last; $v++) { ConvertFrom-IpNumber $v })
+}
+if (-not (Get-Command Test-ZtpTcpPort -ErrorAction SilentlyContinue)) {
+    # The addresses that accept a TCP connection on the port within the timeout, probed in parallel (tests supply their own).
+    function Test-ZtpTcpPort([string[]]$Address, [int]$Port, [int]$TimeoutMilliseconds) {
+        $probes = foreach ($a in $Address) { $c = [System.Net.Sockets.TcpClient]::new(); [pscustomobject]@{ Address = $a; Client = $c; Task = $c.ConnectAsync($a, $Port) } }
+        try {
+            $deadline = [datetime]::UtcNow.AddMilliseconds($TimeoutMilliseconds)
+            foreach ($p in @($probes)) { $left = [int][Math]::Max(0, ($deadline - [datetime]::UtcNow).TotalMilliseconds); try { $null = $p.Task.Wait($left) } catch { Write-Verbose "$($p.Address):${Port} refused or unreachable." } }
+            @($probes | Where-Object { $_.Task.Status -eq 'RanToCompletion' -and $_.Client.Connected } | ForEach-Object Address)
+        }
+        finally { foreach ($p in @($probes)) { $p.Client.Dispose() } }
+    }
+}
+function Find-OobeNode([object[]]$Wanted) {
+    # One scan: each wanted { Name; MacKey; Candidates } found gets Address set. Returns how many answered on the port.
+    $all = @($Wanted | ForEach-Object { $_.Candidates } | Select-Object -Unique)
+    $open = @(Test-ZtpTcpPort -Address $all -Port $Port -TimeoutMilliseconds $ProbeTimeoutMilliseconds)
+    foreach ($address in $open) {
+        $adapters = try { @(ConvertTo-OobeAdapter (Invoke-OobeCall $address 'GetNetworkAdapters')) } catch { Write-ZtpLog "${address}:$Port answers but GetNetworkAdapters failed: $($_.Exception.Message)" -Level Verbose; continue }
+        foreach ($w in @($Wanted | Where-Object { $address -in $_.Candidates })) {
+            $nic = @($adapters | Where-Object { $_.Mac -eq $w.MacKey }) | Select-Object -First 1
+            if (-not $nic) { continue }
+            # Every port of the maintenance environment takes a lease; prefer one that isn't the management port, which
+            # changes address when the static one is applied.
+            if (-not $w.Address -or ($w.Address -eq $w.ManagementLease -and $address -ne $nic.Ip)) { $w.Address = $address; $w.ManagementLease = $nic.Ip }
+        }
+    }
+    return $open.Count
+}
+
 # ------------------------------------------------------------------ per node
 $failed = [System.Collections.Generic.List[string]]::new()
+# Static nodes the node list gives no maintenance address for: scan for them by MAC, all at once, until found or the deadline.
+$found = @{}
+$scanProblem = @{}
+$wanted = @(foreach ($n in $selected) {
+        $name = [string]$n['name']
+        $mgmt = Get-ZtpPropertyValue $n 'management'
+        if ($null -eq $mgmt) { continue }
+        $mode = ([string](Get-ZtpPropertyValue $mgmt 'ip_assignment' 'static')).ToLowerInvariant()
+        if ($mode -and $mode -ne 'static') { continue }
+        $entry = @($listed | Where-Object { $_ -is [System.Collections.IDictionary] -and [string]$_['name'] -eq $name }) | Select-Object -First 1
+        if ($entry -and [string](Get-ZtpPropertyValue $entry 'maintenance_address' '')) { continue }
+        try {
+            $macKey = ConvertTo-ZtpMacKey ([string](Get-ZtpPropertyValue $mgmt 'mac_address' ''))
+            if (-not $macKey) { throw 'the parameters file''s management block has no mac_address.' }
+            $range = if ($entry) { [string](Get-ZtpPropertyValue $entry 'maintenance_scan_range' '') } else { '' }
+            $candidates = @(Get-ScanAddress $range ([string](Get-ZtpPropertyValue $mgmt 'ip_address' '')) ([string](Get-ZtpPropertyValue $mgmt 'subnet_mask' '')))
+            [pscustomobject]@{ Name = $name; MacKey = $macKey; Candidates = $candidates; Address = ''; ManagementLease = ''; Range = "$($candidates[0])-$($candidates[-1])" }
+        }
+        catch { $scanProblem[$name] = "${name}: $($_.Exception.Message)" }
+    })
+if ($wanted.Count) {
+    $deadline = [datetime]::UtcNow.AddMinutes($(if ($Execute) { $TimeoutMinutes } else { 0 }))
+    $sweeps = 0
+    while ($true) {
+        $answered = Find-OobeNode $wanted
+        $sweeps++
+        $missing = @($wanted | Where-Object { -not $_.Address })
+        foreach ($w in @($wanted | Where-Object { $_.Address -and -not $found.ContainsKey($_.Name) })) {
+            $found[$w.Name] = $w.Address
+            $text = "maintenance environment found by its management MAC $(Format-ZtpMac $w.MacKey) at $($w.Address) (scan of $($w.Range))"
+            Write-ZtpLog "$($w.Name): $text."
+            Send-DeviceEvent $w.Name 'MaintenanceEnvironmentFound' $text
+        }
+        if ($missing.Count -eq 0 -or [datetime]::UtcNow -ge $deadline) { break }
+        Write-ZtpLog "Scan $sweeps for $(@($missing | ForEach-Object Name) -join ', '): $answered address(es) answer on TCP $Port, none with their management MAC yet; scanning again in $PollIntervalSeconds s." -Level Verbose
+        Start-Sleep -Seconds $PollIntervalSeconds
+    }
+    foreach ($w in @($wanted | Where-Object { -not $_.Address })) {
+        $scanProblem[$w.Name] = "$($w.Name): no maintenance environment with the management MAC $(Format-ZtpMac $w.MacKey) answers on TCP $Port in $($w.Range)$(if ($Execute) { " within $TimeoutMinutes minutes ($sweeps scan(s))" } else { ' now' }). Check that the node booted the maintenance environment, that this host reaches that network on TCP $Port, and the MAC; or set maintenance_address (or network_intents.management.provisioning_dhcp_range)."
+    }
+}
 foreach ($n in $selected) {
     $name = [string]$n['name']
     $mgmt = Get-ZtpPropertyValue $n 'management'
@@ -198,12 +318,19 @@ foreach ($n in $selected) {
         $macKey = ConvertTo-ZtpMacKey ([string](Get-ZtpPropertyValue $mgmt 'mac_address' ''))
         $row.MacAddress = Format-ZtpMac $macKey
         $ip = [string](Get-ZtpPropertyValue $mgmt 'ip_address' '')
-        if (-not $maintenance) {
-            $why = "${name}: no maintenance_address in the node list, so the maintenance environment can't be reached; the Network stage sets the address after the OS install."
-            Write-ZtpLog $why -Level Warning
+        if (-not $maintenance -and $mode -ne 'static') {
+            $why = "${name}: $mode, and no maintenance_address in the node list; nothing to report in the maintenance environment."
+            Write-ZtpLog $why
             if (-not $Execute) { "PLAN: $why" }
-            Send-DeviceEvent $name 'DeviceConfigurationSkipped' $why 'Warning'
             $row.Status = 'Skipped'; [pscustomobject]$row; continue
+        }
+        if (-not $maintenance) {
+            if ($found.ContainsKey($name)) { $maintenance = $found[$name]; $row.MaintenanceAddress = $maintenance }
+            elseif (-not $Execute) {
+                "PLAN: $($scanProblem[$name]) With -Execute the Device stage scans for up to $TimeoutMinutes minutes."
+                $row.Status = 'Planned'; [pscustomobject]$row; continue
+            }
+            else { throw $scanProblem[$name] }
         }
         if (-not $macKey) { throw "${name}: the parameters file's management block has no mac_address." }
 
@@ -235,13 +362,14 @@ foreach ($n in $selected) {
         $adapters = [System.Collections.Generic.List[object]]::new()
         $adapters.Add([ordered]@{ MacAddress = $nic.RawMac; EnableDhcp = $false; IpAddress = $ip; SubnetMask = $mask; Gateway = $gateway; DnsAddressArray = @($dns); VlanId = $(if ($nic.VlanIsText) { [string]$vlan } else { $vlan }) })
         foreach ($h in $holders) { $adapters.Add([ordered]@{ MacAddress = $h.RawMac; EnableDhcp = $true }) }
-        $request = [ordered]@{ HostName = $name; Network = [ordered]@{ NetworkAdapters = @($adapters) } }
+        # The request shape verified live (2026-11-07): Network.NetworkAdapters only; the claim sets the host name.
+        $request = [ordered]@{ Network = [ordered]@{ NetworkAdapters = @($adapters) } }
 
         if (-not $Execute) {
             if ($already -and $holders.Count -eq 0) { "PLAN: ${name}: $($nic.Name) ($(Format-ZtpMac $macKey)) already reports $wanted in the maintenance environment; no change." }
             else {
                 foreach ($h in $holders) { "PLAN: ${name}: $($h.Name) ($(Format-ZtpMac $h.Mac)) holds $ip; the same request puts it on DHCP." }
-                "PLAN: ${name}: POST SetArcBootstrapDeviceConfiguration to ${maintenance}: host name $name, $($nic.Name) ($(Format-ZtpMac $macKey)) $wanted (reports $(Format-OobeAdapter $nic) now); then wait up to $TimeoutMinutes minutes for the adapter to report it."
+                "PLAN: ${name}: POST SetArcBootstrapDeviceConfiguration to ${maintenance}: $($nic.Name) ($(Format-ZtpMac $macKey)) $wanted (reports $(Format-OobeAdapter $nic) now); then wait up to $TimeoutMinutes minutes for the adapter to report it."
             }
             $row.Status = if ($already -and $holders.Count -eq 0) { 'AlreadySet' } else { 'Planned' }
             [pscustomobject]$row; continue
@@ -251,12 +379,12 @@ foreach ($n in $selected) {
             Send-DeviceEvent $name 'DeviceAddressAlreadySet' "$($nic.Name) ($(Format-ZtpMac $macKey)) already reports $wanted"
             $row.Status = 'AlreadySet'; $row.Address = $ip; [pscustomobject]$row; continue
         }
-        if (-not $PSCmdlet.ShouldProcess("maintenance environment of $name ($maintenance)", "Set $wanted on $($nic.Name) and host name $name")) { continue }
+        if (-not $PSCmdlet.ShouldProcess("maintenance environment of $name ($maintenance)", "Set $wanted on $($nic.Name)")) { continue }
 
         $null = Invoke-OobeCall $maintenance 'SetArcBootstrapDeviceConfiguration' 'POST' $request
-        Write-ZtpLog "${name}: SetArcBootstrapDeviceConfiguration sent: host name $name, $($nic.Name) $wanted$(if ($holders) { "; DHCP on $(@($holders | ForEach-Object Name) -join ', ')" })."
+        Write-ZtpLog "${name}: SetArcBootstrapDeviceConfiguration sent: $($nic.Name) $wanted$(if ($holders) { "; DHCP on $(@($holders | ForEach-Object Name) -join ', ')" })."
         Write-DeviceChange $name $maintenance $nic $request 'requested' ''
-        Send-DeviceEvent $name 'DeviceConfigurationSubmitted' "$($nic.Name) ($(Format-ZtpMac $macKey)) $wanted, host name $name"
+        Send-DeviceEvent $name 'DeviceConfigurationSubmitted' "$($nic.Name) ($(Format-ZtpMac $macKey)) $wanted"
 
         # When the management port carries the maintenance address, the service comes back on the static one.
         $addresses = @($maintenance) + @(if ($ip -ne $maintenance) { $ip })
@@ -289,7 +417,7 @@ foreach ($n in $selected) {
         }
         Write-DeviceChange $name $maintenance $nic $request 'applied' $status.Text
         Write-ZtpLog "${name}: $($nic.Name) reports $wanted in the maintenance environment."
-        Send-DeviceEvent $name 'DeviceAddressSet' "$($nic.Name) ($(Format-ZtpMac $macKey)) $wanted, host name $name$(if ($holders) { "; DHCP on $(@($holders | ForEach-Object Name) -join ', ')" })"
+        Send-DeviceEvent $name 'DeviceAddressSet' "$($nic.Name) ($(Format-ZtpMac $macKey)) $wanted$(if ($holders) { "; DHCP on $(@($holders | ForEach-Object Name) -join ', ')" })"
         $row.Status = 'Changed'; $row.Address = $ip; $row.Released = @($holders | ForEach-Object Name)
         [pscustomobject]$row
     }

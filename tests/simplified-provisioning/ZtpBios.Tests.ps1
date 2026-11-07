@@ -115,8 +115,11 @@ Describe 'Set-ZtpBios.ps1' {
         $reset[0].Body.ResetType | Should -Be 'ForceRestart'
         $global:biosT_current['Slot2'] | Should -Be 'Disabled'
         $lines = @(Get-Content -LiteralPath $log | ForEach-Object { $_ | ConvertFrom-Json })
-        $lines.phase | Should -Be @('requested', 'applied')
-        $lines[0].attribute | Should -Be 'Slot2'; $lines[0].before | Should -Be 'Enabled'; $lines[0].after | Should -Be 'Disabled'; $lines[0].node | Should -Be 'node-01'
+        $lines.phase | Should -Be @('original', 'requested', 'applied') -Because 'the value found is logged before the first change, for the Restore stage'
+        $lines[0].attribute | Should -Be 'Slot2'; $lines[0].before | Should -Be 'Enabled'; $lines[0].after | Should -Be 'Enabled'; $lines[0].node | Should -Be 'node-01'
+        $lines[1].attribute | Should -Be 'Slot2'; $lines[1].before | Should -Be 'Enabled'; $lines[1].after | Should -Be 'Disabled'
+        $row.Original['Slot2'] | Should -Be 'Enabled' -Because 'the value found goes to the run state for the Restore stage'
+        $row.Original['EmbNic1Nic2'] | Should -Be 'Enabled' -Because 'every requested attribute is recorded, changed or not'
     }
     It 'powers a node that is off on to apply the settings' {
         Reset-TestBmc -Current @{ Slot2 = 'Enabled'; EmbNic1Nic2 = 'Enabled' } -Power 'Off'
