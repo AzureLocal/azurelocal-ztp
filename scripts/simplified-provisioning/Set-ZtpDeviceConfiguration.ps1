@@ -66,6 +66,8 @@ Nodes to handle (default: every node in the parameters file).
 The edgeuser password of the maintenance environment. Without it, Password1.
 .PARAMETER Port
 The REST service port.
+.PARAMETER UserName
+The maintenance environment's local user (default edgeuser, as Microsoft documents). Its password is -EdgeUserPassword.
 .PARAMETER TimeoutMinutes
 How long to scan for a maintenance environment without an address, and then to wait for the configuration to show on
 the management adapter. 0 checks once.
@@ -95,6 +97,7 @@ param(
     [string[]]$Node,
     [securestring]$EdgeUserPassword,
     [ValidateRange(1, 65535)][int]$Port = 20001,
+    [ValidateNotNullOrEmpty()][string]$UserName = 'edgeuser',
     [ValidateRange(0, 1440)][int]$TimeoutMinutes = 30,
     [ValidateRange(0, 3600)][int]$PollIntervalSeconds = 15,
     [ValidateRange(5, 600)][int]$RequestTimeoutSeconds = 30,
@@ -125,7 +128,7 @@ if ($Node) {
 }
 $selected = @($nodeEntries | Where-Object { -not $Node -or [string]$_['name'] -in $Node })
 $password = if ($EdgeUserPassword) { $EdgeUserPassword } else { ConvertTo-SecureString 'Password1' -AsPlainText -Force }
-$credential = [pscredential]::new('edgeuser', $password)
+$credential = [pscredential]::new($UserName, $password)
 if (-not $EdgeUserPassword) { Write-ZtpLog 'No -EdgeUserPassword: signing in to the maintenance environment as edgeuser with its default password.' -Level Verbose }
 
 # ------------------------------------------------------------------ evidence

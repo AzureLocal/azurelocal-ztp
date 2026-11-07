@@ -22,6 +22,9 @@ The node, for messages and the change log.
 Its BMC.
 .PARAMETER Attributes
 Attribute name -> value (strings), for example @{ Slot2 = 'Disabled'; EmbNic1Nic2 = 'Enabled' }.
+.PARAMETER Reason
+Attribute name -> why ZTP chose it, for the attributes it derived from the inventory (a slot label and the vendor). Only used
+in the message when the BIOS has no such attribute.
 .PARAMETER Credential
 BMC account (required with -Execute).
 .PARAMETER ChangeLogPath
@@ -46,6 +49,7 @@ param(
     [Parameter(Mandatory)][string]$NodeName,
     [Parameter(Mandatory)][string]$BmcAddress,
     [Parameter(Mandatory)][System.Collections.IDictionary]$Attributes,
+    [System.Collections.IDictionary]$Reason,
     [pscredential]$Credential,
     [string]$ChangeLogPath,
     [ValidateRange(0, 240)][int]$TimeoutMinutes = 30,
@@ -92,7 +96,7 @@ try {
     $system = Get-ZtpRedfishSystem -Session $session
     $biosPath = if ($system.PSObject.Properties['Bios'] -and $system.Bios.PSObject.Properties['@odata.id']) { [string]$system.Bios.'@odata.id' } else { "$($system.'@odata.id')/Bios" }
     $bios = Invoke-ZtpRedfish -Session $session -Path $biosPath
-    $changes = @(Get-ZtpBiosChange -Current $bios.Attributes -Desired $want)
+    $changes = @(Get-ZtpBiosChange -Current $bios.Attributes -Desired $want -Reason $Reason)
     foreach ($k in $want.Keys) { $v = $bios.Attributes.$k; $original[$k] = $(if ($v -is [bool]) { $v.ToString().ToLowerInvariant() } else { [string]$v }) }
     if ($changes.Count -eq 0) {
         Write-Information -MessageData "$NodeName BIOS: already $text." -InformationAction Continue

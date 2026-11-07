@@ -87,6 +87,8 @@ elseif ($ValidatorPath) { throw "Validator $ValidatorPath doesn't exist." }
 else { Write-Verbose "No validator at $validator; only the built-in key check ran." }
 
 $ztp = $env_.ztp
+# Every choice below is a key of the file (schema provisioning.simplified.*, hardware.bmc.*); the default is what ZTP always did.
+$setting = { param([string]$Path, $Default) Get-ZtpSetting -Environment $env_ -Path $Path -Default $Default }
 $tenant = [string]$env_.azure_identity.azure_tenant_id
 $clusterSub = [string]$ztp.subscription_id
 $vaultSub = [string]$ztp.admin_secret.subscription_id
@@ -148,6 +150,10 @@ $scanText = if ($scanRange -is [System.Collections.IDictionary] -and $scanRange[
             # bios: what the Boot stage applies (the final state with the temporary values merged over it).
             $bios = Get-ZtpEnvironmentBios -Environment $env_ -Node $_ -Kind boot
             if ($bios.Count) { $entry.bios = $bios }
+            # bios_reason: why ZTP chose an attribute it derived, for the message when the BMC's BIOS has no such attribute.
+            $reasons = (Get-ZtpDerivedBios -Environment $env_ -Node $_).Reasons
+            $used = [ordered]@{}; foreach ($k in $reasons.Keys) { if ($bios.Contains($k)) { $used[$k] = $reasons[$k] } }
+            if ($used.Count) { $entry.bios_reason = $used }
             # bios_restore: what the Restore stage sets back after Network, for every temporary key: the final value, or
             # '' for the value the BIOS had before Boot changed it (saved in the run state).
             $final = Get-ZtpEnvironmentBios -Environment $env_ -Node $_
@@ -171,6 +177,8 @@ $restorePlan = @(foreach ($n in $nodeList) {
         if ($d.Count) { "$($n.name) $(@($d.Keys | ForEach-Object { "$_=$(if ($f.Contains($_)) { $f[$_] } else { '<value before Boot>' })" }) -join ', ')" }
     })
 if ($restorePlan) { Write-Output "BIOS set back by the Restore stage after Network: $($restorePlan -join '; ')." }
+# What ZTP derived from the inventory (SAN adapters, embedded NICs), with the reason for each. Explicit keys won over it above.
+foreach ($line in @(Get-ZtpDerivedBiosPlan -Environment $env_ -Node $Node)) { Write-Output $line }
 $withoutMaintenance = @($nodeList | Where-Object { $_.name -in $Node -and -not (Get-ZtpEnvValue -Environment $_ -Path 'maintenance_address') } | ForEach-Object { [string]$_.name })
 if ($withoutMaintenance) { Write-Output "Device stage (static address in the maintenance environment): no maintenance address for $($withoutMaintenance -join ', '); it scans $(if ($scanText) { $scanText } else { "the management subnet $([string]$env_.network_intents.management.subnet)" }) for TCP 20001 and finds each node by its management MAC." }
 $staticMethod = Get-ZtpStaticMethod -Environment $env_
@@ -237,22 +245,23 @@ $bicepParameters = [ordered]@{
         key_vault_subscription_id = @{ value = $vaultSub }
         site_name                 = @{ value = [string]$ztp.site_name }
         site_display_name         = @{ value = [string]$env_.site.name }
-        configuration_name        = @{ value = 'default' }
+        configuration_name        = @{ value = [string](& $setting 'ztp.configuration_name' 'default') }
         admin_username            = @{ value = [string]$ztp.admin_secret.username }
         admin_secret_name         = @{ value = [string]$ztp.admin_secret.name }
         time_zone                 = @{ value = [string]$ztp.time_zone }
         nodes                     = @{ value = $bicepNodes }
-        apply_site_settings       = @{ value = $true }
-        use_key_vault_configuration = @{ value = $true }
-        assign_provisioning_roles = @{ value = $true }
-        assign_hci_rp_role        = @{ value = $true }
-        managed_resource_group_name = @{ value = '' }
-        network_kind              = @{ value = 'LAN' }
+        apply_site_settings       = @{ value = [bool](& $setting 'ztp.apply_site_settings' $true) }
+        use_key_vault_configuration = @{ value = [bool](& $setting 'ztp.use_key_vault_configuration' $true) }
+        assign_provisioning_roles = @{ value = [bool](& $setting 'ztp.assign_provisioning_roles' $true) }
+        assign_hci_rp_role        = @{ value = [bool](& $setting 'ztp.assign_hci_rp_role' $true) }
+        managed_resource_group_name = @{ value = [string](& $setting 'ztp.managed_resource_group_name' '') }
+        network_kind              = @{ value = [string](& $setting 'ztp.network_kind' 'LAN') }
         ip_assignment_type        = @{ value = $siteNetwork.IpAssignmentType }
         ipv4                      = @{ value = $siteNetwork.Ipv4 }
-        ntp_configuration_choice  = @{ value = 'Automatic' }
-        ntp_server                = @{ value = '' }
-        alternate_ntp_server      = @{ value = '' }
+        ntp_configuration_choice  = @{ value = [string](& $setting 'ztp.ntp.configuration' 'Automatic') }
+        ntp_server                = @{ value = [string](& $setting 'ztp.ntp.server' '') }
+        alternate_ntp_server      = @{ value = [string](& $setting 'ztp.ntp.alternate_server' '') }
+        # Public is the only connectivity ZTP provisions with: the site setting carries no proxy details (see docs/variables-audit.md).
         connectivity_type         = @{ value = 'Public' }
     }
 }
@@ -261,36 +270,48 @@ $bicepParameters | ConvertTo-Json -Depth 10 | Set-Content $parameters
 [ordered]@{
     BootstrapCacheDirectory        = (Resolve-Path $media).Path
     BootstrapVersion               = [string]$ztp.provisioning_iso
-    IncludePreview                 = $false
+    IncludePreview                 = [bool](& $setting 'ztp.include_preview' $false)
     Oem                            = [string]$env_.hardware.vendor
     NodesFile                      = $nodesFile
     ImageDirectory                 = Join-Path (Resolve-Path $media).Path 'ztp-virtual-usb'
-    ImageNamePrefix                = 'ztp-usb-'
+    ImageNamePrefix                = [string](& $setting 'ztp.usb_image.name_prefix' 'ztp-usb-')
+    ImageSizeGB                    = [int](& $setting 'ztp.usb_image.size_gb' 4)
     ShareHost                      = $shareHost
     ShareName                      = [string]$ztp.share_name
+    ShareAccountName               = [string](& $setting 'ztp.share_account_name' 'svc-ztp-media')
+    KeepShare                      = [bool](& $setting 'ztp.keep_share' $false)
     VoucherDirectory               = Join-Path (Resolve-Path $media).Path 'vouchers'
-    VoucherWaitMinutes             = 120
-    RfsWriteAttribute              = $true
-    SkipCertificateCheck           = $true
+    VoucherWaitMinutes             = [int](& $setting 'ztp.timeouts.voucher_wait_minutes' 120)
+    RfsWriteAttribute              = (Get-ZtpRfsWriteAttribute -Environment $env_)
+    SkipCertificateCheck           = (-not [bool](& $setting 'ztp.verify_bmc_certificate' $false))
     EventLogPath                   = $events
-    BootstrapTimeoutMinutes        = 120
-    BootstrapVoucherTimeoutMinutes = 90
-    SkipAzureCheck                 = $false
+    BootstrapTimeoutMinutes        = [int](& $setting 'ztp.timeouts.bootstrap_minutes' 120)
+    BootstrapVoucherTimeoutMinutes = [int](& $setting 'ztp.timeouts.bootstrap_voucher_minutes' 90)
+    BootstrapStallMinutes          = [int](& $setting 'ztp.timeouts.bootstrap_stall_minutes' 20)
+    SkipAzureCheck                 = [bool](& $setting 'ztp.skip_azure_check' $false)
     Location                       = [string]$env_.azure_resources.location
     SubscriptionId                 = $clusterSub
     ResourceGroupName              = $rg
     ParameterFile                  = $parameters
     OsVersion                      = [string]$ztp.os_version
-    SiteMode                       = 'Auto'
-    DeploymentName                 = "ztp-$([string]$ztp.site_name)"
+    SiteMode                       = [string](& $setting 'ztp.site_mode' 'Auto')
+    DeploymentName                 = [string](& $setting 'ztp.deployment_name' "ztp-$([string]$ztp.site_name)")
     ArcMachineNameMapPath          = Join-Path $state "$runName.arc-machine-names.json"
-    ReadyTimeoutMinutes            = 180
-    PollIntervalSeconds            = 60
-    DeviceTimeoutMinutes           = 30
-    NetworkTimeoutMinutes          = 60
+    ReadyTimeoutMinutes            = [int](& $setting 'ztp.timeouts.ready_minutes' 180)
+    PollIntervalSeconds            = [int](& $setting 'ztp.timeouts.poll_interval_seconds' 60)
+    DeviceTimeoutMinutes           = [int](& $setting 'ztp.timeouts.device_minutes' 30)
+    NetworkTimeoutMinutes          = [int](& $setting 'ztp.timeouts.network_minutes' 60)
+    RestoreSettleMinutes           = [int](& $setting 'ztp.timeouts.restore_settle_minutes' 5)
+    BiosTimeoutMinutes             = [int](& $setting 'ztp.timeouts.bios_minutes' 30)
+    MaintenancePort                = [int](& $setting 'ztp.maintenance_environment.port' 20001)
+    MaintenanceUser                = [string](& $setting 'ztp.maintenance_environment.username' 'edgeuser')
     HandoffPath                    = Join-Path $state "$runName.ztp-handoff.json"
     ClusterInputsPath              = Join-Path $state "$runName.ztp-cluster-inputs.yaml"
     StatePath                      = Join-Path $state "$runName.ztp-provisioning.state.json"
+} | ForEach-Object {
+    $maxTrain = [string](& $setting 'ztp.max_train' '')
+    if ($maxTrain) { $_['MaxBootstrapTrain'] = $maxTrain }
+    $_
 } | ConvertTo-Json | Set-Content $config
 
 $orchestrator = Join-Path $PSScriptRoot 'Invoke-ZtpProvisioning.ps1'
@@ -314,6 +335,7 @@ try {
 
     Set-AzContext -Tenant $tenant -Subscription $clusterSub -Scope Process -WarningAction SilentlyContinue | Out-Null
     if (-not (Get-AzResourceGroup -Name $rg -ErrorAction SilentlyContinue)) {
+        if (-not [bool](& $setting 'ztp.create_resource_group' $true)) { throw "Resource group $rg doesn't exist, and provisioning.simplified.create_resource_group is false. Create it first, or set the key to true." }
         New-AzResourceGroup -Name $rg -Location ([string]$env_.azure_resources.location) -Tag $tags | Out-Null
         Write-Output "Created resource group $rg"
     }
@@ -323,8 +345,8 @@ try {
         NodeName             = $Node
         BmcCredential        = $bmc
         ConfirmNotClustered  = $true
-        SkipCertificateCheck = $true
-        RetryProvisionOs     = $true
+        SkipCertificateCheck = (-not [bool](& $setting 'ztp.verify_bmc_certificate' $false))
+        RetryProvisionOs     = [bool](& $setting 'ztp.retry_provision_os' $true)
         Execute              = $true
         Confirm              = $false
     }

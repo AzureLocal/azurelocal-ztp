@@ -33,6 +33,27 @@ function Get-ZtpNodeBiosSetting {
     return $settings
 }
 
+function Get-ZtpNodeBiosReason {
+    <#
+    .SYNOPSIS
+    Why ZTP chose the BIOS attributes it derived for one node (attribute -> reason), from the node list's bios_reason. Empty
+    for attributes the file wrote itself.
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Collections.Specialized.OrderedDictionary])]
+    param([Parameter(Mandatory)][string]$NodeName, [object[]]$Nodes)
+    $reasons = [ordered]@{}
+    foreach ($n in @($Nodes)) {
+        $name = if ($n -is [System.Collections.IDictionary]) { [string]$n['name'] } elseif ($n.PSObject.Properties['name']) { [string]$n.name } else { '' }
+        if ($name -ne $NodeName) { continue }
+        $r = if ($n -is [System.Collections.IDictionary]) { if ($n.Contains('bios_reason')) { $n['bios_reason'] } } elseif ($n.PSObject.Properties['bios_reason']) { $n.bios_reason } else { $null }
+        if ($r -is [System.Collections.IDictionary]) { foreach ($k in $r.Keys) { $reasons[[string]$k] = [string]$r[$k] } }
+        elseif ($null -ne $r) { foreach ($p in $r.PSObject.Properties) { $reasons[$p.Name] = [string]$p.Value } }
+        break
+    }
+    return $reasons
+}
+
 function ConvertTo-ZtpBiosValue {
     <#
     .SYNOPSIS
@@ -67,11 +88,15 @@ function Get-ZtpBiosChange {
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
-    param([Parameter(Mandatory)][AllowNull()][object]$Current, [Parameter(Mandatory)][System.Collections.IDictionary]$Desired)
+    param([Parameter(Mandatory)][AllowNull()][object]$Current, [Parameter(Mandatory)][System.Collections.IDictionary]$Desired, [System.Collections.IDictionary]$Reason)
     $names = @(if ($Current -is [System.Collections.IDictionary]) { $Current.Keys } elseif ($null -ne $Current) { $Current.PSObject.Properties.Name })
     $read = { param($n) if ($Current -is [System.Collections.IDictionary]) { $Current[$n] } else { $Current.$n } }
     $unknown = @($Desired.Keys | Where-Object { $_ -cnotin $names })
-    if ($unknown) { throw "The BIOS has no attribute $($unknown -join ', '). Attribute names are case-sensitive; read them from /redfish/v1/Systems/<id>/Bios." }
+    if ($unknown) {
+        # An attribute ZTP derived from the inventory says why it looked for it; one the file wrote needs only its name.
+        $text = @($unknown | ForEach-Object { if ($Reason -and $Reason.Contains($_)) { "$_ ($($Reason[$_]))" } else { $_ } }) -join '; '
+        throw "The BIOS has no attribute $text. Attribute names are case-sensitive; read them from /redfish/v1/Systems/<id>/Bios."
+    }
     foreach ($name in $Desired.Keys) {
         $now = & $read $name
         $want = [string]$Desired[$name]

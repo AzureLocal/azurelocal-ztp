@@ -52,6 +52,7 @@ export default defineConfig({
           { text: 'Operator guide', link: '/operator-guide' },
           { text: 'Monitoring a run', link: '/monitoring' },
           { text: 'Master infrastructure.yml (schema 5)', link: '/infrastructure-schema-5' },
+          { text: 'Variables audit', link: '/variables-audit' },
           { text: 'Environment file reference', link: '/environment-file' }
         ]
       },

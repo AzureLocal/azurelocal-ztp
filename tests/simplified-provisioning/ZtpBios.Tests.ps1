@@ -210,3 +210,100 @@ foreach ($try in 1..50) { try { Add-Content -LiteralPath (Join-Path $env:ZTP_TES
         { & $script:boot -ImageDirectory $script:images -ShareHost 192.0.2.10 -NodeName node-01 -NodesFile $script:nodesFile -Credential $script:bmc -Execute -Confirm:$false } | Should -Throw '*BIOS settings are applied with a restart*'
     }
 }
+
+Describe 'Derived BIOS attributes: the reason, and the check before anything changes' {
+    BeforeAll {
+        $script:reason = [ordered]@{ Slot9 = 'derived: nodes[0].san.hbas[0] is in Slot 9, so ZTP looked for the BIOS attribute Slot9; check the slot label' }
+    }
+
+    It 'names the reason when the BIOS has no such attribute, and an attribute the file wrote only by its name' {
+        $current = [pscustomobject]@{ Slot2 = 'Enabled' }
+        { Get-ZtpBiosChange -Current $current -Desired ([ordered]@{ Slot9 = 'Disabled' }) -Reason $script:reason } | Should -Throw '*no attribute Slot9 (derived: nodes[[]0].san.hbas[[]0] is in Slot 9*check the slot label)*'
+        { Get-ZtpBiosChange -Current $current -Desired ([ordered]@{ Slot9 = 'Disabled' }) } | Should -Throw '*no attribute Slot9. Attribute names are case-sensitive*'
+        $plain = try { Get-ZtpBiosChange -Current $current -Desired ([ordered]@{ Slot9 = 'Disabled' }); '' } catch { $_.Exception.Message }
+        $plain | Should -Not -BeLike '*derived*'
+    }
+
+    It 'reads the reasons of a node from the node list and nothing for a node without any' {
+        $nodes = @(
+            [ordered]@{ name = 'node-01'; bios = [ordered]@{ Slot2 = 'Disabled' }; bios_reason = [ordered]@{ Slot2 = 'derived: why' } }
+            [pscustomobject]@{ name = 'node-02'; bios = [pscustomobject]@{ Slot2 = 'Disabled' }; bios_reason = [pscustomobject]@{ Slot2 = 'derived: json' } }
+            [ordered]@{ name = 'node-03' })
+        (Get-ZtpNodeBiosReason -NodeName 'node-01' -Nodes $nodes)['Slot2'] | Should -Be 'derived: why'
+        (Get-ZtpNodeBiosReason -NodeName 'node-02' -Nodes $nodes)['Slot2'] | Should -Be 'derived: json'
+        (Get-ZtpNodeBiosReason -NodeName 'node-03' -Nodes $nodes).Count | Should -Be 0
+    }
+
+    It 'Set-ZtpBios.ps1 stops before it writes anything and says why ZTP looked for the missing slot' {
+        Reset-TestBmc -Current @{ Slot2 = 'Enabled'; EmbNic1Nic2 = 'DisabledOs' }
+        $message = try { & $script:run @{ Attributes = [ordered]@{ Slot9 = 'Disabled' }; Reason = $script:reason; Credential = $script:bmc; ConfirmNotClustered = $true; Execute = $true; Confirm = $false }; '' } catch { $_.Exception.Message }
+        $message | Should -BeLike '*no attribute Slot9 (derived: nodes[[]0].san.hbas[[]0] is in Slot 9*'
+        @(& $script:writes).Count | Should -Be 0
+    }
+}
+
+Describe 'Boot reads every node''s BIOS before it changes one' {
+    BeforeAll {
+        $script:bin2 = Join-Path $TestDrive 'boot-bin2'
+        $null = New-Item -ItemType Directory -Path $script:bin2
+        Copy-Item -Path (Join-Path $script:root 'Start-MaintenanceBoot.ps1'), (Join-Path $script:root '*.Common.ps1') -Destination $script:bin2
+        Set-Content -LiteralPath (Join-Path $script:bin2 'Publish-MaintenanceIso.ps1') -Value @'
+[CmdletBinding(SupportsShouldProcess)]
+param([string[]]$IsoPath, $SharePath, $ShareName, $ShareHost, $AllowedBmcAddress, $ReadWrite, $AccountName, [switch]$Execute)
+if ($Execute) { Add-Content -LiteralPath (Join-Path $env:ZTP_TEST_BIOS_DIR 'order.txt') -Value "publish $AccountName" }
+if (-not $Execute) { return 'PLAN: share' }
+[pscustomobject]@{ Credential = $null; Images = @($IsoPath | ForEach-Object { [pscustomobject]@{ ImagePath = "//$ShareHost/$ShareName/$(Split-Path $_ -Leaf)"; Sha256 = 'AB' } }) }
+'@
+        Set-Content -LiteralPath (Join-Path $script:bin2 'Mount-ZtpVirtualUsb.ps1') -Value @'
+[CmdletBinding(SupportsShouldProcess)]
+param($ShareHost, $ShareName, $ImageNamePrefix, $ReadOnly, $RfsWriteAttribute, $Restart, $ConfirmNotClustered, $SkipCertificateCheck, $NodesFile, $Nodes, [string[]]$NodeName, $Credential, $ShareCredential, [switch]$Execute)
+if (-not $Execute) { return "PLAN: mount $($NodeName -join ',')" }
+Set-Content -LiteralPath (Join-Path $env:ZTP_TEST_BIOS_DIR "mount-$($NodeName[0]).txt") -Value 'x'
+[pscustomobject]@{ Node = $NodeName[0]; Image = "//$ShareHost/$ShareName/ztp-usb-$($NodeName[0]).img"; WriteProtected = $false }
+'@
+        # A read (no -Execute, with a credential) throws for an attribute the BMC of that node lacks, like the real script.
+        Set-Content -LiteralPath (Join-Path $script:bin2 'Set-ZtpBios.ps1') -Value @'
+[CmdletBinding(SupportsShouldProcess)]
+param([string]$NodeName, [string]$BmcAddress, [System.Collections.IDictionary]$Attributes, [System.Collections.IDictionary]$Reason, $Credential, $ChangeLogPath, $TimeoutMinutes, $PollSeconds, [switch]$ConfirmNotClustered, [switch]$SkipCertificateCheck, [switch]$Execute)
+if (-not $Execute) {
+    if ($Credential -and $Attributes.Contains('Slot9')) { throw "The BIOS has no attribute Slot9 ($($Reason['Slot9'])). Attribute names are case-sensitive." }
+    return "PLAN: $NodeName BIOS read"
+}
+Set-Content -LiteralPath (Join-Path $env:ZTP_TEST_BIOS_DIR "bios-$NodeName.txt") -Value 'x'
+[pscustomobject]@{ Node = $NodeName; Bmc = $BmcAddress; Status = 'Changed'; Changes = @($Attributes.Keys | ForEach-Object { "${_}: Enabled -> $($Attributes[$_])" }) }
+'@
+        $script:images2 = Join-Path $TestDrive 'boot-images2'
+        $null = New-Item -ItemType Directory -Path $script:images2
+        foreach ($n in 'node-01', 'node-02') { Set-Content -LiteralPath (Join-Path $script:images2 "ztp-usb-$n.img") -Value 'x' }
+        $script:boot2 = Join-Path $script:bin2 'Start-MaintenanceBoot.ps1'
+        function script:New-BootNodes([string]$Slot2) {
+            $path = Join-Path $TestDrive "boot-nodes-$([guid]::NewGuid().ToString('N')).json"
+            @{ nodes = @(
+                    [ordered]@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11'; bios = [ordered]@{ Slot2 = 'Disabled' }; bios_reason = [ordered]@{ Slot2 = 'derived: nodes[0] slot 2' } }
+                    [ordered]@{ name = 'node-02'; service_tag = 'EXAMPLE2'; bmc_address = '198.51.100.12'; bios = [ordered]@{ $Slot2 = 'Disabled' }; bios_reason = [ordered]@{ $Slot2 = 'derived: nodes[1].san.hbas[0] is in Slot 9, so ZTP looked for the BIOS attribute Slot9; check the slot label' } }
+                ) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $path
+            $path
+        }
+    }
+
+    It 'stops with the reason when one node has no such slot, and has changed nothing: no share, no BIOS, no mount' {
+        $dir = Join-Path $TestDrive 'boot2-order'; $null = New-Item -ItemType Directory -Force -Path $dir
+        $env:ZTP_TEST_BIOS_DIR = $dir
+        try {
+            $message = try { $null = & $script:boot2 -ImageDirectory $script:images2 -ShareHost 192.0.2.10 -NodeName node-01, node-02 -NodesFile (New-BootNodes 'Slot9') -Credential $script:bmc -Restart -ConfirmNotClustered -Execute -Confirm:$false; '' } catch { $_.Exception.Message }
+        }
+        finally { $env:ZTP_TEST_BIOS_DIR = $null }
+        $message | Should -BeLike '*no attribute Slot9 (derived: nodes[[]1].san.hbas[[]0] is in Slot 9*'
+        @(Get-ChildItem -LiteralPath $dir -File).Count | Should -Be 0 -Because 'node-01 was not changed, the share was not published and nothing was mounted'
+    }
+
+    It 'goes on when every node has its slot, and gives the share its account name' {
+        $dir = Join-Path $TestDrive 'boot2-ok'; $null = New-Item -ItemType Directory -Force -Path $dir
+        $env:ZTP_TEST_BIOS_DIR = $dir
+        try { $null = & $script:boot2 -ImageDirectory $script:images2 -ShareHost 192.0.2.10 -NodeName node-01, node-02 -NodesFile (New-BootNodes 'Slot3') -Credential $script:bmc -Restart -ConfirmNotClustered -AccountName svc-example -Execute -Confirm:$false }
+        finally { $env:ZTP_TEST_BIOS_DIR = $null }
+        @(Get-Content -LiteralPath (Join-Path $dir 'order.txt')) | Should -Be @('publish svc-example')
+        @(Get-ChildItem -LiteralPath $dir -Filter 'bios-*.txt').Count | Should -Be 2
+        @(Get-ChildItem -LiteralPath $dir -Filter 'mount-*.txt').Count | Should -Be 2
+    }
+}

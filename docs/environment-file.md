@@ -6,6 +6,8 @@
 This page describes ZTP's own environment-file layout (`cluster_nodes`, `network_intents`, `ztp`, ...). It still works, and it's deprecated: use the master `infrastructure.yml` (schema 5), which every Azure Local tool reads and which lists each machine's ports. Pass it through the same `-InfrastructureFile`; ZTP detects the format. See [Reading the master infrastructure.yml](infrastructure-schema-5.md) for where each key below comes from in schema 5, and [Prerequisites](prerequisites.md#values-you-need) for every value in schema 5 paths.
 :::
 
+This layout is frozen. Settings added from schema 5.4 on (BIOS actions derived from the inventory, the Azure site choices, timeouts, the USB image, the Configurator service, the BMC options) exist only in the master file, so no key lives in ZTP alone: see [Reading the master infrastructure.yml](infrastructure-schema-5.md#every-setting-is-a-key-schema-54) and [the variables audit](variables-audit.md). A file in this layout runs with the defaults ZTP always used.
+
 The environment file is YAML. It describes the machines, the management network, and the Azure targets. It holds **no secrets**: each credential is a Key Vault reference. The file can hold other keys for other tools; ZTP ignores keys that aren't listed here.
 
 A complete example with placeholder values is in [`examples/infrastructure.example.yml`](https://github.com/AzureLocal/azurelocal-ztp/blob/main/examples/infrastructure.example.yml).

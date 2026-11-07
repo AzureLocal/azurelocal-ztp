@@ -29,6 +29,11 @@
   "PollIntervalSeconds": 60,
   "DeviceTimeoutMinutes": 30,
   "NetworkTimeoutMinutes": 60,
+  "BootstrapStallMinutes": 20,
+  "ImageSizeGB": 4,
+  "ShareAccountName": "svc-ztp-media",
+  "MaintenancePort": 20001,
+  "MaintenanceUser": "edgeuser",
   "HandoffPath": "./ztp-handoff.json",
   "ClusterInputsPath": "./ztp-cluster-inputs.yaml",
   "StatePath": "./ztp-provisioning.state.json"

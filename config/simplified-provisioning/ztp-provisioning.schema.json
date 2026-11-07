@@ -43,7 +43,12 @@
     "NetworkTimeoutMinutes": { "type": "integer", "minimum": 0, "maximum": 1440, "default": 60, "description": "Network stage with ApplyThroughAzure: how long each ApplyConfiguration job on a network adapter may take, and then the adapter to report its result." },
     "ApplyThroughAzure": { "type": "boolean", "default": false, "description": "Network stage, opt-in and unreliable: move a static management address that is not on the management port there through Azure's jobs/ApplyConfiguration, and fail the stage when it is not set. On two live runs the job never started. Without it the stage only verifies, and OS configuration sets the address." },
     "RestoreSettleMinutes": { "type": "integer", "minimum": 0, "maximum": 120, "default": 5, "description": "Restore: minutes to wait after the BIOS restart before checking that the Arc machines are Connected again." },
-    "BiosTimeoutMinutes": { "type": "integer", "minimum": 1, "maximum": 240, "default": 30, "description": "Restore: how long to wait for a node's BIOS to report the restored values." },
+    "BiosTimeoutMinutes": { "type": "integer", "minimum": 1, "maximum": 240, "default": 30, "description": "Boot and Restore: how long to wait for a node's BIOS to report the new values after the restart." },
+    "BootstrapStallMinutes": { "type": "integer", "minimum": 0, "maximum": 240, "default": 0, "description": "Bootstrap: how long the BMC may show no change before the watch reports a stall. 0 = the stage script's default (20)." },
+    "ImageSizeGB": { "type": "integer", "minimum": 0, "maximum": 128, "default": 0, "description": "Media: size of each virtual USB image in GiB. 0 = the stage script's default (4)." },
+    "ShareAccountName": { "type": "string", "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9_-]{0,19}$", "description": "Boot and Vouchers: the local account the BMCs sign in to the share with. Empty = svc-ztp-media." },
+    "MaintenancePort": { "type": "integer", "minimum": 0, "maximum": 65535, "default": 0, "description": "Device: TCP port of the maintenance environment's Configurator service. 0 = 20001." },
+    "MaintenanceUser": { "type": "string", "description": "Device: the Configurator service's user name. Empty = edgeuser." },
     "HandoffPath": { "type": "string", "default": "./ztp-handoff.json" },
     "ClusterInputsPath": { "type": "string", "default": "./ztp-cluster-inputs.yaml", "description": ".yaml or .json" },
     "StatePath": { "type": "string", "default": "./ztp-provisioning.state.json" }

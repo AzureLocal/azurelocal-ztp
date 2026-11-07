@@ -7,6 +7,7 @@
     "managerId": "iDRAC.Embedded.1",
     "systemId": "System.Embedded.1",
     "virtualMediaSlot": "RemovableDisk",
+    "rfsWriteAttribute": true,
     "logServices": [
       { "id": "Lclog", "path": "/redfish/v1/Managers/iDRAC.Embedded.1/LogServices/Lclog/Entries" },
       { "id": "Sel", "path": "/redfish/v1/Managers/iDRAC.Embedded.1/LogServices/Sel/Entries" }
@@ -17,6 +18,14 @@
       "reset": [ "power (cycle|off)", "system reset" ]
     },
     "signalsStatus": "unverified: log paths and message patterns are Dell iDRAC conventions, not proven against the maintenance environment"
+  },
+  "bios": {
+    "slot_attribute": "Slot{n}",
+    "disabled": "Disabled",
+    "enabled": "Enabled",
+    "embedded_nic_attribute": "EmbNic1Nic2",
+    "embedded_enabled": "Enabled",
+    "status": "Dell PowerEdge and AX (iDRAC): PCIe slot n is the BIOS attribute Slot<n> (Enabled, Disabled, BootDriverDisabled); the onboard NICs are EmbNic1Nic2, which ships as DisabledOs. Seen on an AX-760 (16G)."
   },
   "models": {
     "validatedBySimplifiedProvisioning": [ "AX-650", "AX-750" ]

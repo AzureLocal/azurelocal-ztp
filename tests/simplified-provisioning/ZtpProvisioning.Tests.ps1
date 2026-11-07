@@ -21,7 +21,7 @@ BeforeAll {
     'TimeoutMinutes', 'Action', 'Remove', 'SharePath', 'Stage', 'SubscriptionId', 'ResourceGroupName', 'ParameterFile', 'VoucherPath', 'OsVersion',
     'SiteMode', 'Node', 'DeploymentName', 'AdminPassword', 'PollIntervalSeconds', 'RetryProvisionOs', 'ArcMachineNameMapPath', 'ExpectedMachineName',
     'Version', 'CacheDirectory', 'IncludePreview', 'MaxTrain', 'Oem', 'EventLogPath', 'VoucherTimeoutMinutes',
-    'SkipAzureCheck', 'ImageBuiltAt', 'ResetAt', 'Location', 'HandoffPath', 'ManagementAddressCheck', 'OutputPath', 'Format', 'BiosLogPath', 'ChangeLogPath', 'Original', 'RestoredBios', 'ApplyThroughAzure', 'ConnectedSince', 'ImageEmptyAtBuild'
+    'SkipAzureCheck', 'ImageBuiltAt', 'ResetAt', 'Location', 'HandoffPath', 'ManagementAddressCheck', 'OutputPath', 'Format', 'BiosLogPath', 'ChangeLogPath', 'SizeBytes', 'AccountName', 'StallMinutes', 'Port', 'UserName', 'BiosTimeoutMinutes', 'Original', 'RestoredBios', 'ApplyThroughAzure', 'ConnectedSince', 'ImageEmptyAtBuild'
     $paramBlock = ($names | ForEach-Object { "[object]`$$_" }) -join ', '
     foreach ($script in 'New-ZtpVirtualUsbImage.ps1', 'Start-MaintenanceBoot.ps1', 'Wait-ZtpVoucher.ps1', 'Mount-ZtpVirtualUsb.ps1', 'Publish-MaintenanceIso.ps1',
         'Invoke-ZtpAzureProvisioning.ps1', 'Test-ProvisionedMachines.ps1', 'Get-ZtpBootstrapIso.ps1', 'Wait-ZtpBootstrapComplete.ps1',
@@ -535,5 +535,50 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
         # every parameter-backed setting of the orchestrator is described by the schema
         $schemaKeys = ((Get-Content (Join-Path $dir 'ztp-provisioning.schema.json') -Raw | ConvertFrom-Json -AsHashtable).properties).Keys
         foreach ($key in ($text = Get-Content (Join-Path $dir 'ztp-provisioning.example.json') -Raw | ConvertFrom-Json -AsHashtable).Keys) { $schemaKeys | Should -Contain $key }
+    }
+}
+
+Describe 'Invoke-ZtpProvisioning.ps1 settings that used to be fixed in the stage scripts (schema 5.4)' {
+    BeforeEach {
+        $global:ztpRunCalls = [System.Collections.Generic.List[object]]::new()
+        $global:ztpRunBehavior = & $script:healthy
+        $script:statePath = Join-Path $TestDrive "state-$([guid]::NewGuid().ToString('N')).json"
+        Get-ChildItem -LiteralPath $script:vouchers, $script:images -File | Remove-Item -Force
+    }
+
+    It 'passes nothing extra to the stages when none of the settings is given (the stage scripts keep their own defaults)' {
+        $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false }
+        $media = $global:ztpRunCalls | Where-Object Script -EQ 'New-ZtpVirtualUsbImage.ps1'
+        $media.Params.ContainsKey('SizeBytes') | Should -BeFalse
+        ($global:ztpRunCalls | Where-Object Script -EQ 'Start-MaintenanceBoot.ps1').Params.ContainsKey('AccountName') | Should -BeFalse
+        ($global:ztpRunCalls | Where-Object Script -EQ 'Set-ZtpDeviceConfiguration.ps1').Params.ContainsKey('Port') | Should -BeFalse
+        ($global:ztpRunCalls | Where-Object Script -EQ 'Set-ZtpDeviceConfiguration.ps1').Params.ContainsKey('UserName') | Should -BeFalse
+        ($global:ztpRunCalls | Where-Object Script -EQ 'Wait-ZtpBootstrapComplete.ps1').Params.ContainsKey('StallMinutes') | Should -BeFalse
+    }
+
+    It 'passes the image size, the share account, the Configurator port and user, and the stall budget to their stages' {
+        $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; ImageSizeGB = 6; ShareAccountName = 'svc-example'; MaintenancePort = 20011; MaintenanceUser = 'example-user'; BootstrapStallMinutes = 45; BiosTimeoutMinutes = 50 }
+        ($global:ztpRunCalls | Where-Object Script -EQ 'New-ZtpVirtualUsbImage.ps1').Params.SizeBytes | Should -Be (6GB)
+        $boot = ($global:ztpRunCalls | Where-Object Script -EQ 'Start-MaintenanceBoot.ps1').Params
+        $boot.AccountName | Should -Be 'svc-example'
+        $boot.BiosTimeoutMinutes | Should -Be 50
+        ($global:ztpRunCalls | Where-Object Script -EQ 'Publish-MaintenanceIso.ps1').Params.AccountName | Should -Be 'svc-example' -Because 'the share is removed with the same account name it was created with'
+        $device = ($global:ztpRunCalls | Where-Object Script -EQ 'Set-ZtpDeviceConfiguration.ps1').Params
+        $device.Port | Should -Be 20011
+        $device.UserName | Should -Be 'example-user'
+        ($global:ztpRunCalls | Where-Object Script -EQ 'Wait-ZtpBootstrapComplete.ps1').Params.StallMinutes | Should -Be 45
+    }
+
+    It 'reads the same settings from the settings file' {
+        $cfg = Join-Path $TestDrive 'settings54.json'
+        Set-Content -LiteralPath $cfg -Value '{ "ImageSizeGB": 8, "MaintenancePort": 20012, "ShareAccountName": "svc-file" }'
+        $null = & $script:invoke @{ ConfigPath = $cfg; Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false }
+        ($global:ztpRunCalls | Where-Object Script -EQ 'New-ZtpVirtualUsbImage.ps1').Params.SizeBytes | Should -Be (8GB)
+        ($global:ztpRunCalls | Where-Object Script -EQ 'Set-ZtpDeviceConfiguration.ps1').Params.Port | Should -Be 20012
+        ($global:ztpRunCalls | Where-Object Script -EQ 'Start-MaintenanceBoot.ps1').Params.AccountName | Should -Be 'svc-file'
+    }
+
+    It 'rejects a share account name the stage would refuse' {
+        { & $script:invoke @{ ShareAccountName = 'not valid!' } } | Should -Throw
     }
 }

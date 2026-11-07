@@ -7,6 +7,7 @@
     "managerId": "1",
     "systemId": "1",
     "virtualMediaSlot": "RemovableDisk",
+    "rfsWriteAttribute": false,
     "logServices": [],
     "signals": { "bootedFromMedia": [], "completion": [] },
     "signalsStatus": "unverified: layout only, nothing here has run on Supermicro hardware"

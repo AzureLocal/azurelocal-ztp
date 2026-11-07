@@ -790,3 +790,411 @@ Describe 'Ported code stays generic' {
         @($hits) | Should -BeNullOrEmpty
     }
 }
+
+Describe 'BIOS actions derived from the inventory (schema 5.4)' {
+    BeforeAll {
+        # Built-in checks only: the scripts would otherwise look for a toolkit clone next to the repository.
+        $script:savedToolkitRoot54 = $env:AZL_TOOLKIT_ROOT
+        $env:AZL_TOOLKIT_ROOT = Join-Path $TestDrive 'no-toolkit-here'
+        $script:oemRoot = Join-Path $script:repoRoot 'config/oem'
+        # A schema 5 file for a Dell server: two nodes, each with the two embedded LOMs (management), a PCIe NIC in Slot 3 and one in
+        # Slot 6 (a second adapter type), and a Fibre Channel HBA in Slot 2. -Edit changes the parsed file first.
+        function New-DerivedFile {
+            param([string]$Name = [guid]::NewGuid().ToString('N'), [scriptblock]$Edit, [string]$Vendor = 'Dell', [switch]$NoHba)
+            $script:derivedEdit = $Edit; $script:derivedVendor = $Vendor; $script:derivedNoHba = [bool]$NoHba
+            New-TestInfrastructureV5 -Name "derived-$Name" -Edit {
+                param($d)
+                $d.hardware.vendor = $script:derivedVendor
+                if (-not $script:derivedNoHba) { foreach ($n in $d.nodes) { $n['san'] = [ordered]@{ hbas = @([ordered]@{ slot = 'Slot 2'; type = 'fibre_channel'; model = 'Example 32G FC HBA' }) } } }
+                if ($script:derivedEdit) { & $script:derivedEdit $d }
+            }
+        }
+        function Read-Derived { param([string]$File) Read-ZtpInfrastructure -Path $File }
+        function Get-AssertText { param([string]$Path) try { Assert-ZtpEnvironment -Environment (Read-ZtpInfrastructure -Path $Path) -Source 'infra.yml' -InformationAction SilentlyContinue; '' } catch { $_.Exception.Message } }
+        function Format-Bios { param($Bios) @($Bios.Keys | ForEach-Object { "$_=$($Bios[$_])" }) -join ',' }
+    }
+    AfterAll { $env:AZL_TOOLKIT_ROOT = $script:savedToolkitRoot54 }
+
+    It 'turns the SAN adapter slot off for the install and back on afterwards, and enables the embedded NICs: the same values a raw Dell map gives' {
+        $e = Read-Derived (New-DerivedFile -Name 'tplabs')
+        @(Test-ZtpEnvironment -Environment $e) | Should -BeNullOrEmpty
+        $n = $e.cluster_nodes[0]
+        Format-Bios (Get-ZtpEnvironmentBios -Environment $e -Node $n -Kind provisioning) | Should -Be 'Slot2=Disabled'
+        Format-Bios (Get-ZtpEnvironmentBios -Environment $e -Node $n -Kind final) | Should -Be 'Slot2=Enabled,EmbNic1Nic2=Enabled'
+        Format-Bios (Get-ZtpEnvironmentBios -Environment $e -Node $n -Kind boot) | Should -Be 'Slot2=Disabled,EmbNic1Nic2=Enabled'
+        # The same file with the raw maps the lab files carry today and no HBA listed gives the identical result.
+        $raw = Read-Derived (New-DerivedFile -Name 'tplabs-raw' -NoHba -Edit { param($d)
+                $d.hardware['bios'] = [ordered]@{ Slot2 = 'Enabled'; EmbNic1Nic2 = 'Enabled' }
+                $d.hardware['bios_during_provisioning'] = [ordered]@{ Slot2 = 'Disabled' }
+            })
+        foreach ($kind in 'provisioning', 'final', 'boot') {
+            $a = Get-ZtpEnvironmentBios -Environment $e -Node $e.cluster_nodes[1] -Kind $kind
+            $b = Get-ZtpEnvironmentBios -Environment $raw -Node $raw.cluster_nodes[1] -Kind $kind
+            (Format-Bios $a -split ',' | Sort-Object) -join ',' | Should -Be ((Format-Bios $b -split ',' | Sort-Object) -join ',') -Because "the $kind map must be what the raw maps give"
+        }
+    }
+
+    It 'prints the derived plan with the reason for each decision' {
+        $e = Read-Derived (New-DerivedFile -Name 'plan')
+        $plan = @(Get-ZtpDerivedBiosPlan -Environment $e)
+        $plan | Should -Contain 'PLAN: node-01 BIOS Slot2 Disabled for the install because nodes[0].san.hbas[0] is in Slot 2 (the Restore stage sets it back to Enabled)'
+        $plan | Should -Contain 'PLAN: node-02 BIOS Slot2 Disabled for the install because nodes[1].san.hbas[0] is in Slot 2 (the Restore stage sets it back to Enabled)'
+        @($plan | Where-Object { $_ -like 'PLAN: node-01 BIOS EmbNic1Nic2 Enabled because the management port ''Embedded NIC 1'' of nodes[[]0] is in slot Embedded*' }).Count | Should -Be 1
+        @(Get-ZtpDerivedBiosPlan -Environment $e -Node 'node-02').Count | Should -Be 2 -Because 'only the named node''s decisions'
+    }
+
+    It 'touches nothing but the HBA slot and the embedded NICs on a server with two adapter types (an onboard LOM and PCIe NICs)' {
+        $e = Read-Derived (New-DerivedFile -Name 'two-types' -Edit { param($d)
+                $d.nodes[0].network_adapters += [ordered]@{ name = 'Slot 5 Port 1'; mac_address = '02:00:00:00:00:71'; slot = 'Slot 5'; model = 'Another vendor 25G'; roles = @('compute'); ip_assignment = 'none' }
+            })
+        $derived = Get-ZtpDerivedBios -Environment $e -Node $e.cluster_nodes[0]
+        @($derived.Problems) | Should -BeNullOrEmpty
+        (@($derived.Final.Keys) + @($derived.During.Keys) | Sort-Object -Unique) -join ',' | Should -Be 'EmbNic1Nic2,Slot2' -Because 'Slot 3, Slot 5 and Slot 6 carry network ports and are never touched'
+    }
+
+    It 'follows the slot the HBA is in: Slot5 gives Slot5, and a second HBA gives a second key' {
+        $e = Read-Derived (New-DerivedFile -Name 'slots' -Edit { param($d) $d.nodes[0].san.hbas[0].slot = 'Slot5'; $d.nodes[0].san.hbas += [ordered]@{ slot = 'slot-7'; type = 'iscsi_offload' } })
+        $derived = Get-ZtpDerivedBios -Environment $e -Node $e.cluster_nodes[0]
+        Format-Bios $derived.During | Should -Be 'Slot5=Disabled,Slot7=Disabled'
+        Format-Bios $derived.Final | Should -Be 'Slot5=Enabled,Slot7=Enabled,EmbNic1Nic2=Enabled'
+        (Get-ZtpDerivedBios -Environment $e -Node $e.cluster_nodes[1]).During.Keys | Should -Be @('Slot2') -Because 'each node follows its own inventory'
+    }
+
+    It 'does no BIOS isolation on a server with no SAN, and still enables the embedded NICs' {
+        $e = Read-Derived (New-DerivedFile -Name 'no-san' -NoHba)
+        $derived = Get-ZtpDerivedBios -Environment $e -Node $e.cluster_nodes[0]
+        $derived.During.Count | Should -Be 0
+        Format-Bios $derived.Final | Should -Be 'EmbNic1Nic2=Enabled'
+        Format-Bios (Get-ZtpEnvironmentBios -Environment $e -Node $e.cluster_nodes[0] -Kind provisioning) | Should -BeNullOrEmpty
+        # And no bios_restore: nothing was changed for the install only.
+        @(Get-ZtpDerivedBiosPlan -Environment $e).Count | Should -Be 2 -Because 'one line per node, for the embedded NICs'
+    }
+
+    It 'derives nothing for a server whose management port is a PCIe NIC and that has no SAN' {
+        $e = Read-Derived (New-DerivedFile -Name 'pcie-only' -NoHba -Edit { param($d)
+                foreach ($n in $d.nodes) { foreach ($p in $n.network_adapters) { if ($p.slot -eq 'Embedded') { $p.slot = 'Slot 1' } } }
+            })
+        foreach ($n in $e.cluster_nodes) {
+            $derived = Get-ZtpDerivedBios -Environment $e -Node $n
+            $derived.Final.Count | Should -Be 0; $derived.During.Count | Should -Be 0; @($derived.Plan).Count | Should -Be 0
+        }
+    }
+
+    It 'lets explicit keys win: a raw bios_during_provisioning value, a raw final value, and a raw embedded-NIC value' {
+        $e = Read-Derived (New-DerivedFile -Name 'explicit' -Edit { param($d)
+                $d.hardware['bios'] = [ordered]@{ Slot2 = 'BootDriverDisabled'; EmbNic1Nic2 = 'DisabledOs' }
+                $d.nodes[1]['bios_during_provisioning'] = [ordered]@{ Slot2 = 'BootDriverDisabled' }
+            })
+        # node-01: the install uses the derived Disabled (the explicit final is the end state), Restore sets BootDriverDisabled back.
+        Format-Bios (Get-ZtpEnvironmentBios -Environment $e -Node $e.cluster_nodes[0] -Kind provisioning) | Should -Be 'Slot2=Disabled'
+        Format-Bios (Get-ZtpEnvironmentBios -Environment $e -Node $e.cluster_nodes[0] -Kind final) | Should -Be 'Slot2=BootDriverDisabled,EmbNic1Nic2=DisabledOs'
+        # node-02: its own explicit during value replaces the derived one.
+        Format-Bios (Get-ZtpEnvironmentBios -Environment $e -Node $e.cluster_nodes[1] -Kind provisioning) | Should -Be 'Slot2=BootDriverDisabled'
+        $plan = @(Get-ZtpDerivedBiosPlan -Environment $e)
+        $plan | Should -Contain 'PLAN: node-01 BIOS Slot2 Disabled for the install because nodes[0].san.hbas[0] is in Slot 2 (the Restore stage sets it back to BootDriverDisabled from hardware.bios)'
+        @($plan | Where-Object { $_ -like 'PLAN: node-02 BIOS Slot2 BootDriverDisabled for the install, from hardware.bios_during_provisioning (explicit*' }).Count | Should -Be 1
+        @($plan | Where-Object { $_ -like 'PLAN: node-01 BIOS EmbNic1Nic2 DisabledOs, as hardware.bios says*' }).Count | Should -Be 1
+    }
+
+    It 'honours the switches: isolate_san_adapters false and enable_embedded_nics false turn the derivation off' {
+        $e = Read-Derived (New-DerivedFile -Name 'switches-off' -Edit { param($d) $d.provisioning.simplified['isolate_san_adapters'] = $false; $d.provisioning.simplified['enable_embedded_nics'] = $false })
+        $derived = Get-ZtpDerivedBios -Environment $e -Node $e.cluster_nodes[0]
+        $derived.Final.Count | Should -Be 0; $derived.During.Count | Should -Be 0
+        # An odd slot label is no problem while isolation is off.
+        $odd = Read-Derived (New-DerivedFile -Name 'switch-odd' -Edit { param($d) $d.provisioning.simplified['isolate_san_adapters'] = $false; $d.nodes[0].san.hbas[0].slot = 'OCP 1' })
+        @(Test-ZtpEnvironment -Environment $odd) | Should -BeNullOrEmpty
+        # True without any HBA listed does nothing and fails nothing.
+        $none = Read-Derived (New-DerivedFile -Name 'switch-true' -NoHba -Edit { param($d) $d.provisioning.simplified['isolate_san_adapters'] = $true })
+        @(Test-ZtpEnvironment -Environment $none) | Should -BeNullOrEmpty
+        (Get-ZtpDerivedBios -Environment $none -Node $none.cluster_nodes[0]).During.Count | Should -Be 0
+    }
+
+    It 'fails before anything changes on a slot label it can not read, naming the node, the HBA and the label' {
+        $file = New-DerivedFile -Name 'odd-label' -Edit { param($d) $d.nodes[1].san.hbas[0].slot = 'OCP 1' }
+        $message = Get-AssertText $file
+        $message | Should -BeLike '*nodes[[]1] (node-02).san.hbas[[]0].slot ''OCP 1'' isn''t a PCIe slot label such as ''Slot 2''*'
+        $message | Should -BeLike '*provisioning.simplified.isolate_san_adapters*hardware.bios_during_provisioning*'
+        $message | Should -Not -BeLike '*node-01*san.hbas*'
+    }
+
+    It 'refuses to turn off a slot that also carries a network port' {
+        $file = New-DerivedFile -Name 'shared-slot' -Edit { param($d) $d.nodes[0].san.hbas[0].slot = 'Slot 3' }
+        $message = Get-AssertText $file
+        $message | Should -BeLike '*nodes[[]0] (node-01).san.hbas[[]0] is in Slot 3, which also holds the network port ''Slot 3 Port 1''*'
+    }
+
+    It 'says so, and does not guess, for a vendor without a slot mapping' {
+        # The HBA is listed, the vendor has no bios section, and the file gives no raw map: stop, naming the vendor and the way out.
+        $file = New-DerivedFile -Name 'no-mapping' -Vendor 'Contoso'
+        $message = Get-AssertText $file
+        $message | Should -BeLike '*nodes[[]0] (node-01).san.hbas[[]0] is in Slot 2*no BIOS slot mapping for vendor ''Contoso''*won''t guess*hardware.bios_during_provisioning*isolate_san_adapters*'
+        # The same file with the raw map the operator already writes is fine; the plan says the explicit map is used.
+        $fine = Read-Derived (New-DerivedFile -Name 'no-mapping-raw' -Vendor 'Contoso' -Edit { param($d) $d.hardware['bios_during_provisioning'] = [ordered]@{ PciSlot2 = 'Off' }; $d.hardware['bios'] = [ordered]@{ PciSlot2 = 'On' } })
+        @(Test-ZtpEnvironment -Environment $fine) | Should -BeNullOrEmpty
+        @(Get-ZtpDerivedBiosPlan -Environment $fine -Node 'node-01')[0] | Should -BeLike '*not isolated by derivation: ZTP has no slot mapping for vendor ''Contoso''*using hardware.bios_during_provisioning as written (PciSlot2=Off)*'
+        Format-Bios (Get-ZtpEnvironmentBios -Environment $fine -Node $fine.cluster_nodes[0] -Kind provisioning) | Should -Be 'PciSlot2=Off'
+    }
+
+    It 'leaves the embedded NICs alone for an unmapped vendor unless the switch asks for them' {
+        $e = Read-Derived (New-DerivedFile -Name 'unmapped-embedded' -Vendor 'Contoso' -NoHba)
+        @(Test-ZtpEnvironment -Environment $e) | Should -BeNullOrEmpty
+        (Get-ZtpDerivedBios -Environment $e -Node $e.cluster_nodes[0]).Final.Count | Should -Be 0
+        @(Get-ZtpDerivedBiosPlan -Environment $e)[0] | Should -BeLike '*no embedded-NIC attribute for vendor ''Contoso''*leaves the embedded NICs as they are*'
+        $asked = New-DerivedFile -Name 'unmapped-asked' -Vendor 'Contoso' -NoHba -Edit { param($d) $d.provisioning.simplified['enable_embedded_nics'] = $true }
+        (Get-AssertText $asked) | Should -BeLike '*enable_embedded_nics is true, but ZTP has no embedded-NIC BIOS attribute for vendor ''Contoso''*'
+    }
+
+    It 'keeps today''s behaviour for a file that lists no HBAs and no embedded ports: nothing derived, nothing to say' {
+        $e = Read-Derived (New-TestInfrastructureV5 -Name 'derived-untouched')
+        foreach ($n in $e.cluster_nodes) { (Get-ZtpDerivedBios -Environment $e -Node $n).Plan.Count | Should -Be 1 -Because 'only the Contoso note about the embedded NICs' }
+        $legacy = Read-ZtpEnvironmentFile -Path $script:fixture
+        (Get-ZtpDerivedBios -Environment $legacy -Node $legacy.cluster_nodes[0]).Plan.Count | Should -Be 0
+        Format-Bios (Get-ZtpEnvironmentBios -Environment $legacy -Node $legacy.cluster_nodes[0]) | Should -Be (Format-Bios (Get-ZtpEnvironmentBios -Environment $legacy -Node $legacy.cluster_nodes[0] -ExplicitOnly))
+    }
+
+    It 'runs Invoke-ZtpEnvironment.ps1: the plan lines, the node list with bios, bios_restore and the reasons, and a bad slot stops it first' {
+        $root = New-TestRepo -Name 'derived-repo' -Copy 'Invoke-ZtpEnvironment.ps1', 'ZtpEnvironment.Common.ps1'
+        Copy-Item -LiteralPath (Join-Path $script:oemRoot 'dell.json') -Destination (Join-Path $root 'config/oem/dell.json')
+        $bin = Join-Path $root 'scripts/simplified-provisioning'
+        Set-Content -LiteralPath (Join-Path $bin 'Invoke-ZtpProvisioning.ps1') -Value '[CmdletBinding(SupportsShouldProcess)] param($ConfigPath, $NodeName, $BmcCredential, $EdgeUserPassword, $InfrastructureFile, $Node, $EventLogPath, $From, [switch]$ConfirmNotClustered, [switch]$SkipCertificateCheck, [switch]$RetryProvisionOs, [switch]$RebuildImages, [switch]$Execute)'
+        $nodesFile = Join-Path $root 'config/simplified-provisioning/nodes.json'
+
+        $bad = New-DerivedFile -Name 'run-bad' -Edit { param($d) $d.nodes[0].san.hbas[0].slot = 'OCP 1' }
+        $threw = try { & (Join-Path $bin 'Invoke-ZtpEnvironment.ps1') -InfrastructureFile $bad *>&1 | Out-Null; '' } catch { $_.Exception.Message }
+        $threw | Should -BeLike '*isn''t a PCIe slot label*'
+        Test-Path -LiteralPath $nodesFile | Should -BeFalse -Because 'the run stopped before it wrote anything'
+
+        $good = New-DerivedFile -Name 'run-good'
+        $text = Get-StepText (& (Join-Path $bin 'Invoke-ZtpEnvironment.ps1') -InfrastructureFile $good *>&1)
+        $text | Should -BeLike '*PLAN: node-01 BIOS Slot2 Disabled for the install because nodes[[]0].san.hbas[[]0] is in Slot 2 (the Restore stage sets it back to Enabled)*'
+        $text | Should -BeLike '*BIOS set by the Boot stage before the maintenance boot: node-01 Slot2=Disabled, EmbNic1Nic2=Enabled*'
+        $text | Should -BeLike '*BIOS set back by the Restore stage after Network: node-01 Slot2=Enabled*'
+        $nodes = (Get-Content -LiteralPath $nodesFile -Raw | ConvertFrom-Json).nodes
+        "$($nodes[0].bios.Slot2) $($nodes[0].bios.EmbNic1Nic2) $($nodes[0].bios_restore.Slot2)" | Should -Be 'Disabled Enabled Enabled'
+        $nodes[0].bios_restore.PSObject.Properties.Name | Should -Be @('Slot2') -Because 'the embedded NICs stay enabled'
+        $nodes[0].bios_reason.Slot2 | Should -BeLike 'derived: nodes[[]0].san.hbas[[]0] is in Slot 2*'
+        $nodes[0].bios_reason.EmbNic1Nic2 | Should -BeLike 'derived: the management port ''Embedded NIC 1'' is in slot Embedded*'
+    }
+}
+
+# The toolkit clone these tests compare against: $env:AZL_TOOLKIT_ROOT, else azurelocal-toolkit next to this repository. Without it they are skipped.
+$ztpToolkitRoot = if ($env:AZL_TOOLKIT_ROOT) { $env:AZL_TOOLKIT_ROOT } else { Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) '..\azurelocal-toolkit' }
+$ztpHaveToolkit = Test-Path -LiteralPath (Join-Path $ztpToolkitRoot 'config\infrastructure\infrastructure.schema.json')
+Describe 'Every ZTP setting is a key of the master schema (schema 5.4)' {
+    BeforeAll {
+        $script:savedToolkitRoot54b = $env:AZL_TOOLKIT_ROOT
+        $env:AZL_TOOLKIT_ROOT = Join-Path $TestDrive 'no-toolkit-here'
+        $script:toolkitRoot = if ($script:savedToolkitRoot54b) { $script:savedToolkitRoot54b } else { Join-Path $script:repoRoot '..\azurelocal-toolkit' }
+        $script:toolkitSchema = Join-Path $script:toolkitRoot 'config\infrastructure\infrastructure.schema.json'
+        function Format-Bios { param($Bios) @($Bios.Keys | ForEach-Object { "$_=$($Bios[$_])" }) -join ',' }
+        function Get-AssertText { param([string]$Path) try { Assert-ZtpEnvironment -Environment (Read-ZtpInfrastructure -Path $Path) -Source 'infra.yml' -InformationAction SilentlyContinue; '' } catch { $_.Exception.Message } }
+        $script:newKeys = @(
+            'isolate_san_adapters', 'enable_embedded_nics', 'create_resource_group', 'configuration_name', 'managed_resource_group_name', 'apply_site_settings', 'use_key_vault_configuration',
+            'assign_provisioning_roles', 'assign_hci_rp_role', 'network_kind', 'ntp', 'site_mode', 'deployment_name', 'skip_azure_check', 'include_preview', 'max_train',
+            'retry_provision_os', 'usb_image', 'maintenance_environment', 'timeouts')
+    }
+
+    It 'has a schema key (toolkit 5.4) for every setting the reader copies' -Skip:(-not $ztpHaveToolkit) {
+        $schema = Get-Content -LiteralPath $script:toolkitSchema -Raw | ConvertFrom-Json -AsHashtable -Depth 100
+        $simplified = $schema.properties.provisioning.properties.simplified.properties
+        foreach ($k in $script:newKeys) { $simplified.Keys | Should -Contain $k -Because "provisioning.simplified.$k is read by ConvertFrom-ZtpInfrastructureV5" }
+        foreach ($k in 'account_name', 'keep') { $simplified.media_share.properties.Keys | Should -Contain $k }
+        $schema.'$defs'.bmc_credentials.properties.Keys | Should -Contain 'rfs_write_attribute'
+        $schema.'$defs'.bmc_credentials.properties.Keys | Should -Contain 'verify_certificate'
+        $schema.'$defs'.node_san.properties.hbas.items.properties.Keys | Should -Contain 'slot'
+        $schema.'$defs'.node_san.properties.hbas.items.properties.Keys | Should -Contain 'type'
+        # The schema's own timeouts are the ones the reader maps.
+        foreach ($k in 'bootstrap_minutes', 'bootstrap_voucher_minutes', 'bootstrap_stall_minutes', 'voucher_wait_minutes', 'device_minutes', 'ready_minutes', 'network_minutes', 'restore_settle_minutes', 'bios_minutes', 'poll_interval_seconds') {
+            $simplified.timeouts.properties.Keys | Should -Contain $k
+        }
+    }
+
+    It 'reads the toolkit''s own ZTP and full templates with no problems and carries their new settings through' -Skip:(-not $ztpHaveToolkit) {
+        $env:AZL_TOOLKIT_ROOT = $script:toolkitRoot   # validate with the toolkit's own module, as a real run does
+        foreach ($template in 'infrastructure.ztp.example.yml', 'infrastructure.example.yml') {
+            $path = Join-Path $script:toolkitRoot "config\infrastructure\$template"
+            $copy = Join-Path $TestDrive "tk-$template"
+            $data = ConvertFrom-Yaml (Get-Content -LiteralPath $path -Raw) -Ordered
+            $data.provisioning.simplified['media_path'] = Join-Path $TestDrive "tk-data-$template/media"
+            $data.provisioning.simplified['evidence_path'] = Join-Path $TestDrive "tk-data-$template/evidence"
+            Set-Content -LiteralPath $copy -Value (ConvertTo-Yaml $data)
+            $e = Read-ZtpInfrastructure -Path $copy
+            @($e._source.problems) | Should -BeNullOrEmpty -Because "the toolkit's $template validates (validator: $($e._source.validator))"
+            @(Test-ZtpEnvironment -Environment $e) | Should -BeNullOrEmpty
+            $e._source.validator | Should -BeLike 'azurelocal-toolkit*'
+        }
+        $e = Read-ZtpInfrastructure -Path (Join-Path $TestDrive 'tk-infrastructure.example.yml')
+        $env:AZL_TOOLKIT_ROOT = Join-Path $TestDrive 'no-toolkit-here'
+        $e.ztp.usb_image.size_gb | Should -Be 4
+        $e.ztp.maintenance_environment.port | Should -Be 20001
+        $e.ztp.timeouts.bootstrap_minutes | Should -Be 120
+        $e.ztp.configuration_name | Should -Be 'default'
+        $e.ztp.share_account_name | Should -Be 'svc-ztp-media'
+        $e.ztp.keep_share | Should -BeFalse
+        $e.ztp.rfs_write_attribute | Should -BeTrue
+        $e.ztp.verify_bmc_certificate | Should -BeFalse
+        $z = Read-ZtpInfrastructure -Path (Join-Path $TestDrive 'tk-infrastructure.ztp.example.yml')
+        $z.cluster_nodes[0].san.hbas[0].slot | Should -Be 'Slot 2'
+        ($z.cluster_nodes[0].network_adapters | Where-Object name -EQ 'Embedded NIC 1').slot | Should -Be 'Embedded'
+        Format-Bios (Get-ZtpEnvironmentBios -Environment $z -Node $z.cluster_nodes[0] -Kind boot) | Should -Be 'Slot2=Disabled,EmbNic1Nic2=Enabled' -Because 'the ZTP template writes no raw attribute at all'
+    }
+
+    AfterAll { $env:AZL_TOOLKIT_ROOT = $script:savedToolkitRoot54b }
+
+    It 'checks the new values and names the schema 5 key: a zero Bootstrap budget, a port out of range, a network kind that is not LAN or WLAN, a Manual time setting without a server' {
+        $file = New-TestInfrastructureV5 -Name 'v54-bad' -Edit { param($d)
+            $s = $d.provisioning.simplified
+            $s['timeouts'] = [ordered]@{ bootstrap_minutes = 0; ready_minutes = 5000 }
+            $s['maintenance_environment'] = [ordered]@{ port = 70000 }
+            $s['network_kind'] = 'WAN'
+            $s['ntp'] = [ordered]@{ configuration = 'Manual' }
+            $s['usb_image'] = [ordered]@{ size_gb = 1; name_prefix = 'bad prefix' }
+            $s['retry_provision_os'] = 'yes'
+            $s['configuration_name'] = '-bad'
+        }
+        $message = Get-AssertText $file
+        foreach ($expected in 'provisioning.simplified.timeouts.bootstrap_minutes must be a whole number from 1 to 1440', 'provisioning.simplified.timeouts.ready_minutes must be a whole number from 0 to 1440',
+            'provisioning.simplified.maintenance_environment.port must be a whole number from 1 to 65535', 'provisioning.simplified.network_kind must be LAN, WLAN', 'provisioning.simplified.ntp.server is required when provisioning.simplified.ntp.configuration is Manual',
+            'provisioning.simplified.usb_image.size_gb must be a whole number from 2 to 128', 'provisioning.simplified.usb_image.name_prefix ''bad prefix'' isn''t valid', 'provisioning.simplified.retry_provision_os must be true or false', 'provisioning.simplified.configuration_name ''-bad'' isn''t valid') {
+            $message | Should -BeLike "*$expected*"
+        }
+        $message | Should -Not -BeLike '*ztp.timeouts*' -Because 'messages use the schema 5 paths the operator wrote'
+    }
+
+    It 'accepts the defaults written out and gives the same settings as a file that leaves them out' {
+        $plain = & $script:read (New-TestInfrastructureV5 -Name 'v54-plain')
+        $full = & $script:read (New-TestInfrastructureV5 -Name 'v54-defaults' -Edit { param($d)
+                $d._metadata['schema_version'] = '5.4.0'
+                $d.provisioning.simplified['timeouts'] = [ordered]@{ bootstrap_minutes = 120; ready_minutes = 180; poll_interval_seconds = 60 }
+                $d.provisioning.simplified['network_kind'] = 'LAN'; $d.provisioning.simplified['retry_provision_os'] = $true
+                $d.provisioning.simplified['usb_image'] = [ordered]@{ size_gb = 4; name_prefix = 'ztp-usb-' }
+            })
+        @(Test-ZtpEnvironment -Environment $plain) | Should -BeNullOrEmpty
+        @(Test-ZtpEnvironment -Environment $full) | Should -BeNullOrEmpty
+        foreach ($k in 'timeouts.bootstrap_minutes', 'timeouts.ready_minutes', 'timeouts.poll_interval_seconds', 'usb_image.size_gb', 'usb_image.name_prefix', 'network_kind', 'retry_provision_os') {
+            $default = switch ($k) { 'timeouts.bootstrap_minutes' { 120 } 'timeouts.ready_minutes' { 180 } 'timeouts.poll_interval_seconds' { 60 } 'usb_image.size_gb' { 4 } 'usb_image.name_prefix' { 'ztp-usb-' } 'network_kind' { 'LAN' } 'retry_provision_os' { $true } }
+            (Get-ZtpSetting -Environment $plain -Path "ztp.$k" -Default $default) | Should -Be (Get-ZtpSetting -Environment $full -Path "ztp.$k" -Default $default) -Because $k
+        }
+    }
+}
+
+Describe 'Invoke-ZtpEnvironment.ps1 settings (schema 5.4)' {
+    BeforeAll {
+        $script:savedToolkitRoot54c = $env:AZL_TOOLKIT_ROOT
+        $env:AZL_TOOLKIT_ROOT = Join-Path $TestDrive 'no-toolkit-here'
+        function script:Invoke-Settings {
+            param([string]$Name, [scriptblock]$Edit, [string]$OemJson)
+            $root = if ($OemJson) { New-TestRepo -Name "set-$Name" -Copy 'Invoke-ZtpEnvironment.ps1', 'ZtpEnvironment.Common.ps1' -OemJson $OemJson } else { New-TestRepo -Name "set-$Name" -Copy 'Invoke-ZtpEnvironment.ps1', 'ZtpEnvironment.Common.ps1' }
+            $bin = Join-Path $root 'scripts/simplified-provisioning'
+            Set-Content -LiteralPath (Join-Path $bin 'Invoke-ZtpProvisioning.ps1') -Value '[CmdletBinding(SupportsShouldProcess)] param($ConfigPath, $NodeName, $BmcCredential, $EdgeUserPassword, $InfrastructureFile, $Node, $EventLogPath, $From, [switch]$ConfirmNotClustered, [switch]$SkipCertificateCheck, [switch]$RetryProvisionOs, [switch]$RebuildImages, [switch]$Execute)'
+            $infra = New-TestInfrastructureV5 -Name "set-$Name" -Edit $Edit
+            $null = & (Join-Path $bin 'Invoke-ZtpEnvironment.ps1') -InfrastructureFile $infra *>&1
+            [pscustomobject]@{
+                Config = Get-Content -LiteralPath (Join-Path $root 'config/simplified-provisioning/ztp-provisioning.json') -Raw | ConvertFrom-Json
+                Bicep  = (Get-Content -LiteralPath (Join-Path $bin 'bicep/main.parameters.json') -Raw | ConvertFrom-Json).parameters
+            }
+        }
+    }
+    AfterAll { $env:AZL_TOOLKIT_ROOT = $script:savedToolkitRoot54c }
+
+    It 'writes the values ZTP always used when the file sets none of the new keys' {
+        $r = Invoke-Settings -Name 'defaults'
+        $c = $r.Config
+        "$($c.VoucherWaitMinutes) $($c.BootstrapTimeoutMinutes) $($c.BootstrapVoucherTimeoutMinutes) $($c.BootstrapStallMinutes) $($c.ReadyTimeoutMinutes) $($c.PollIntervalSeconds) $($c.DeviceTimeoutMinutes) $($c.NetworkTimeoutMinutes) $($c.RestoreSettleMinutes) $($c.BiosTimeoutMinutes)" | Should -Be '120 120 90 20 180 60 30 60 5 30'
+        "$($c.ImageNamePrefix) $($c.ImageSizeGB) $($c.ShareAccountName) $($c.KeepShare) $($c.MaintenancePort) $($c.MaintenanceUser) $($c.IncludePreview) $($c.SkipAzureCheck) $($c.SiteMode)" | Should -Be 'ztp-usb- 4 svc-ztp-media False 20001 edgeuser False False Auto'
+        $c.DeploymentName | Should -Be 'ztp-example-site'
+        $c.SkipCertificateCheck | Should -BeTrue -Because 'BMCs ship self-signed certificates'
+        $c.RfsWriteAttribute | Should -BeTrue -Because 'an OEM definition with no rfsWriteAttribute keeps what ZTP always did'
+        $c.PSObject.Properties.Name | Should -Not -Contain 'MaxBootstrapTrain'
+        $b = $r.Bicep
+        "$($b.configuration_name.value) $($b.apply_site_settings.value) $($b.use_key_vault_configuration.value) $($b.assign_provisioning_roles.value) $($b.assign_hci_rp_role.value) '$($b.managed_resource_group_name.value)' $($b.network_kind.value) $($b.ntp_configuration_choice.value) '$($b.ntp_server.value)' '$($b.alternate_ntp_server.value)' $($b.connectivity_type.value)" | Should -Be "default True True True True '' LAN Automatic '' '' Public"
+    }
+
+    It 'carries every new setting from the file to the settings file and the Bicep parameters' {
+        $r = Invoke-Settings -Name 'custom' -Edit { param($d)
+            $s = $d.provisioning.simplified
+            $s['timeouts'] = [ordered]@{ bootstrap_minutes = 200; bootstrap_voucher_minutes = 100; bootstrap_stall_minutes = 40; voucher_wait_minutes = 150; device_minutes = 45; ready_minutes = 240; network_minutes = 90; restore_settle_minutes = 10; bios_minutes = 55; poll_interval_seconds = 30 }
+            $s['usb_image'] = [ordered]@{ size_gb = 8; name_prefix = 'lab-usb-' }
+            $s['maintenance_environment'] = [ordered]@{ port = 20011; username = 'lab-user' }
+            $s['media_share']['account_name'] = 'svc-lab'; $s['media_share']['keep'] = $true
+            $s['include_preview'] = $true; $s['max_train'] = '2609'; $s['skip_azure_check'] = $true; $s['site_mode'] = 'Reuse'; $s['deployment_name'] = 'ztp-lab'
+            $s['configuration_name'] = 'lab-config'; $s['managed_resource_group_name'] = 'rg-lab-managed'; $s['apply_site_settings'] = $false; $s['use_key_vault_configuration'] = $false
+            $s['assign_provisioning_roles'] = $false; $s['assign_hci_rp_role'] = $false; $s['network_kind'] = 'WLAN'
+            $s['ntp'] = [ordered]@{ configuration = 'Manual'; server = '192.0.2.30'; alternate_server = '192.0.2.31' }
+            $d.hardware.bmc['verify_certificate'] = $true; $d.hardware.bmc['rfs_write_attribute'] = $false
+        }
+        $c = $r.Config
+        "$($c.VoucherWaitMinutes) $($c.BootstrapTimeoutMinutes) $($c.BootstrapVoucherTimeoutMinutes) $($c.BootstrapStallMinutes) $($c.ReadyTimeoutMinutes) $($c.PollIntervalSeconds) $($c.DeviceTimeoutMinutes) $($c.NetworkTimeoutMinutes) $($c.RestoreSettleMinutes) $($c.BiosTimeoutMinutes)" | Should -Be '150 200 100 40 240 30 45 90 10 55'
+        "$($c.ImageNamePrefix) $($c.ImageSizeGB) $($c.ShareAccountName) $($c.KeepShare) $($c.MaintenancePort) $($c.MaintenanceUser) $($c.IncludePreview) $($c.MaxBootstrapTrain) $($c.SkipAzureCheck) $($c.SiteMode) $($c.DeploymentName)" | Should -Be 'lab-usb- 8 svc-lab True 20011 lab-user True 2609 True Reuse ztp-lab'
+        "$($c.SkipCertificateCheck) $($c.RfsWriteAttribute)" | Should -Be 'False False'
+        $b = $r.Bicep
+        "$($b.configuration_name.value) $($b.apply_site_settings.value) $($b.use_key_vault_configuration.value) $($b.assign_provisioning_roles.value) $($b.assign_hci_rp_role.value) $($b.managed_resource_group_name.value) $($b.network_kind.value) $($b.ntp_configuration_choice.value) $($b.ntp_server.value) $($b.alternate_ntp_server.value)" | Should -Be 'lab-config False False False False rg-lab-managed WLAN Manual 192.0.2.30 192.0.2.31'
+    }
+
+    It 'takes the Remote File Share attribute from the vendor definition unless the file says so' {
+        $dell = Get-Content -LiteralPath (Join-Path $script:oemRoot 'dell.json') -Raw
+        $hpe = Get-Content -LiteralPath (Join-Path $script:oemRoot 'hpe.json') -Raw
+        (Invoke-Settings -Name 'rfs-dell' -OemJson $dell -Edit { param($d) $d.hardware.vendor = 'Contoso' }).Config.RfsWriteAttribute | Should -BeTrue -Because 'the test repository''s Contoso file is the Dell one here'
+        (Invoke-Settings -Name 'rfs-hpe' -OemJson $hpe -Edit { param($d) $d.hardware.vendor = 'Contoso' }).Config.RfsWriteAttribute | Should -BeFalse -Because 'an iLO has no RFS.<n>.WriteProtected attribute'
+        (Invoke-Settings -Name 'rfs-hpe-own' -OemJson $hpe -Edit { param($d) $d.hardware.vendor = 'Contoso'; $d.hardware.bmc['rfs_write_attribute'] = $true }).Config.RfsWriteAttribute | Should -BeTrue
+    }
+
+    It 'has a Dell bios mapping and no guessed mapping for the other vendors' {
+        $dell = Get-Content -LiteralPath (Join-Path $script:oemRoot 'dell.json') -Raw | ConvertFrom-Json -AsHashtable
+        $dell.bios.slot_attribute | Should -Be 'Slot{n}'
+        "$($dell.bios.disabled) $($dell.bios.enabled) $($dell.bios.embedded_nic_attribute) $($dell.bios.embedded_enabled)" | Should -Be 'Disabled Enabled EmbNic1Nic2 Enabled'
+        foreach ($vendor in 'hpe', 'lenovo', 'supermicro') {
+            $json = Get-Content -LiteralPath (Join-Path $script:oemRoot "$vendor.json") -Raw | ConvertFrom-Json -AsHashtable
+            $json.Contains('bios') | Should -BeFalse -Because "$vendor has no verified slot mapping"
+            $json.bmc.rfsWriteAttribute | Should -BeFalse
+        }
+        (Read-ZtpOemFile -Vendor 'Dell').bios.embedded_nic_attribute | Should -Be 'EmbNic1Nic2'
+        Read-ZtpOemFile -Vendor 'NoSuchVendor' | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Invoke-ZtpEnvironment.ps1 -Execute honours the Azure and BMC settings (schema 5.4)' {
+    BeforeAll {
+        $script:savedToolkitRoot54d = $env:AZL_TOOLKIT_ROOT
+        $env:AZL_TOOLKIT_ROOT = Join-Path $TestDrive 'no-toolkit-here'
+        function script:Invoke-ExecuteCase {
+            param([string]$Name, [scriptblock]$Edit)
+            $root = New-TestRepo -Name "exec-$Name" -Copy 'Invoke-ZtpEnvironment.ps1', 'ZtpEnvironment.Common.ps1'
+            $bin = Join-Path $root 'scripts/simplified-provisioning'
+            Set-Content -LiteralPath (Join-Path $bin 'Invoke-ZtpProvisioning.ps1') -Value @'
+[CmdletBinding(SupportsShouldProcess)]
+param($ConfigPath, $NodeName, $BmcCredential, $EdgeUserPassword, $InfrastructureFile, $Node, $EventLogPath, $From, [switch]$ConfirmNotClustered, [switch]$SkipCertificateCheck, [switch]$RetryProvisionOs, [switch]$RebuildImages, [switch]$Execute)
+$bound = @{}; foreach ($k in $PSBoundParameters.Keys) { $bound[$k] = $PSBoundParameters[$k] }
+$global:ztpE_runs.Add([pscustomobject]@{ Script = 'Invoke-ZtpProvisioning.ps1'; Params = $bound })
+'@
+            $global:ztpE_calls.Clear(); $global:ztpE_runs.Clear()
+            $infra = New-TestInfrastructureV5 -Name "exec-$Name" -Edit $Edit
+            $thrown = try { $null = & (Join-Path $bin 'Invoke-ZtpEnvironment.ps1') -InfrastructureFile $infra -Node node-01 -Execute *>&1; '' } catch { $_.Exception.Message }
+            $thrown
+        }
+    }
+    AfterAll { $env:AZL_TOOLKIT_ROOT = $script:savedToolkitRoot54d }
+
+    It 'creates the resource group by default' {
+        Invoke-ExecuteCase -Name 'rg-default' | Should -Be ''
+        $global:ztpE_calls | Should -Contain 'New-AzResourceGroup rg-example'
+    }
+
+    It 'stops, creating nothing, when create_resource_group is false and the group is missing' {
+        $thrown = Invoke-ExecuteCase -Name 'rg-off' -Edit { param($d) $d.provisioning.simplified['create_resource_group'] = $false }
+        $thrown | Should -BeLike '*Resource group rg-example doesn''t exist, and provisioning.simplified.create_resource_group is false*'
+        $global:ztpE_calls | Should -Not -Contain 'New-AzResourceGroup rg-example'
+        $global:ztpE_runs.Count | Should -Be 0
+    }
+
+    It 'passes the certificate check and the retry choice to the stages: self-signed accepted and one retry by default, as always' {
+        Invoke-ExecuteCase -Name 'flags-default' | Should -Be ''
+        $run = $global:ztpE_runs[0].Params
+        $run['SkipCertificateCheck'] | Should -BeTrue
+        $run['RetryProvisionOs'] | Should -BeTrue
+        Invoke-ExecuteCase -Name 'flags-own' -Edit { param($d) $d.hardware.bmc['verify_certificate'] = $true; $d.provisioning.simplified['retry_provision_os'] = $false } | Should -Be ''
+        $run = $global:ztpE_runs[0].Params
+        $run['SkipCertificateCheck'] | Should -BeFalse
+        $run['RetryProvisionOs'] | Should -BeFalse
+    }
+}

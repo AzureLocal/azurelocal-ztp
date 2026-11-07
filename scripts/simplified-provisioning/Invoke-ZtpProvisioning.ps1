@@ -166,7 +166,17 @@ machine reads Connected for a while after its host went down). The check then ne
 LastStatusChange after the restart (Test-ProvisionedMachines.ps1 -ConnectedSince), repeated every -PollIntervalSeconds for up to
 -ReadyTimeoutMinutes.
 .PARAMETER BiosTimeoutMinutes
-Restore: how long to wait for a node's BIOS to report the restored values after the restart.
+Boot and Restore: how long to wait for a node's BIOS to report the new values after the restart.
+.PARAMETER BootstrapStallMinutes
+Bootstrap: how long the BMC may show no change before the watch reports a stall (default: the stage script's 20).
+.PARAMETER ImageSizeGB
+Media: size of each virtual USB image in GiB (0 = the stage script's 4).
+.PARAMETER ShareAccountName
+Boot and Vouchers: the local account the BMCs sign in to the share with (default: the stage script's svc-ztp-media).
+.PARAMETER MaintenancePort
+Device: TCP port of the maintenance environment's Configurator service (0 = the stage script's 20001).
+.PARAMETER MaintenanceUser
+Device: the Configurator service's user name (default: the stage script's edgeuser).
 .PARAMETER StatePath
 Run state file (default ./ztp-provisioning.state.json).
 .PARAMETER ResetState
@@ -232,6 +242,11 @@ param(
     [switch]$ApplyThroughAzure,
     [ValidateRange(0, 120)][int]$RestoreSettleMinutes = 5,
     [ValidateRange(1, 240)][int]$BiosTimeoutMinutes = 30,
+    [ValidateRange(0, 240)][int]$BootstrapStallMinutes = 0,
+    [ValidateRange(0, 128)][int]$ImageSizeGB = 0,
+    [ValidatePattern('^$|^[A-Za-z0-9][A-Za-z0-9_-]{0,19}$')][string]$ShareAccountName,
+    [ValidateRange(0, 65535)][int]$MaintenancePort = 0,
+    [string]$MaintenanceUser,
     [string]$StatePath = (Join-Path (Get-Location) 'ztp-provisioning.state.json'),
     [switch]$ResetState,
     [string]$StageScriptRoot = $PSScriptRoot,
@@ -255,7 +270,7 @@ $settable = @('BootstrapCacheDirectory', 'BootstrapVersion', 'IncludePreview', '
     'EventLogPath', 'BootstrapTimeoutMinutes', 'BootstrapVoucherTimeoutMinutes', 'SkipAzureCheck', 'Location', 'HandoffPath', 'ClusterInputsPath',
     'NodesFile', 'NodeName', 'SourcePath', 'ImageDirectory', 'ImageNamePrefix', 'ShareHost', 'ShareName', 'VoucherDirectory',
     'VoucherFolder', 'VoucherWaitMinutes', 'RfsWriteAttribute', 'SkipCertificateCheck', 'KeepShare', 'SubscriptionId', 'ResourceGroupName',
-    'ParameterFile', 'OsVersion', 'SiteMode', 'DeploymentName', 'ArcMachineNameMapPath', 'ReadyTimeoutMinutes', 'PollIntervalSeconds', 'DeviceTimeoutMinutes', 'NetworkTimeoutMinutes', 'ApplyThroughAzure', 'RestoreSettleMinutes', 'BiosTimeoutMinutes', 'StatePath')
+    'ParameterFile', 'OsVersion', 'SiteMode', 'DeploymentName', 'ArcMachineNameMapPath', 'ReadyTimeoutMinutes', 'PollIntervalSeconds', 'DeviceTimeoutMinutes', 'NetworkTimeoutMinutes', 'ApplyThroughAzure', 'RestoreSettleMinutes', 'BiosTimeoutMinutes', 'BootstrapStallMinutes', 'ImageSizeGB', 'ShareAccountName', 'MaintenancePort', 'MaintenanceUser', 'StatePath')
 # Settings of the SBE selection ZTP no longer does: an older settings file may still carry them.
 $retired = @('SbeModel', 'SbeFamily', 'SbeSolutionVersion', 'SbePackagePath')
 if ($ConfigPath) {
@@ -371,6 +386,7 @@ function Get-ZtpStageCall {
                 if ($baseline.ResetAt.Count) { $p.ResetAt = $baseline.ResetAt }
                 if ($baseline.ImageEmptyAtBuild.Count) { $p.ImageEmptyAtBuild = $baseline.ImageEmptyAtBuild }
             }
+            if ($BootstrapStallMinutes) { $p.StallMinutes = $BootstrapStallMinutes }
             if ($RfsWriteAttribute) { $p.RfsWriteAttribute = $true }
             if ($SkipCertificateCheck) { $p.SkipCertificateCheck = $true }
             if ($SkipAzureCheck) { $p.SkipAzureCheck = $true } else { $p.SubscriptionId = $SubscriptionId; $p.Location = $Location }
@@ -380,6 +396,8 @@ function Get-ZtpStageCall {
         'Device' {
             $p = [ordered]@{ ParameterFile = $ParameterFile; NodesFile = $NodesFile; Node = $NodeName; TimeoutMinutes = $DeviceTimeoutMinutes; PollIntervalSeconds = $PollIntervalSeconds; EventLogPath = $EventLogPath }
             if ($EdgeUserPassword) { $p.EdgeUserPassword = $EdgeUserPassword }
+            if ($MaintenancePort) { $p.Port = $MaintenancePort }
+            if ($MaintenanceUser) { $p.UserName = $MaintenanceUser }
             # Device changes are evidence: they go beside the event log, as the BIOS and adapter changes do.
             if ($EventLogPath) { $p.ChangeLogPath = Join-Path (Split-Path -Parent ([IO.Path]::GetFullPath($EventLogPath))) 'device-changes.jsonl' }
             & $act $p
@@ -419,6 +437,7 @@ function Get-ZtpStageCall {
         }
         'Media' {
             $p = [ordered]@{ SourcePath = $SourcePath; NodeName = $NodeName; OutputDirectory = $ImageDirectory; ImageNamePrefix = $ImageNamePrefix }
+            if ($ImageSizeGB) { $p.SizeBytes = [long]$ImageSizeGB * 1GB }
             if ($EdgeUserPassword) { $p.EdgeUserPassword = $EdgeUserPassword }
             if ($RebuildImages) { $p.Force = $true }
             & $act $p
@@ -427,6 +446,8 @@ function Get-ZtpStageCall {
         'Boot' {
             $p = [ordered]@{ ImageDirectory = $ImageDirectory; ImageNamePrefix = $ImageNamePrefix; ShareName = $ShareName; ShareHost = $ShareHost; NodeName = $NodeName; NodesFile = $NodesFile; Restart = [bool]$ConfirmNotClustered; ConfirmNotClustered = [bool]$ConfirmNotClustered }
             if ($BmcCredential) { $p.Credential = $BmcCredential }
+            if ($ShareAccountName) { $p.AccountName = $ShareAccountName }
+            if ($BiosTimeoutMinutes -ne 30) { $p.BiosTimeoutMinutes = $BiosTimeoutMinutes }   # 30 is the stage script's own default
             if ($RfsWriteAttribute) { $p.RfsWriteAttribute = $true }
             if ($SkipCertificateCheck) { $p.SkipCertificateCheck = $true }
             # BIOS changes are evidence: they go beside the event log.
@@ -456,6 +477,7 @@ function Get-ZtpStageCall {
                     $calls.Add([pscustomobject]@{ Script = 'Mount-ZtpVirtualUsb.ps1'; Parameters = $e })
                 }
                 $r = [ordered]@{ Remove = $true; ShareName = $ShareName; SharePath = $ImageDirectory }
+                if ($ShareAccountName) { $r.AccountName = $ShareAccountName }
                 & $act $r
                 $calls.Add([pscustomobject]@{ Script = 'Publish-MaintenanceIso.ps1'; Parameters = $r })
             }

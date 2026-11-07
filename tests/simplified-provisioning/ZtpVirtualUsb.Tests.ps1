@@ -597,3 +597,31 @@ Describe 'BMC account guard' {
         @($global:usbAddresses) | Should -Be @('192.0.2.50', '198.51.100.12')
     }
 }
+
+Describe 'Mount-ZtpVirtualUsb.ps1 on a BMC of another make' {
+    BeforeEach {
+        $global:usbCalls.Clear(); $global:usbSlot = $null; $global:usbPower = 'On'; $global:usbReportProtection = $true; $global:usbForceProtected = $false
+        Mock Start-Sleep {}
+    }
+
+    It 'skips the iDRAC Lclog check, with a warning, when the BMC has no such log service, and still restarts the node' {
+        $originalManager = ${function:global:Get-ZtpRedfishManager}
+        $originalRedfish = ${function:global:Invoke-ZtpRedfish}
+        try {
+            function global:Get-ZtpRedfishManager { param($Session, [string]$ManagerId) [pscustomobject]@{ '@odata.id' = '/manager'; LogServices = [pscustomobject]@{ '@odata.id' = '/manager/LogServices' } } }
+            function global:Invoke-ZtpRedfish {
+                param($Session, [string]$Path, [string]$Method = 'Get', [hashtable]$Body, [int]$MaxAttempts)
+                if ($Path -like '*LogServices/Lclog*') { throw "Redfish Get $Path on 198.51.100.11 failed with HTTP 404" }
+                & $originalRedfish -Session $Session -Path $Path -Method $Method -Body $Body
+            }
+            $row = @(& $script:mountUsb -Nodes $script:nodes -Credential $script:bmcCredential -NodeName node-01 -ShareHost 192.0.2.10 -Restart -ConfirmNotClustered -Execute -Confirm:$false -WarningVariable lclogWarning -WarningAction SilentlyContinue)[-1]
+        }
+        finally {
+            Set-Item -Path Function:global:Get-ZtpRedfishManager -Value $originalManager
+            Set-Item -Path Function:global:Invoke-ZtpRedfish -Value $originalRedfish
+        }
+        $row.Action | Should -BeLike 'Mounted+*'
+        ($lclogWarning -join ' ') | Should -BeLike '*the BMC has no Lclog log service*the check that the installed OS did not boot is skipped*'
+        ($global:usbCalls | Where-Object { $_ -isnot [string] -and $_.Path -like '*ComputerSystem.Reset' }).Body.ResetType | Should -Be 'ForceRestart'
+    }
+}

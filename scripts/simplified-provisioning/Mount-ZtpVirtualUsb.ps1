@@ -278,7 +278,13 @@ foreach ($target in $targets) {
                 $watchUntil = $resetAt.AddMinutes(10)
                 while ([datetime]::UtcNow -lt $watchUntil) {
                     Start-Sleep -Seconds 20
-                    $entries = Invoke-ZtpRedfish -Session $session -Path "$($manager.'@odata.id')/LogServices/Lclog/Entries?`$top=25"
+                    # Lclog is the iDRAC Lifecycle log. A BMC of another make has no such log service: say so once and skip the check
+                    # (the watch of the Bootstrap stage still sees a node that booted its installed OS).
+                    try { $entries = Invoke-ZtpRedfish -Session $session -Path "$($manager.'@odata.id')/LogServices/Lclog/Entries?`$top=25" }
+                    catch {
+                        Write-Warning "$($node): the BMC has no Lclog log service ($($_.Exception.Message)); the check that the installed OS did not boot is skipped."
+                        break
+                    }
                     if (-not $entries -or -not $entries.PSObject.Properties['Members']) { break }
                     $diskBoot = @($entries.Members | Where-Object { [string]$_.MessageId -like '*OSE1002' -and ([datetime]$_.Created).ToUniversalTime() -gt $resetAt })
                     if ($diskBoot) { throw "$($node): booted its installed OS ($($diskBoot[0].Message)) instead of the virtual USB image. The one-time boot didn't take." }

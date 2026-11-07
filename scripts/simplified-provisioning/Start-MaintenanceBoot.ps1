@@ -59,6 +59,7 @@ param(
     [Parameter(Mandatory)][string]$ImageDirectory,
     [ValidatePattern('^[A-Za-z0-9._-]{0,40}$')][string]$ImageNamePrefix = 'ztp-usb-',
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9-]{0,79}$')][string]$ShareName = 'ztp-virtual-usb',
+    [ValidatePattern('^$|^[A-Za-z0-9][A-Za-z0-9_-]{0,19}$')][string]$AccountName,
     [switch]$ReadOnlyMedia,
     [switch]$RfsWriteAttribute,
     [Parameter(Mandatory)][string]$ShareHost,
@@ -93,6 +94,7 @@ $absent = @($images | Where-Object { -not (Test-Path -LiteralPath $_) })
 if ($absent.Count -gt 0) { throw "Build the images first (New-ZtpVirtualUsbImage.ps1 -NodeName ... -OutputDirectory $ImageDirectory): $($absent -join ', ')" }
 
 $publishArgs = @{ IsoPath = $images; SharePath = $ImageDirectory; ShareName = $ShareName; ShareHost = $ShareHost; AllowedBmcAddress = $bmcs; ReadWrite = (-not $ReadOnlyMedia) }
+if ($AccountName) { $publishArgs.AccountName = $AccountName }
 $usbArgs = @{
     ShareHost = $ShareHost; ShareName = $ShareName; ImageNamePrefix = $ImageNamePrefix; ReadOnly = $ReadOnlyMedia
     RfsWriteAttribute = $RfsWriteAttribute; Restart = $Restart; ConfirmNotClustered = $ConfirmNotClustered; SkipCertificateCheck = $SkipCertificateCheck
@@ -103,7 +105,11 @@ elseif ($Nodes) { $usbArgs.Nodes = $Nodes }
 # BIOS attributes per node, from the node list (Invoke-ZtpEnvironment.ps1 writes hardware.bios merged with each node's).
 $listed = if ($Nodes) { @($Nodes) } elseif ($NodesFile) { @(Import-ZtpNodeFile -Path $NodesFile) } else { @() }
 $biosByNode = @{}
-foreach ($node in $NodeName) { $s = Get-ZtpNodeBiosSetting -NodeName $node -Nodes $listed; if ($s.Count) { $biosByNode[$node] = $s } }
+$reasonByNode = @{}
+foreach ($node in $NodeName) {
+    $s = Get-ZtpNodeBiosSetting -NodeName $node -Nodes $listed
+    if ($s.Count) { $biosByNode[$node] = $s; $reasonByNode[$node] = Get-ZtpNodeBiosReason -NodeName $node -Nodes $listed }
+}
 $setBios = Join-Path $PSScriptRoot 'Set-ZtpBios.ps1'
 $biosArgs = @{ ConfirmNotClustered = $ConfirmNotClustered; SkipCertificateCheck = $SkipCertificateCheck; TimeoutMinutes = $BiosTimeoutMinutes }
 if ($BiosLogPath) { $biosArgs.ChangeLogPath = $BiosLogPath }
@@ -114,6 +120,7 @@ if (-not $Execute) {
         if (-not $biosByNode.ContainsKey($node)) { continue }
         $address = @($targets | Where-Object Node -EQ $node)[0].Address
         $plan = @{ NodeName = $node; BmcAddress = $address; Attributes = $biosByNode[$node]; SkipCertificateCheck = $SkipCertificateCheck }
+        if ($reasonByNode[$node].Count) { $plan.Reason = $reasonByNode[$node] }
         if ($Credential) { $plan.Credential = $Credential }
         & $setBios @plan
     }
@@ -121,6 +128,14 @@ if (-not $Execute) {
     return
 }
 if ($biosByNode.Count -and -not $Restart) { throw 'BIOS settings are applied with a restart: pass -Restart (and -ConfirmNotClustered) with -Execute.' }
+# Before anything changes on any node: read every node's BIOS and stop on an attribute its BMC doesn't have (a slot that isn't in
+# that machine, a misspelt name), so one wrong node can't leave the others already changed and restarted.
+foreach ($node in @($NodeName | Where-Object { $biosByNode.ContainsKey($_) })) {
+    $address = @($targets | Where-Object Node -EQ $node)[0].Address
+    $read = @{ NodeName = $node; BmcAddress = $address; Attributes = $biosByNode[$node]; Credential = $Credential; SkipCertificateCheck = $SkipCertificateCheck }
+    if ($reasonByNode[$node].Count) { $read.Reason = $reasonByNode[$node] }
+    $null = & $setBios @read
+}
 if (-not $PSCmdlet.ShouldProcess(($NodeName -join ', '), "Boot the maintenance virtual USB; restart: $([bool]$Restart)")) { return }
 $share = & $publish @publishArgs -Execute -Confirm:$false
 # All machines boot at once: each gets its own worker, which mounts, restarts and watches its own BMC. A failure on one
@@ -136,6 +151,8 @@ $booted = @($NodeName | ForEach-Object -ThrottleLimit ([Math]::Max(1, @($NodeNam
             if ($settings) {
                 $b = ([hashtable]$using:biosArgs).Clone()
                 $target = @(([object[]]$using:targets) | Where-Object Node -EQ $node)[0]
+                $why = ([hashtable]$using:reasonByNode)[$node]
+                if ($why -and $why.Count) { $b.Reason = $why }
                 $result = @(& $using:setBios @b -NodeName $node -BmcAddress $target.Address -Attributes $settings -Credential $using:Credential -Execute -Confirm:$false) | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties['Changes'] } | Select-Object -Last 1
                 if ($result) { $bios = @($result.Changes); if ($result.PSObject.Properties['Original']) { $original = $result.Original } }
             }

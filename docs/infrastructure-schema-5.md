@@ -2,7 +2,7 @@
 
 > How `Invoke-ZtpEnvironment.ps1` reads the master `infrastructure.yml`, the one environment file every Azure Local tool reads, and where each of its keys goes.
 
-The master file and its schema live in [azurelocal-toolkit](https://github.com/AzureLocal/azurelocal-toolkit/tree/main/config/infrastructure): `infrastructure.schema.json`, the examples (`examples/lom-management-ztp.yml` is a simplified-provisioning example with every port listed) and `README.md`, which describes every key. ZTP reads schema 5.x. Schema 5.2 adds the keys ZTP needs for each machine's ports, BIOS and run folders; schema 5.3 adds `bios_during_provisioning`, `networking.management.static_method` and `provisioning_dhcp_range`, `nodes[].maintenance_address`, `provisioning.simplified.maintenance_password` and `_metadata.scope`.
+The master file and its schema live in [azurelocal-toolkit](https://github.com/AzureLocal/azurelocal-toolkit/tree/main/config/infrastructure): `infrastructure.schema.json`, the examples (`examples/lom-management-ztp.yml` is a simplified-provisioning example with every port listed) and `README.md`, which describes every key. ZTP reads schema 5.x. Schema 5.2 adds the keys ZTP needs for each machine's ports, BIOS and run folders; schema 5.3 adds `bios_during_provisioning`, `networking.management.static_method` and `provisioning_dhcp_range`, `nodes[].maintenance_address`, `provisioning.simplified.maintenance_password` and `_metadata.scope`; schema 5.4 puts every other ZTP setting in the master file (see [Every setting is a key](#every-setting-is-a-key-schema-54)).
 
 ## The two templates
 
@@ -58,6 +58,10 @@ The older [environment-file layout](environment-file.md) still works and is depr
 | Vendor | `hardware.vendor` (picks `config/oem/<vendor>.json`, the BMC layer) |
 | Resource provider object ID | `azure.hci_resource_provider_object_id` |
 | Tags | `tags` |
+| BIOS actions derived from the inventory (5.4) | `nodes[].san.hbas[].slot` and `type`, `nodes[].network_adapters[].slot`, `provisioning.simplified.isolate_san_adapters`, `enable_embedded_nics`. See [Hardware-aware BIOS actions](#hardware-aware-bios-actions-schema-54). |
+| Azure site choices (5.4) | `provisioning.simplified.create_resource_group`, `configuration_name`, `managed_resource_group_name`, `apply_site_settings`, `use_key_vault_configuration`, `assign_provisioning_roles`, `assign_hci_rp_role`, `network_kind`, `ntp`, `site_mode`, `deployment_name` |
+| Stage budgets, retries, USB image, Configurator service (5.4) | `provisioning.simplified.timeouts.*`, `retry_provision_os`, `skip_azure_check`, `include_preview`, `max_train`, `usb_image`, `maintenance_environment`, `media_share.account_name`, `media_share.keep` |
+| BMC behaviour (5.4) | `hardware.bmc.rfs_write_attribute` (default: true for Dell, false for the other vendors), `hardware.bmc.verify_certificate` (default false) |
 
 Limits of the mapping, which the check names: ZTP reads every secret in the provisioning administrator vault's subscription, and uses one BMC login for every node (`hardware.bmc`; a node's own `bmc` login must be the same).
 
@@ -86,6 +90,30 @@ These keys belong to OS configuration and deployment. ZTP doesn't map them, does
 **The maintenance environment.** It reaches Azure through a port with role `provisioning`, before the machine is claimed, and takes DHCP there (`provisioning_network: dhcp`). On a machine whose management network has no DHCP, mark data ports that do get DHCP as `provisioning`, as `lom-management-ztp.yml` does. A static address in the maintenance environment (`provisioning_network: static`) is a warning: Learn documents only the Configurator app for it, and whether the USB image can carry a preset address is an open research item.
 
 **The other ports.** ZTP doesn't touch them. Turning DHCP off on them and disabling unused adapters is OS configuration ([Phase 03 OS Configuration](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/)).
+
+## Hardware-aware BIOS actions (schema 5.4)
+
+`hardware.bios` and `hardware.bios_during_provisioning` are raw vendor attribute names (`Slot2: Disabled`); only someone who knows Dell's names can fill them in. From schema 5.4 ZTP derives the two actions that need them from the inventory, and the raw maps stay as explicit overrides.
+
+| The file says | ZTP does | Switch (default) |
+| --- | --- | --- |
+| `nodes[].san.hbas[].slot: "Slot 2"` | Turns that PCIe slot off in the BIOS for the install (so the maintenance environment can't install onto a SAN LUN) and on again in the Restore stage. | `provisioning.simplified.isolate_san_adapters` (true when any node lists `san.hbas`, else false) |
+| A `management` or `provisioning` port with `slot: Embedded` | Makes sure the embedded NICs are enabled, and leaves them so (Dell ships them as `DisabledOs`). | `provisioning.simplified.enable_embedded_nics` (true) |
+
+The slot label to attribute mapping is data, in `config/oem/<vendor>.json`, section `bios`: `slot_attribute` (`Slot{n}`), `disabled`, `enabled`, `embedded_nic_attribute`, `embedded_enabled`. Only Dell has one (validated on an AX-760). For a vendor without it ZTP says so and asks for the raw attribute in `hardware.bios_during_provisioning`; it never guesses a name. To add a vendor, add its `bios` section.
+
+Precedence: an explicit key (in `hardware.bios`, `nodes[].bios` or the `bios_during_provisioning` twins) always wins over a derived one. The plan output prints each decision with its reason:
+
+```
+PLAN: node-01 BIOS Slot2 Disabled for the install because nodes[0].san.hbas[0] is in Slot 2 (the Restore stage sets it back to Enabled)
+PLAN: node-01 BIOS EmbNic1Nic2 Enabled because the management port 'Embedded NIC 1' of nodes[0] is in slot Embedded (the OS can't see disabled embedded NICs)
+```
+
+Everything that can be wrong is found before ZTP touches a machine: a slot label that is not `Slot <n>`, a slot that also holds a network port, a vendor with no mapping and no raw map. A slot the BMC's BIOS doesn't have is found by the Boot stage, which reads every node's BIOS first and stops before it changes any of them, saying why it looked for that attribute.
+
+## Every setting is a key (schema 5.4)
+
+The master file holds every setting ZTP reads; ZTP keeps no key of its own. Each new key has the value ZTP used before it existed as its default, so a file without them behaves as it always did. [`variables-audit.md`](variables-audit.md) lists every action, threshold and literal in the stages with the key that controls it, and the few that stay fixed with the reason.
 
 ## Open items
 

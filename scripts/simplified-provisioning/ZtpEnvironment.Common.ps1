@@ -42,6 +42,14 @@ The keys Invoke-ZtpEnvironment.ps1 reads:
     ztp.bmc_secret.vault, .username_name, .password_name
     ztp.maintenance_password_secret (optional keyvault://<vault>/<secret>)
     ztp.tags (optional mapping), ztp.azl_rp_object_id (optional GUID)
+    Optional, each with the default ZTP always used (schema 5.4 names them provisioning.simplified.*): ztp.isolate_san_adapters,
+    ztp.enable_embedded_nics (BIOS actions derived from the inventory: see Get-ZtpDerivedBios), ztp.create_resource_group, ztp.configuration_name,
+    ztp.managed_resource_group_name, ztp.apply_site_settings, ztp.use_key_vault_configuration, ztp.assign_provisioning_roles,
+    ztp.assign_hci_rp_role, ztp.network_kind, ztp.ntp.{configuration,server,alternate_server}, ztp.site_mode, ztp.deployment_name,
+    ztp.skip_azure_check, ztp.include_preview, ztp.max_train, ztp.retry_provision_os, ztp.keep_share, ztp.share_account_name,
+    ztp.usb_image.{size_gb,name_prefix}, ztp.maintenance_environment.{port,username}, ztp.timeouts.*, ztp.rfs_write_attribute,
+    ztp.verify_bmc_certificate. cluster_nodes[].san.hbas[].{slot,type} and cluster_nodes[].network_adapters[].slot feed the
+    derived BIOS plan.
     ztp.media_path      downloads, images, vouchers and run state  (default %ProgramData%\AzureLocalZtp\<site_name>\media)
     ztp.evidence_path   the event log, change logs and run logs    (default %ProgramData%\AzureLocalZtp\<site_name>\evidence)
     Neither may be inside a git working tree: Resolve-ZtpDataPath refuses one, and creates the folder.
@@ -138,6 +146,50 @@ function Test-ZtpEnvironment {
     & $checkBios (Get-ZtpEnvValue -Environment $Environment -Path 'hardware.bios') 'hardware.bios'
     & $checkBios (Get-ZtpEnvValue -Environment $Environment -Path 'hardware.bios_during_provisioning') 'hardware.bios_during_provisioning'
 
+    # The optional settings (schema 5.4): a wrong type or a value out of range is named before anything runs.
+    foreach ($k in 'isolate_san_adapters', 'enable_embedded_nics', 'create_resource_group', 'apply_site_settings', 'use_key_vault_configuration', 'assign_provisioning_roles', 'assign_hci_rp_role', 'skip_azure_check', 'include_preview', 'retry_provision_os', 'keep_share', 'rfs_write_attribute', 'verify_bmc_certificate') {
+        $v = Get-ZtpEnvValue -Environment $Environment -Path "ztp.$k"
+        if ($null -ne $v -and $v -isnot [bool]) { $problems.Add("ztp.$k must be true or false, not '$v'.") }
+    }
+    foreach ($spec in @(
+            @{ Path = 'ztp.network_kind'; Values = 'LAN', 'WLAN' }
+            @{ Path = 'ztp.site_mode'; Values = 'Auto', 'Create', 'Reuse' }
+            @{ Path = 'ztp.ntp.configuration'; Values = 'Automatic', 'Manual' })) {
+        $v = Get-ZtpEnvValue -Environment $Environment -Path $spec.Path
+        if ($null -ne $v -and "$v" -ne '' -and [string]$v -cnotin $spec.Values) { $problems.Add("$($spec.Path) must be $($spec.Values -join ', ') (case matters), not '$v'.") }
+    }
+    foreach ($spec in @(
+            @{ Path = 'ztp.configuration_name'; Pattern = '^[A-Za-z0-9][A-Za-z0-9-]{0,62}$' }
+            @{ Path = 'ztp.managed_resource_group_name'; Pattern = '^$|^[A-Za-z0-9._()-]{1,89}[A-Za-z0-9_()-]$' }
+            @{ Path = 'ztp.deployment_name'; Pattern = '^[A-Za-z0-9._()-]{1,64}$' }
+            @{ Path = 'ztp.share_account_name'; Pattern = '^[A-Za-z0-9][A-Za-z0-9_-]{0,19}$' }
+            @{ Path = 'ztp.usb_image.name_prefix'; Pattern = '^[A-Za-z0-9._-]{0,40}$' }
+            @{ Path = 'ztp.max_train'; Pattern = '^$|^[0-9]{4}$' })) {
+        $v = Get-ZtpEnvValue -Environment $Environment -Path $spec.Path
+        if ($null -ne $v -and ($v -isnot [string] -and $v -isnot [int] -or [string]$v -notmatch $spec.Pattern)) { $problems.Add("$($spec.Path) '$v' isn't valid (pattern $($spec.Pattern)).") }
+    }
+    foreach ($spec in @(
+            @{ Path = 'ztp.usb_image.size_gb'; Min = 2; Max = 128 }
+            @{ Path = 'ztp.maintenance_environment.port'; Min = 1; Max = 65535 }
+            @{ Path = 'ztp.timeouts.bootstrap_minutes'; Min = 1; Max = 1440 }
+            @{ Path = 'ztp.timeouts.bootstrap_voucher_minutes'; Min = 1; Max = 1440 }
+            @{ Path = 'ztp.timeouts.bootstrap_stall_minutes'; Min = 1; Max = 240 }
+            @{ Path = 'ztp.timeouts.voucher_wait_minutes'; Min = 0; Max = 1440 }
+            @{ Path = 'ztp.timeouts.device_minutes'; Min = 0; Max = 1440 }
+            @{ Path = 'ztp.timeouts.ready_minutes'; Min = 0; Max = 1440 }
+            @{ Path = 'ztp.timeouts.network_minutes'; Min = 0; Max = 1440 }
+            @{ Path = 'ztp.timeouts.restore_settle_minutes'; Min = 0; Max = 120 }
+            @{ Path = 'ztp.timeouts.bios_minutes'; Min = 1; Max = 240 }
+            @{ Path = 'ztp.timeouts.poll_interval_seconds'; Min = 0; Max = 3600 })) {
+        $v = Get-ZtpEnvValue -Environment $Environment -Path $spec.Path
+        $number = 0
+        if ($null -ne $v -and ($v -is [bool] -or -not [int]::TryParse([string]$v, [ref]$number) -or $number -lt $spec.Min -or $number -gt $spec.Max)) { $problems.Add("$($spec.Path) must be a whole number from $($spec.Min) to $($spec.Max), not '$v'.") }
+    }
+    $maintenanceUser = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.maintenance_environment.username'
+    if ($null -ne $maintenanceUser -and -not (& $isText $maintenanceUser)) { $problems.Add('ztp.maintenance_environment.username must be a single value.') }
+    $ntpMode = [string](Get-ZtpEnvValue -Environment $Environment -Path 'ztp.ntp.configuration')
+    if ($ntpMode -eq 'Manual' -and -not (Get-ZtpEnvValue -Environment $Environment -Path 'ztp.ntp.server')) { $problems.Add('ztp.ntp.server is required when ztp.ntp.configuration is Manual.') }
+
     $nodes = Get-ZtpEnvValue -Environment $Environment -Path 'cluster_nodes'
     if ($nodes -isnot [System.Collections.IList] -or @($nodes).Count -eq 0) { $problems.Add('cluster_nodes is required: a list with one entry per node.') }
     else {
@@ -165,6 +217,9 @@ function Test-ZtpEnvironment {
             & $checkBios (Get-ZtpEnvValue -Environment $n -Path 'bios_during_provisioning') "$label.bios_during_provisioning"
             $nodeMode = Get-ZtpEnvValue -Environment $n -Path 'ip_assignment'
             if ($null -ne $nodeMode -and [string]$nodeMode -notin 'static', 'dhcp_reservation', 'dhcp', 'preconfigured') { $problems.Add("$label.ip_assignment must be static, dhcp_reservation, dhcp or preconfigured, not '$nodeMode'.") }
+            # The BIOS actions ZTP derives from the inventory: an unknown slot label, a slot shared with a network port, a vendor
+            # without a mapping. Named here, so the run stops before it touches the hardware.
+            foreach ($derivedProblem in @((Get-ZtpDerivedBios -Environment $Environment -Node $n -Index $index).Problems)) { $problems.Add($derivedProblem) }
             $index++
         }
     }
@@ -338,7 +393,11 @@ function Get-ZtpEnvironmentPort {
     if ($listed) {
         foreach ($p in @($listed)) {
             if ($p -isnot [System.Collections.IDictionary]) { continue }
-            [ordered]@{ name = [string]$p['name']; mac_address = [string]$p['mac_address']; roles = @(@($p['roles']) | Where-Object { $_ } | ForEach-Object { [string]$_ }); ip_assignment = [string]$p['ip_assignment']; ip_address = [string]$p['ip_address'] }
+            $port = [ordered]@{ name = [string]$p['name']; mac_address = [string]$p['mac_address']; roles = @(@($p['roles']) | Where-Object { $_ } | ForEach-Object { [string]$_ }); ip_assignment = [string]$p['ip_assignment']; ip_address = [string]$p['ip_address'] }
+            # Where the port is (Embedded, Slot 3): the BIOS plan reads it; nothing else does.
+            if ($p['slot']) { $port['slot'] = [string]$p['slot'] }
+            if ($p['model']) { $port['model'] = [string]$p['model'] }
+            $port
         }
         return
     }
@@ -530,22 +589,231 @@ function Get-ZtpEnvironmentBios {
     hardware.bios_during_provisioning and cluster_nodes[].bios_during_provisioning, the temporary values for the install
     only (the Boot stage applies them over the final ones; the Restore stage undoes them). boot: what the Boot stage
     applies, final with provisioning merged over it.
+    The values ZTP derives from the inventory (Get-ZtpDerivedBios) sit under the explicit ones: an explicit key always wins.
+    .PARAMETER ExplicitOnly
+    Only what the file writes in hardware.bios, cluster_nodes[].bios and their bios_during_provisioning twins.
     #>
     [CmdletBinding()]
     [OutputType([System.Collections.Specialized.OrderedDictionary])]
     param(
         [Parameter(Mandatory)][System.Collections.IDictionary]$Environment,
         [Parameter(Mandatory)][System.Collections.IDictionary]$Node,
-        [ValidateSet('final', 'provisioning', 'boot')][string]$Kind = 'final'
+        [ValidateSet('final', 'provisioning', 'boot')][string]$Kind = 'final',
+        [switch]$ExplicitOnly
     )
-    $keys = @(if ($Kind -ne 'provisioning') { 'bios' }) + @(if ($Kind -ne 'final') { 'bios_during_provisioning' })
     $sources = [System.Collections.Generic.List[object]]::new()
-    foreach ($k in $keys) { $sources.Add((Get-ZtpEnvValue -Environment $Environment -Path "hardware.$k")); $sources.Add((Get-ZtpEnvValue -Environment $Node -Path $k)) }
+    $derived = if ($ExplicitOnly) { $null } else { Get-ZtpDerivedBios -Environment $Environment -Node $Node }
+    # Order, later wins: derived final, explicit final, derived during, explicit during. During beats final, and explicit
+    # beats derived within each.
+    if ($Kind -ne 'provisioning') {
+        if ($derived) { $sources.Add($derived.Final) }
+        $sources.Add((Get-ZtpEnvValue -Environment $Environment -Path 'hardware.bios')); $sources.Add((Get-ZtpEnvValue -Environment $Node -Path 'bios'))
+    }
+    if ($Kind -ne 'final') {
+        if ($derived) { $sources.Add($derived.During) }
+        $sources.Add((Get-ZtpEnvValue -Environment $Environment -Path 'hardware.bios_during_provisioning')); $sources.Add((Get-ZtpEnvValue -Environment $Node -Path 'bios_during_provisioning'))
+    }
     $merged = [ordered]@{}
     foreach ($source in $sources) {
         if ($source -is [System.Collections.IDictionary]) { foreach ($k in $source.Keys) { $merged[[string]$k] = [string]$source[$k] } }
     }
     return $merged
+}
+
+function Get-ZtpSetting {
+    <#
+    .SYNOPSIS
+    A setting of the environment with its default: Get-ZtpSetting $env 'ztp.timeouts.ready_minutes' 180. A missing or empty
+    key gives the default, so a file written before the key existed behaves as it always did.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][object]$Environment, [Parameter(Mandatory)][string]$Path, [AllowNull()][object]$Default = $null)
+    $v = Get-ZtpEnvValue -Environment $Environment -Path $Path
+    if ($null -eq $v -or ($v -is [string] -and -not $v.Trim())) { return $Default }
+    return $v
+}
+
+function ConvertTo-ZtpSlotNumber {
+    <#
+    .SYNOPSIS
+    The PCIe slot number in a slot label ('Slot 2', 'Slot2', 'slot-2', 'PCIe Slot 2' give 2), or $null for any other label
+    (Embedded, OCP 1, a typo).
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][object]$Label)
+    if (([string]$Label) -match '^\s*(?:pcie\s*)?slot[\s_-]*(\d{1,3})\s*$') { return [int]$Matches[1] }
+    return $null
+}
+
+function Read-ZtpOemFile {
+    <#
+    .SYNOPSIS
+    config/oem/<vendor>.json as a hashtable, or $null when the vendor has no file. -ConfigRoot defaults to this repository's
+    config/oem.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][string]$Vendor, [string]$ConfigRoot = (Join-Path $PSScriptRoot '..\..\config\oem'))
+    if (-not $Vendor -or $Vendor -notmatch '^[A-Za-z0-9_-]{1,40}$') { return $null }
+    $path = Join-Path $ConfigRoot "$($Vendor.ToLowerInvariant()).json"
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+    return (Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -AsHashtable -Depth 20)
+}
+
+function Get-ZtpDerivedBios {
+    <#
+    .SYNOPSIS
+    The BIOS values ZTP derives for one node from the inventory, with the reason for each, so nobody has to write a vendor's
+    attribute names. Final and During are attribute -> value maps (Get-ZtpEnvironmentBios puts them under the explicit
+    keys, which win), Plan holds one 'PLAN:' line per decision, Problems what stops the run before it touches the hardware.
+    .DESCRIPTION
+    1. Isolate the SAN adapters (ztp.isolate_san_adapters, schema provisioning.simplified.isolate_san_adapters; default true
+       when any node lists san.hbas): for every cluster_nodes[].san.hbas[] with a PCIe slot label ('Slot 2'), During gets the
+       vendor's slot attribute set to its disabled value, so the maintenance environment can't install onto a SAN LUN, and
+       Final gets the enabled value, which the Restore stage sets back.
+    2. Enable the embedded NICs (ztp.enable_embedded_nics, default true): when a management or provisioning port has slot
+       Embedded, Final gets the vendor's embedded-NIC attribute enabled (Dell ships them as DisabledOs).
+    The vendor's attribute names are data: config/oem/<vendor>.json, section bios (slot_attribute with {n}, disabled, enabled,
+    embedded_nic_attribute, embedded_enabled). A vendor without that section has no guessed mapping: with explicit
+    bios_during_provisioning keys the explicit ones are used and the plan says so; without them, it is a problem. An unknown
+    slot label, or a slot that also holds a network port, is a problem. A slot that doesn't exist in the BMC's BIOS is caught
+    by the Boot stage before it changes anything (Set-ZtpBios.ps1 reads the attributes first).
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Environment,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Node,
+        [int]$Index = -1,
+        [string]$ConfigRoot
+    )
+    $final = [ordered]@{}; $during = [ordered]@{}; $reasons = [ordered]@{}
+    $plan = [System.Collections.Generic.List[string]]::new(); $problems = [System.Collections.Generic.List[string]]::new()
+    $result = { [pscustomobject]@{ Final = $final; During = $during; Reasons = $reasons; Plan = $plan.ToArray(); Problems = $problems.ToArray() } }
+    $name = [string]$Node['name']
+    if ($Index -lt 0) {
+        $names = @(@($Environment['cluster_nodes']) | ForEach-Object { if ($_ -is [System.Collections.IDictionary]) { [string]$_['name'] } })
+        $Index = [array]::IndexOf($names, $name)
+    }
+    $at = if ($Index -ge 0) { "nodes[$Index] ($name)" } else { "nodes ($name)" }
+    $path = if ($Index -ge 0) { "nodes[$Index]" } else { 'nodes[]' }
+
+    $ports = @(@($Node['network_adapters']) | Where-Object { $_ -is [System.Collections.IDictionary] })
+    $hbas = @(if ($Node['san'] -is [System.Collections.IDictionary]) { @($Node['san']['hbas']) | Where-Object { $_ -is [System.Collections.IDictionary] } })
+    $embedded = @($ports | Where-Object { [string]$_['slot'] -match '^\s*embedded\b' -and (@($_['roles']) -contains 'management' -or @($_['roles']) -contains 'provisioning') })
+    if (-not $hbas.Count -and -not $embedded.Count) { return (& $result) }
+
+    $isolateSwitch = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.isolate_san_adapters'
+    $anyHbas = [bool]@(@($Environment['cluster_nodes']) | Where-Object { $_ -is [System.Collections.IDictionary] -and $_['san'] -is [System.Collections.IDictionary] -and $_['san']['hbas'] -and @($_['san']['hbas']).Count })
+    $isolate = if ($null -ne $isolateSwitch) { [bool]$isolateSwitch } else { $anyHbas }
+    $embedSwitch = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.enable_embedded_nics'
+    $embedOn = if ($null -ne $embedSwitch) { [bool]$embedSwitch } else { $true }
+
+    $vendor = [string](Get-ZtpEnvValue -Environment $Environment -Path 'hardware.vendor')
+    $oemArgs = @{ Vendor = $vendor }
+    if ($ConfigRoot) { $oemArgs.ConfigRoot = $ConfigRoot }
+    $oem = Read-ZtpOemFile @oemArgs
+    $mapping = if ($oem -and $oem['bios'] -is [System.Collections.IDictionary]) { $oem['bios'] } else { $null }
+    $explicitFinal = Get-ZtpEnvironmentBios -Environment $Environment -Node $Node -Kind final -ExplicitOnly
+    $explicitDuring = Get-ZtpEnvironmentBios -Environment $Environment -Node $Node -Kind provisioning -ExplicitOnly
+    $noMapping = "config/oem/$(if ($vendor) { $vendor.ToLowerInvariant() } else { '<vendor>' }).json has no bios section"
+
+    if ($isolate) {
+        $j = 0
+        foreach ($hba in $hbas) {
+            $label = [string]$hba['slot']
+            $where = "$path.san.hbas[$j]"
+            $j++
+            $number = ConvertTo-ZtpSlotNumber $label
+            if ($null -eq $number) {
+                $problems.Add("$at.san.hbas[$($j - 1)].slot '$label' isn't a PCIe slot label such as 'Slot 2', so ZTP can't derive the BIOS attribute that turns it off for the OS install. Use 'Slot <n>', or set provisioning.simplified.isolate_san_adapters to false and write the vendor's attribute in hardware.bios_during_provisioning.")
+                continue
+            }
+            $shared = @($ports | Where-Object { (ConvertTo-ZtpSlotNumber $_['slot']) -eq $number -and @(@($_['roles']) | Where-Object { $_ -and $_ -ne 'unused' }).Count })
+            if ($shared.Count) {
+                $problems.Add("$at.san.hbas[$($j - 1)] is in $label, which also holds the network port '$($shared[0]['name'])' (roles $(@($shared[0]['roles']) -join ', ')). Turning the slot off for the OS install would cut that port. Correct the slot of one of them, or set provisioning.simplified.isolate_san_adapters to false.")
+                continue
+            }
+            if (-not $mapping -or "$($mapping['slot_attribute'])" -notmatch '\{n\}' -or -not $mapping['disabled'] -or -not $mapping['enabled']) {
+                if ($explicitDuring.Count) {
+                    $plan.Add("PLAN: $name BIOS: $where ($label) not isolated by derivation: ZTP has no slot mapping for vendor '$vendor' ($noMapping); using hardware.bios_during_provisioning as written ($(@($explicitDuring.Keys | ForEach-Object { "$_=$($explicitDuring[$_])" }) -join ', ')).")
+                }
+                else {
+                    $problems.Add("$at.san.hbas[$($j - 1)] is in $label and must be turned off for the OS install, but ZTP has no BIOS slot mapping for vendor '$vendor' ($noMapping), and it won't guess an attribute name. Write the vendor's attribute in hardware.bios_during_provisioning (and its final value in hardware.bios), or set provisioning.simplified.isolate_san_adapters to false.")
+                }
+                continue
+            }
+            $attribute = ([string]$mapping['slot_attribute']).Replace('{n}', [string]$number)
+            $reasons[$attribute] = "derived: $where is in $label, so ZTP looked for the BIOS attribute $attribute; check the slot label"
+            $off = [string]$mapping['disabled']; $on = [string]$mapping['enabled']
+            $back = if ($explicitFinal.Contains($attribute)) { "$($explicitFinal[$attribute]) from hardware.bios" } else { $on }
+            if ($explicitDuring.Contains($attribute)) {
+                $plan.Add("PLAN: $name BIOS $attribute $($explicitDuring[$attribute]) for the install, from hardware.bios_during_provisioning (explicit; it replaces the derived $off for $where in $label); the Restore stage sets it back to $back")
+            }
+            else {
+                $during[$attribute] = $off
+                $plan.Add("PLAN: $name BIOS $attribute $off for the install because $where is in $label (the Restore stage sets it back to $back)")
+            }
+            if (-not $explicitFinal.Contains($attribute)) { $final[$attribute] = $on }
+        }
+    }
+
+    if ($embedOn -and $embedded.Count) {
+        $port = @($embedded | Where-Object { @($_['roles']) -contains 'management' } | Select-Object -First 1) + @($embedded) | Select-Object -First 1
+        $role = if (@($port['roles']) -contains 'management') { 'management' } else { 'provisioning' }
+        $attribute = if ($mapping) { [string]$mapping['embedded_nic_attribute'] } else { '' }
+        if (-not $attribute -or -not $mapping['embedded_enabled']) {
+            if ($null -ne $embedSwitch) {
+                $problems.Add("$at has the $role port '$($port['name'])' in slot Embedded and provisioning.simplified.enable_embedded_nics is true, but ZTP has no embedded-NIC BIOS attribute for vendor '$vendor' ($noMapping), and it won't guess one. Write it in hardware.bios, or set enable_embedded_nics to false.")
+            }
+            else {
+                $plan.Add("PLAN: $name BIOS: the $role port '$($port['name'])' is in slot Embedded; ZTP has no embedded-NIC attribute for vendor '$vendor' ($noMapping), so it leaves the embedded NICs as they are. Write the attribute in hardware.bios if they ship disabled.")
+            }
+        }
+        elseif ($explicitFinal.Contains($attribute) -or $explicitDuring.Contains($attribute)) {
+            $v = if ($explicitDuring.Contains($attribute)) { $explicitDuring[$attribute] } else { $explicitFinal[$attribute] }
+            $plan.Add("PLAN: $name BIOS $attribute $v, as hardware.bios says (explicit; the $role port '$($port['name'])' is in slot Embedded)")
+        }
+        else {
+            $final[$attribute] = [string]$mapping['embedded_enabled']
+            $reasons[$attribute] = "derived: the $role port '$($port['name'])' is in slot Embedded, so ZTP looked for the embedded-NIC BIOS attribute $attribute"
+            $plan.Add("PLAN: $name BIOS $attribute $($mapping['embedded_enabled']) because the $role port '$($port['name'])' of $path is in slot Embedded (the OS can't see disabled embedded NICs)")
+        }
+    }
+    return (& $result)
+}
+
+function Get-ZtpDerivedBiosPlan {
+    <#
+    .SYNOPSIS
+    The 'PLAN:' lines of the derived BIOS plan for the nodes of a run, one per decision, in node order.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment, [string[]]$Node)
+    $i = 0
+    foreach ($n in @($Environment['cluster_nodes'])) {
+        if ($n -is [System.Collections.IDictionary] -and (-not $Node -or [string]$n['name'] -in $Node)) { (Get-ZtpDerivedBios -Environment $Environment -Node $n -Index $i).Plan }
+        $i++
+    }
+}
+
+function Get-ZtpRfsWriteAttribute {
+    <#
+    .SYNOPSIS
+    Does the Boot stage also set the BMC's Remote File Share write attribute? ztp.rfs_write_attribute when the file sets it
+    (schema hardware.bmc.rfs_write_attribute), else the vendor's config/oem/<vendor>.json bmc.rfsWriteAttribute (Dell true,
+    the others false), else true: what ZTP always did.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment, [string]$ConfigRoot)
+    $own = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.rfs_write_attribute'
+    if ($null -ne $own) { return [bool]$own }
+    $oemArgs = @{ Vendor = [string](Get-ZtpEnvValue -Environment $Environment -Path 'hardware.vendor') }
+    if ($ConfigRoot) { $oemArgs.ConfigRoot = $ConfigRoot }
+    $oem = Read-ZtpOemFile @oemArgs
+    if ($oem -and $oem['bmc'] -is [System.Collections.IDictionary] -and $oem['bmc'].Contains('rfsWriteAttribute')) { return [bool]$oem['bmc']['rfsWriteAttribute'] }
+    return $true
 }
 
 function Find-ZtpGitWorkTree {
@@ -788,6 +1056,15 @@ function ConvertFrom-ZtpInfrastructureV5 {
         # The node's ports, as the file lists them, for the handoff's per-port detail and the Mode C check. ZTP doesn't
         # set them up: DHCP and the gateway off on the other ports is OS configuration.
         if ($n['network_adapters']) { $node['network_adapters'] = @(Get-ZtpEnvironmentPort -Node $n) }
+        # The SAN adapters (schema 5.4): their slots feed the BIOS plan (Get-ZtpDerivedBios).
+        if ($n['san'] -is [System.Collections.IDictionary] -and $n['san']['hbas'] -and @($n['san']['hbas']).Count) {
+            $node['san'] = [ordered]@{ hbas = @(@($n['san']['hbas']) | Where-Object { $_ -is [System.Collections.IDictionary] } | ForEach-Object {
+                        $h = [ordered]@{ slot = [string]$_['slot'] }
+                        $h['type'] = $(if ($_['type']) { [string]$_['type'] } else { 'fibre_channel' })
+                        if ($_['model']) { $h['model'] = [string]$_['model'] }
+                        $h
+                    }) }
+        }
         $nodes.Add($node)
     }
 
@@ -819,7 +1096,19 @@ function ConvertFrom-ZtpInfrastructureV5 {
     & $put $ztp 'provisioning_iso' $simplified['maintenance_iso']
     & $put $ztp 'os_version' (& $v 'provisioning.os_version')
     $share = $simplified['media_share']
-    if ($share -is [System.Collections.IDictionary]) { & $put $ztp 'share_name' $share['name']; & $put $ztp 'share_host' $share['host']; & $put $ztp 'share_host_adapter' $share['host_adapter'] }
+    if ($share -is [System.Collections.IDictionary]) {
+        & $put $ztp 'share_name' $share['name']; & $put $ztp 'share_host' $share['host']; & $put $ztp 'share_host_adapter' $share['host_adapter']
+        & $put $ztp 'share_account_name' $share['account_name']; & $put $ztp 'keep_share' $share['keep']
+    }
+    # Schema 5.4: the other settings of provisioning.simplified and hardware.bmc, under the names they have there.
+    foreach ($k in 'isolate_san_adapters', 'enable_embedded_nics', 'create_resource_group', 'configuration_name', 'managed_resource_group_name', 'apply_site_settings', 'use_key_vault_configuration', 'assign_provisioning_roles', 'assign_hci_rp_role', 'network_kind', 'site_mode', 'deployment_name', 'skip_azure_check', 'include_preview', 'max_train', 'retry_provision_os') {
+        if ($simplified.Contains($k)) { & $put $ztp $k $simplified[$k] }
+    }
+    foreach ($k in 'ntp', 'usb_image', 'maintenance_environment', 'timeouts') {
+        if ($simplified[$k] -is [System.Collections.IDictionary]) { $ztp[$k] = $simplified[$k] }
+    }
+    if ($null -ne (& $v 'hardware.bmc.rfs_write_attribute')) { $ztp['rfs_write_attribute'] = [bool](& $v 'hardware.bmc.rfs_write_attribute') }
+    if ($null -ne (& $v 'hardware.bmc.verify_certificate')) { $ztp['verify_bmc_certificate'] = [bool](& $v 'hardware.bmc.verify_certificate') }
     & $put $ztp 'media_path' $simplified['media_path']
     & $put $ztp 'evidence_path' $simplified['evidence_path']
     & $put $ztp 'azl_rp_object_id' (& $v 'azure.hci_resource_provider_object_id')
@@ -858,6 +1147,10 @@ function ConvertTo-ZtpSchema5Message {
     $m = $m -replace 'cluster_nodes\[(\d+)\]( \([^)]*\))?\.idrac_ip', 'nodes[$1]$2.bmc.ip_address'
     $m = $m -replace 'cluster_nodes\[(\d+)\]( \([^)]*\))?\.ip_assignment', 'nodes[$1]$2 management port ip_assignment'
     $m = $m -replace 'cluster_nodes\[(\d+)\]( \([^)]*\))?\.maintenance_address', 'nodes[$1]$2 provisioning port ip_address'
+    # Schema 5.4 keys keep their names under provisioning.simplified.
+    $m = $m -replace '\bztp\.(isolate_san_adapters|enable_embedded_nics|create_resource_group|configuration_name|managed_resource_group_name|apply_site_settings|use_key_vault_configuration|assign_provisioning_roles|assign_hci_rp_role|network_kind|site_mode|deployment_name|skip_azure_check|include_preview|max_train|retry_provision_os|ntp|usb_image|maintenance_environment|timeouts)\b', 'provisioning.simplified.$1'
+    $m = $m.Replace('ztp.share_account_name', 'provisioning.simplified.media_share.account_name').Replace('ztp.keep_share', 'provisioning.simplified.media_share.keep')
+    $m = $m.Replace('ztp.rfs_write_attribute', 'hardware.bmc.rfs_write_attribute').Replace('ztp.verify_bmc_certificate', 'hardware.bmc.verify_certificate')
     $map = [ordered]@{
         'ztp.maintenance_password_secret'              = 'provisioning.simplified.maintenance_password'
         'cluster_nodes'                                = 'nodes'

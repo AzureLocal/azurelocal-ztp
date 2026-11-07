@@ -380,3 +380,23 @@ Describe 'Set-ZtpDeviceConfiguration.ps1' {
         }
     }
 }
+
+Describe 'Set-ZtpDeviceConfiguration.ps1 reaches the service on the port and as the user the file names (schema 5.4)' {
+    It 'uses -Port and -UserName instead of 20001 and edgeuser' {
+        $global:devT_calls = [System.Collections.Generic.List[object]]::new()
+        $global:devT_up = @('192.0.2.111', '192.0.2.11'); $global:devT_downAfterApply = @(); $global:devT_password = 'Password1'
+        $global:devT_status = @('Succeeded'); $global:devT_statusIndex = 0; $global:devT_pending = $null; $global:devT_other = @{}; $global:devT_swapAfterApply = @{}
+        $global:devT_sweeps = 0; $global:devT_appearAt = 1; $global:devT_probes = [System.Collections.Generic.List[object]]::new()
+        $global:devT_adapters = @(
+            (New-DevTAdapter -Name 'eno1' -Mac '00005e0053aa' -Dhcp $true -Ip '192.0.2.200' -Mask '255.255.255.0' -Gateway '192.0.2.1' -Dns '192.0.2.53' -Index 0)
+            (New-DevTAdapter -Name 'ens3f0np0' -Mac '00005e0053bb' -Dhcp $true -Ip '192.0.2.111' -Mask '255.255.255.0' -Gateway '192.0.2.1' -Dns '192.0.2.53' -Index 1)
+        )
+        $script:changeLog = Join-Path $TestDrive "device-changes-$([guid]::NewGuid().ToString('N')).jsonl"
+        $script:events = Join-Path $TestDrive "events-$([guid]::NewGuid().ToString('N')).jsonl"
+        Mock Invoke-RestMethod { & $global:devT_handler ([string]$Uri) ([string]$Method) ([string]$Body) $Credential }
+        Mock Start-Sleep {}
+        $null = & $script:run (& $script:writeInputs (& $script:static)) @{ Port = 20011; UserName = 'lab-user' }
+        $global:devT_calls[0].Uri | Should -Be 'https://192.0.2.111:20011/BootstrapOobeService/GetNetworkAdapters'
+        $global:devT_calls[0].User | Should -Be 'lab-user'
+    }
+}
