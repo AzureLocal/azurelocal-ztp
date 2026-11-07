@@ -60,7 +60,11 @@ function Invoke-ZtpArm {
     <#
     .SYNOPSIS
     One ARM call through Invoke-AzRestMethod (transport seam; the tests mock it). Returns the parsed body, or $null for a
-    404 with -AllowNotFound. Errors carry the status and the ARM error code and message, never the request body.
+    404 with -AllowNotFound (or any status in -NotFoundStatus). Errors carry the status and the ARM error code and message,
+    never the request body.
+    .PARAMETER NotFoundStatus
+    With -AllowNotFound, the statuses that mean "not there (yet)". Default 404. A ProvisionOs job that the service hasn't
+    created yet answers 409 (seen live, 2026-11), so the Ready stage passes 404, 409 for it.
     #>
     [CmdletBinding()]
     param(
@@ -69,14 +73,15 @@ function Invoke-ZtpArm {
         [string]$ApiVersion = $script:ZtpDefaultApiVersion,
         [hashtable]$Query = @{},
         [object]$Body,
-        [switch]$AllowNotFound
+        [switch]$AllowNotFound,
+        [int[]]$NotFoundStatus = @(404)
     )
     $pairs = @("api-version=$ApiVersion") + @($Query.GetEnumerator() | Sort-Object Key | ForEach-Object { "$($_.Key)=$([uri]::EscapeDataString([string]$_.Value))" })
     $request = @{ Method = $Method; Path = "$Path`?$($pairs -join '&')" }
     if ($null -ne $Body) { $request.Payload = ($Body | ConvertTo-Json -Depth 40 -Compress) }
     $response = Invoke-AzRestMethod @request
     $status = [int]$response.StatusCode
-    if ($status -eq 404 -and $AllowNotFound) { return $null }
+    if ($AllowNotFound -and $status -in $NotFoundStatus) { return $null }
     if ($status -ge 400) {
         $code = ''; $message = ''
         try {

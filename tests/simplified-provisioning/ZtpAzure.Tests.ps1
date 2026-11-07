@@ -62,6 +62,8 @@ BeforeAll {
             $state = $global:ztpMachines[$Matches[1]]
             if ($state -is [scriptblock]) { $state = & $state }
             if ($state -and $global:ztpStateFiles.ContainsKey($state)) { return New-ZtpTestResponse 200 (Get-ZtpTestFixture $global:ztpStateFiles[$state][1] $Matches[1]) }
+            # Seen live: before the service creates the job, its GET answers 409.
+            if ($state -eq 'nojob409') { return New-ZtpTestResponse 409 @{ error = @{ code = 'Conflict'; message = 'The job does not exist yet.' } } }
             if ($state -eq 'failed') {
                 $job = Get-ZtpTestFixture 'job-provisionos-in-progress.json' $Matches[1] | ConvertFrom-Json -Depth 60
                 $job.properties.status = 'DeploymentFailed'
@@ -73,7 +75,7 @@ BeforeAll {
         if ($Path -match '/edgeMachines/([^/?]+)\?') {
             $state = $global:ztpMachines[$Matches[1]]
             if ($state -is [scriptblock]) { $state = & $state }
-            if ($state -eq 'failed') { return New-ZtpTestResponse 200 (Get-ZtpTestFixture 'edge-machine-installing-os.json' $Matches[1]) }
+            if ($state -in 'failed', 'nojob409') { return New-ZtpTestResponse 200 (Get-ZtpTestFixture 'edge-machine-installing-os.json' $Matches[1]) }
             if ($state) { return New-ZtpTestResponse 200 (Get-ZtpTestFixture $global:ztpStateFiles[$state][0] $Matches[1]) }
             return New-ZtpTestResponse 404 $null
         }
@@ -283,6 +285,24 @@ Describe 'ZTP Azure half' {
             $text | Should -Match 'node-02 step BootIntoTargetOS Success'
             ([regex]::Matches($text, 'node-01 lifecycle Provisioned')).Count | Should -Be 1
             Remove-Variable ztpPoll -Scope Global
+        }
+
+        It 'treats a 404 or 409 on a ProvisionOs job the service has not created yet as not there yet, and keeps waiting' {
+            $global:ztpPoll = 0
+            $global:ztpMachines = @{ 'node-01' = 'provisioned'; 'node-02' = { if ($global:ztpPoll -lt 2) { 'nojob409' } else { 'provisioned' } } }
+            Mock Start-Sleep { $global:ztpPoll++ }
+            $rows = @(& $script:wait @script:waitArgs -InformationVariable info)
+            @($rows | Where-Object Ready).Count | Should -Be 2
+            $global:ztpPoll | Should -Be 2
+            $text = @($info | ForEach-Object { $_.MessageData }) -join "`n"
+            ([regex]::Matches($text, 'node-02 jobs/ProvisionOs not created yet; waiting')).Count | Should -Be 1
+            Remove-Variable ztpPoll -Scope Global
+        }
+
+        It 'still fails on a 409 anywhere else (only the ProvisionOs read treats it as not there yet)' {
+            Mock Invoke-AzRestMethod { [pscustomobject]@{ StatusCode = 409; Content = '{ "error": { "code": "Conflict", "message": "busy" } }' } }
+            { Invoke-ZtpArm -Method GET -Path '/subscriptions/x/resourceGroups/rg/providers/Microsoft.AzureStackHCI/edgeMachines/node-01' -AllowNotFound } | Should -Throw '*returned 409 Conflict busy*'
+            Invoke-ZtpArm -Method GET -Path '/subscriptions/x/resourceGroups/rg/providers/Microsoft.AzureStackHCI/edgeMachines/node-01/jobs/ProvisionOs' -AllowNotFound -NotFoundStatus 404, 409 | Should -BeNullOrEmpty
         }
 
         It 'stops on a terminal failure without sending anything' {

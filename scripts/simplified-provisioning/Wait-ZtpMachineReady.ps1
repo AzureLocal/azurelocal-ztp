@@ -75,7 +75,9 @@ while ($true) {
     foreach ($name in $EdgeMachineName) {
         $machinePath = "$rgPath/$name"
         $machine = Invoke-ZtpArm -Method GET -Path $machinePath -ApiVersion $ApiVersion -AllowNotFound
-        $job = if ($machine) { Invoke-ZtpArm -Method GET -Path "$machinePath/jobs/ProvisionOs" -ApiVersion $ApiVersion -AllowNotFound } else { $null }
+        # A job the service hasn't created yet answers 404 or 409 (seen live): not there yet, so keep waiting.
+        $job = if ($machine) { Invoke-ZtpArm -Method GET -Path "$machinePath/jobs/ProvisionOs" -ApiVersion $ApiVersion -AllowNotFound -NotFoundStatus 404, 409 } else { $null }
+        if ($machine -and -not $job -and -not $seen.ContainsKey("$name|nojob")) { Write-ZtpLog "$name jobs/ProvisionOs not created yet; waiting."; $seen["$name|nojob"] = 1 }
         foreach ($item in @(Get-ZtpProgressItem -Name $name -Machine $machine -Job $job)) {
             if ($seen[$item.Key] -ne $item.Text) {
                 # A step that has not started is printed only once it moves (keeps the first poll readable).
