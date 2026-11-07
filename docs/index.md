@@ -54,7 +54,7 @@ features:
 
 ## How a run flows
 
-![From the environment file to machines ready to join a cluster](./diagrams/ztp-flow.png)
+![Azure Local ZTP: from infrastructure.yml to provisioned machines and the handoff](./diagrams/ztp-flow-to-handoff.png)
 
 | You supply | You get |
 | --- | --- |

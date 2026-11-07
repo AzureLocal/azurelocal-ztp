@@ -8,9 +8,11 @@ For the operator steps, see the [Operator guide](operator-guide.md). To run it f
 
 ## The flow
 
-![Azure Local ZTP: from the environment file to machines ready to join a cluster](./diagrams/ztp-flow.png)
+![Azure Local ZTP: from infrastructure.yml to provisioned machines and the handoff](./diagrams/ztp-flow-to-handoff.png)
 
-The diagram source is [`diagrams/ztp-flow.drawio`](https://github.com/AzureLocal/azurelocal-ztp/blob/main/docs/diagrams/ztp-flow.drawio). It has four lanes: the operator, the management host, Azure, and the machine with its BMC. The operator supplies one input, the environment file. Then the operator runs one command: `Invoke-ZtpEnvironment.ps1 -InfrastructureFile <file>`, first as a plan, then with `-Execute`.
+The diagram source is [`diagrams/ztp-flow-to-handoff.drawio`](https://github.com/AzureLocal/azurelocal-ztp/blob/main/docs/diagrams/ztp-flow-to-handoff.drawio). It has four lanes: the operator, the management host, Azure, and the machine with its BMC. The operator supplies one input, the environment file. Then the operator runs one command: `Invoke-ZtpEnvironment.ps1 -InfrastructureFile <file>`, first as a plan, then with `-Execute`. The diagram shows every stage from Start to Handoff, including Device, Network and Restore, and ends where ZTP ends; OS configuration comes next.
+
+The earlier diagram, [`diagrams/ztp-flow.drawio`](https://github.com/AzureLocal/azurelocal-ztp/blob/main/docs/diagrams/ztp-flow.drawio) ([PNG](./diagrams/ztp-flow.png)), is kept for history. It shows the Prepare stage and the SBE step that ZTP no longer runs.
 
 ## Entry point and layers
 
