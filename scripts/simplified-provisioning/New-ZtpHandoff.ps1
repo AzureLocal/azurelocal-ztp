@@ -152,6 +152,21 @@ foreach ($name in $NodeName) {
     elseif ($null -eq $check) { 'no Network stage result for this node' }
     else { $r = [string](Get-ZtpPropertyValue $check 'reason' ''); if ($r) { $r } else { 'not verified' } }
     $fileNode = if ($fileNodes.ContainsKey($name)) { $fileNodes[$name] } else { $null }
+    # The adapters as they are NOW, after Restore restarted the node. The Network stage may have seen none (the list can be
+    # empty right after Ready); then this read gives the per-port detail and the management verdict.
+    $adapters = @(Get-HandoffAdapter -Machine $name -FileNode $fileNode)
+    $unseen = $null -ne $check -and -not [bool](Get-ZtpPropertyValue $check 'adaptersReported' $true)
+    if ($unseen -and -not $verified) {
+        $m = @($adapters | Where-Object { $_.isManagement }) | Select-Object -First 1
+        if ($m) {
+            $modeName = [string](Get-ZtpPropertyValue $fileNode 'management_ip_assignment' '')
+            $want = [string]$m.expected.ipAddress
+            $has = if ($m.ipAddress) { "$($m.ipAssignment) $($m.ipAddress)" } else { "$($m.ipAssignment), no address" }
+            if ($modeName -eq 'static' -and $m.ipAssignment -eq 'Static' -and $want -and $m.ipAddress -eq $want) { $verified = $true; $reason = $null }
+            elseif ($modeName -eq 'dhcp_reservation' -and $m.ipAddress -and (-not $want -or $m.ipAddress -eq $want)) { $verified = $true; $reason = $null }
+            else { $reason = "read again at the Handoff: the management port $($m.name) (MAC $($m.macAddress)) has $has$(if ($want) { "; the file expects $want" }); $reason" }
+        }
+    }
     $mode = if ($fileNode -and (Get-ZtpPropertyValue $fileNode 'management_ip_assignment' '')) {
         $m = Get-ZtpManagementMode -IpAssignment ([string](Get-ZtpPropertyValue $fileNode 'management_ip_assignment' '')) -ManagementDhcp ([string](Get-ZtpPropertyValue $fileNode 'management_dhcp' 'true') -ne 'False')
         [ordered]@{ mode = $(if ($m.Mode) { $m.Mode } else { $null }); name = $m.Name; ipAssignment = $m.IpAssignment }
@@ -176,7 +191,7 @@ foreach ($name in $NodeName) {
             biosRestoreComplete       = ($notRestored.Count -eq 0)
             biosNotRestored           = @($notRestored)
             managementMode            = $mode
-            networkAdapters           = @(Get-HandoffAdapter -Machine $name -FileNode $fileNode)
+            networkAdapters           = $adapters
         })
 }
 if ($notReady.Count -gt 0) { throw "Not ready to cluster: $($notReady -join '; '). No handoff written; rerun Wait-ZtpMachineReady.ps1." }

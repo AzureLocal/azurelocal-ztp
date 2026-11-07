@@ -1107,6 +1107,7 @@ Describe 'Invoke-ZtpEnvironment.ps1 settings (schema 5.4)' {
         $r = Invoke-Settings -Name 'defaults'
         $c = $r.Config
         "$($c.VoucherWaitMinutes) $($c.BootstrapTimeoutMinutes) $($c.BootstrapVoucherTimeoutMinutes) $($c.BootstrapStallMinutes) $($c.ReadyTimeoutMinutes) $($c.PollIntervalSeconds) $($c.DeviceTimeoutMinutes) $($c.NetworkTimeoutMinutes) $($c.RestoreSettleMinutes) $($c.BiosTimeoutMinutes)" | Should -Be '120 120 90 20 180 60 30 60 5 30'
+        $c.AdaptersTimeoutMinutes | Should -Be 10
         "$($c.ImageNamePrefix) $($c.ImageSizeGB) $($c.ShareAccountName) $($c.KeepShare) $($c.MaintenancePort) $($c.MaintenanceUser) $($c.IncludePreview) $($c.SkipAzureCheck) $($c.SiteMode)" | Should -Be 'ztp-usb- 4 svc-ztp-media False 20001 edgeuser False False Auto'
         $c.DeploymentName | Should -Be 'ztp-example-site'
         $c.SkipCertificateCheck | Should -BeTrue -Because 'BMCs ship self-signed certificates'
@@ -1119,7 +1120,7 @@ Describe 'Invoke-ZtpEnvironment.ps1 settings (schema 5.4)' {
     It 'carries every new setting from the file to the settings file and the Bicep parameters' {
         $r = Invoke-Settings -Name 'custom' -Edit { param($d)
             $s = $d.provisioning.simplified
-            $s['timeouts'] = [ordered]@{ bootstrap_minutes = 200; bootstrap_voucher_minutes = 100; bootstrap_stall_minutes = 40; voucher_wait_minutes = 150; device_minutes = 45; ready_minutes = 240; network_minutes = 90; restore_settle_minutes = 10; bios_minutes = 55; poll_interval_seconds = 30 }
+            $s['timeouts'] = [ordered]@{ bootstrap_minutes = 200; bootstrap_voucher_minutes = 100; bootstrap_stall_minutes = 40; voucher_wait_minutes = 150; device_minutes = 45; ready_minutes = 240; network_minutes = 90; restore_settle_minutes = 10; bios_minutes = 55; poll_interval_seconds = 30; adapters_minutes = 15 }
             $s['usb_image'] = [ordered]@{ size_gb = 8; name_prefix = 'lab-usb-' }
             $s['maintenance_environment'] = [ordered]@{ port = 20011; username = 'lab-user' }
             $s['media_share']['account_name'] = 'svc-lab'; $s['media_share']['keep'] = $true
@@ -1131,6 +1132,7 @@ Describe 'Invoke-ZtpEnvironment.ps1 settings (schema 5.4)' {
         }
         $c = $r.Config
         "$($c.VoucherWaitMinutes) $($c.BootstrapTimeoutMinutes) $($c.BootstrapVoucherTimeoutMinutes) $($c.BootstrapStallMinutes) $($c.ReadyTimeoutMinutes) $($c.PollIntervalSeconds) $($c.DeviceTimeoutMinutes) $($c.NetworkTimeoutMinutes) $($c.RestoreSettleMinutes) $($c.BiosTimeoutMinutes)" | Should -Be '150 200 100 40 240 30 45 90 10 55'
+        $c.AdaptersTimeoutMinutes | Should -Be 15
         "$($c.ImageNamePrefix) $($c.ImageSizeGB) $($c.ShareAccountName) $($c.KeepShare) $($c.MaintenancePort) $($c.MaintenanceUser) $($c.IncludePreview) $($c.MaxBootstrapTrain) $($c.SkipAzureCheck) $($c.SiteMode) $($c.DeploymentName)" | Should -Be 'lab-usb- 8 svc-lab True 20011 lab-user True 2609 True Reuse ztp-lab'
         "$($c.SkipCertificateCheck) $($c.RfsWriteAttribute)" | Should -Be 'False False'
         $b = $r.Bicep

@@ -21,7 +21,7 @@ BeforeAll {
     'TimeoutMinutes', 'Action', 'Remove', 'SharePath', 'Stage', 'SubscriptionId', 'ResourceGroupName', 'ParameterFile', 'VoucherPath', 'OsVersion',
     'SiteMode', 'Node', 'DeploymentName', 'AdminPassword', 'PollIntervalSeconds', 'RetryProvisionOs', 'ArcMachineNameMapPath', 'ExpectedMachineName',
     'Version', 'CacheDirectory', 'IncludePreview', 'MaxTrain', 'Oem', 'EventLogPath', 'VoucherTimeoutMinutes',
-    'SkipAzureCheck', 'ImageBuiltAt', 'ResetAt', 'Location', 'HandoffPath', 'ManagementAddressCheck', 'OutputPath', 'Format', 'BiosLogPath', 'ChangeLogPath', 'SizeBytes', 'AccountName', 'StallMinutes', 'Port', 'UserName', 'BiosTimeoutMinutes', 'Original', 'RestoredBios', 'ApplyThroughAzure', 'ConnectedSince', 'ImageEmptyAtBuild'
+    'SkipAzureCheck', 'ImageBuiltAt', 'ResetAt', 'Location', 'HandoffPath', 'ManagementAddressCheck', 'OutputPath', 'Format', 'BiosLogPath', 'ChangeLogPath', 'AdaptersTimeoutMinutes', 'SizeBytes', 'AccountName', 'StallMinutes', 'Port', 'UserName', 'BiosTimeoutMinutes', 'Original', 'RestoredBios', 'ApplyThroughAzure', 'ConnectedSince', 'ImageEmptyAtBuild'
     $paramBlock = ($names | ForEach-Object { "[object]`$$_" }) -join ', '
     foreach ($script in 'New-ZtpVirtualUsbImage.ps1', 'Start-MaintenanceBoot.ps1', 'Wait-ZtpVoucher.ps1', 'Mount-ZtpVirtualUsb.ps1', 'Publish-MaintenanceIso.ps1',
         'Invoke-ZtpAzureProvisioning.ps1', 'Test-ProvisionedMachines.ps1', 'Get-ZtpBootstrapIso.ps1', 'Wait-ZtpBootstrapComplete.ps1',
@@ -580,5 +580,29 @@ Describe 'Invoke-ZtpProvisioning.ps1 settings that used to be fixed in the stage
 
     It 'rejects a share account name the stage would refuse' {
         { & $script:invoke @{ ShareAccountName = 'not valid!' } } | Should -Throw
+    }
+}
+Describe 'Invoke-ZtpProvisioning.ps1 and the adapter wait (Network to Handoff)' {
+    BeforeEach {
+        $global:ztpRunCalls = [System.Collections.Generic.List[object]]::new()
+        $global:ztpRunBehavior = & $script:healthy
+        $script:statePath = Join-Path $TestDrive "state-$([guid]::NewGuid().ToString('N')).json"
+        Get-ChildItem -LiteralPath $script:vouchers, $script:images -File | Remove-Item -Force
+    }
+
+    It 'passes the adapter budget to the Network stage only when one is set' {
+        $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false }
+        ($global:ztpRunCalls | Where-Object Script -EQ 'Set-ZtpManagementAddress.ps1').Params.ContainsKey('AdaptersTimeoutMinutes') | Should -BeFalse
+        $global:ztpRunCalls.Clear(); Remove-Item -LiteralPath $script:statePath -Force
+        $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; AdaptersTimeoutMinutes = 15 }
+        ($global:ztpRunCalls | Where-Object Script -EQ 'Set-ZtpManagementAddress.ps1').Params.AdaptersTimeoutMinutes | Should -Be 15
+    }
+
+    It 'tells the Handoff stage which nodes the Network stage never saw adapters for' {
+        $global:ztpRunBehavior['Set-ZtpManagementAddress.ps1'] = { param($p) if ($p['Execute']) { foreach ($n in $p['Node']) { [pscustomobject]@{ Node = $n; Mode = 'static'; Status = 'Deferred'; Adapter = ''; AdapterName = ''; MacAddress = ''; Address = ''; ExpectedAddress = ''; Released = @(); Changes = @(); Verified = $false; Reason = 'adapters never reported within 10 minutes'; AdaptersReported = ($n -ne 'node-01') } } } }
+        $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false }
+        $checks = @(($global:ztpRunCalls | Where-Object Script -EQ 'New-ZtpHandoff.ps1').Params.ManagementAddressCheck)
+        ($checks | Where-Object { $_.node -eq 'node-01' }).adaptersReported | Should -BeFalse
+        ($checks | Where-Object { $_.node -eq 'node-02' }).adaptersReported | Should -BeTrue
     }
 }

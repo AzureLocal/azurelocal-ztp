@@ -178,6 +178,7 @@ function Test-ZtpEnvironment {
             @{ Path = 'ztp.timeouts.device_minutes'; Min = 0; Max = 1440 }
             @{ Path = 'ztp.timeouts.ready_minutes'; Min = 0; Max = 1440 }
             @{ Path = 'ztp.timeouts.network_minutes'; Min = 0; Max = 1440 }
+            @{ Path = 'ztp.timeouts.adapters_minutes'; Min = 0; Max = 240 }
             @{ Path = 'ztp.timeouts.restore_settle_minutes'; Min = 0; Max = 120 }
             @{ Path = 'ztp.timeouts.bios_minutes'; Min = 1; Max = 240 }
             @{ Path = 'ztp.timeouts.poll_interval_seconds'; Min = 0; Max = 3600 })) {

@@ -29,6 +29,7 @@
   "PollIntervalSeconds": 60,
   "DeviceTimeoutMinutes": 30,
   "NetworkTimeoutMinutes": 60,
+  "AdaptersTimeoutMinutes": 10,
   "BootstrapStallMinutes": 20,
   "ImageSizeGB": 4,
   "ShareAccountName": "svc-ztp-media",

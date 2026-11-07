@@ -293,6 +293,7 @@ $bicepParameters | ConvertTo-Json -Depth 10 | Set-Content $parameters
     EventLogPath                   = $events
     BootstrapTimeoutMinutes        = [int](& $setting 'ztp.timeouts.bootstrap_minutes' 120)
     BootstrapVoucherTimeoutMinutes = [int](& $setting 'ztp.timeouts.bootstrap_voucher_minutes' 90)
+    AdaptersTimeoutMinutes         = [int](& $setting 'ztp.timeouts.adapters_minutes' 10)
     BootstrapStallMinutes          = [int](& $setting 'ztp.timeouts.bootstrap_stall_minutes' 20)
     SkipAzureCheck                 = (ConvertTo-ZtpBoolean (& $setting 'ztp.skip_azure_check' $false) 'ztp.skip_azure_check')
     Location                       = [string]$env_.azure_resources.location
