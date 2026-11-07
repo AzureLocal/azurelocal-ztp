@@ -26,7 +26,7 @@
   2. The flow diagram (`docs/diagrams/ztp-flow.drawio` and its PNG) is being redrawn by the coordinator.
   3. No live timing yet for the run up to the Handoff after Restore.
 
-## Previous session (2026-11-07, priority push for the tplabs rerun)
+## Previous session (2026-11-07, priority push for the lab rerun)
 
 - **What changed and why (owner decisions 2026-11-07):**
   - **static_method** (`network_intents.management.static_method`, schema 5 `networking.management.static_method`): `device` is the default. With it the site network is Automatic and the claim carries no Manual adapter, because a Manual site makes the OS install put the static address on the first ready port. `site` keeps the old Manual path.
@@ -38,7 +38,7 @@
 - **Tests:** Pester 5.9.1, 419 passed, 0 failed (the base had 391).
 - **Branch:** pushed to main. The refactor (ZTP ends at Network, Prepare and SBE removed, handoff schema 2, docs) is parked on the local branch `refactor/ztp-ends-at-network`. It will be rebased on this push.
 - **Next:**
-  1. Live rerun on tplabs: check the Device scan and the Restore of Slot2.
+  1. Live rerun in the lab: check the Device scan and the Restore of Slot2.
   2. The toolkit schema must list `static_method`, `provisioning_dhcp_range`, `bios_during_provisioning` and `maintenance_address`.
   3. Finish the refactor and its docs, including `docs/prerequisites.md`.
 
