@@ -816,14 +816,14 @@ Describe 'BIOS actions derived from the inventory (schema 5.4)' {
     AfterAll { $env:AZL_TOOLKIT_ROOT = $script:savedToolkitRoot54 }
 
     It 'turns the SAN adapter slot off for the install and back on afterwards, and enables the embedded NICs: the same values a raw Dell map gives' {
-        $e = Read-Derived (New-DerivedFile -Name 'tplabs')
+        $e = Read-Derived (New-DerivedFile -Name 'derived-maps')
         @(Test-ZtpEnvironment -Environment $e) | Should -BeNullOrEmpty
         $n = $e.cluster_nodes[0]
         Format-Bios (Get-ZtpEnvironmentBios -Environment $e -Node $n -Kind provisioning) | Should -Be 'Slot2=Disabled'
         Format-Bios (Get-ZtpEnvironmentBios -Environment $e -Node $n -Kind final) | Should -Be 'Slot2=Enabled,EmbNic1Nic2=Enabled'
         Format-Bios (Get-ZtpEnvironmentBios -Environment $e -Node $n -Kind boot) | Should -Be 'Slot2=Disabled,EmbNic1Nic2=Enabled'
-        # The same file with the raw maps the lab files carry today and no HBA listed gives the identical result.
-        $raw = Read-Derived (New-DerivedFile -Name 'tplabs-raw' -NoHba -Edit { param($d)
+        # The same file with raw maps instead of the listed HBA and no HBA listed gives the identical result.
+        $raw = Read-Derived (New-DerivedFile -Name 'raw-maps' -NoHba -Edit { param($d)
                 $d.hardware['bios'] = [ordered]@{ Slot2 = 'Enabled'; EmbNic1Nic2 = 'Enabled' }
                 $d.hardware['bios_during_provisioning'] = [ordered]@{ Slot2 = 'Disabled' }
             })

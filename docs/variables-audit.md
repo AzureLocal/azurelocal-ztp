@@ -171,6 +171,6 @@ This page walks every stage and script in `scripts/simplified-provisioning/` (Re
 | BMC type | `nodes[].bmc.type` (`idrac`, `ilo`, `xcc`, `other`) is not read; the BMC is whatever answers Redfish. One BMC login serves every node (`hardware.bmc`); a node with its own login is a validation error. |
 | Flagged: assumes a particular server | The 4 GiB image size (booted on Dell 16G): now M2. The 10 minute disk-boot gate "covers POST on these machines" (B20): kept; a server with a longer POST would see the gate end early, not fail. The `OSE1002` message ID is Dell's. Comments naming the AX-760 and the ConnectX port are history, not logic. |
 
-## What the two lab files need
+## Moving an existing file to 5.4
 
-See the report that came with this change: the key names and values to add to the lab's `infrastructure.yml` (schema 5.3) and what the old ZTP-layout file `infrastructure-ztp.yml` can and can't take. In short: set `_metadata.schema_version` to `5.4.0`, list the HBA in `nodes[].san.hbas[]` with `slot: "Slot 2"`, and the raw `Slot2` and `EmbNic1Nic2` maps become optional (they still win, and the derived plan gives exactly the same values).
+A file that uses none of the new keys behaves exactly as before. To let ZTP derive the BIOS plan instead of the raw Dell attributes: set `_metadata.schema_version` to `5.4.0`, list each machine's HBA in `nodes[].san.hbas[]` with `slot: "Slot 2"`, give the onboard ports `slot: "Embedded"`, and delete the raw `Slot2` and `EmbNic1Nic2` entries from `hardware.bios` and `hardware.bios_during_provisioning` (or keep them: an explicit key wins and gives the same values). The derived plan then reads `Slot2` Disabled for the install, `Slot2` Enabled after it, and `EmbNic1Nic2` Enabled.
