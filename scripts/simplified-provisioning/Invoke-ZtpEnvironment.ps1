@@ -162,6 +162,12 @@ $scanText = if ($scanRange -is [System.Collections.IDictionary] -and $scanRange[
                 $restore = [ordered]@{}
                 foreach ($k in $during.Keys) { $restore[$k] = $(if ($final.Contains($k)) { $final[$k] } else { '' }) }
                 $entry.bios_restore = $restore
+                # A derived slot goes back to the value Boot found; when that is the isolating value itself (a run that crashed
+                # left it off), to the vendor's enabled value. Restore reads this for the keys whose restore value is ''.
+                $derivedFallback = (Get-ZtpDerivedBios -Environment $env_ -Node $_).Fallback
+                $fallbackUsed = [ordered]@{}
+                foreach ($k in $restore.Keys) { if ($restore[$k] -eq '' -and $derivedFallback.Contains($k)) { $fallbackUsed[$k] = $derivedFallback[$k] } }
+                if ($fallbackUsed.Count) { $entry.bios_restore_fallback = $fallbackUsed }
             }
             $entry
         }) } |
@@ -250,10 +256,10 @@ $bicepParameters = [ordered]@{
         admin_secret_name         = @{ value = [string]$ztp.admin_secret.name }
         time_zone                 = @{ value = [string]$ztp.time_zone }
         nodes                     = @{ value = $bicepNodes }
-        apply_site_settings       = @{ value = [bool](& $setting 'ztp.apply_site_settings' $true) }
-        use_key_vault_configuration = @{ value = [bool](& $setting 'ztp.use_key_vault_configuration' $true) }
-        assign_provisioning_roles = @{ value = [bool](& $setting 'ztp.assign_provisioning_roles' $true) }
-        assign_hci_rp_role        = @{ value = [bool](& $setting 'ztp.assign_hci_rp_role' $true) }
+        apply_site_settings       = @{ value = (ConvertTo-ZtpBoolean (& $setting 'ztp.apply_site_settings' $true) 'ztp.apply_site_settings') }
+        use_key_vault_configuration = @{ value = (ConvertTo-ZtpBoolean (& $setting 'ztp.use_key_vault_configuration' $true) 'ztp.use_key_vault_configuration') }
+        assign_provisioning_roles = @{ value = (ConvertTo-ZtpBoolean (& $setting 'ztp.assign_provisioning_roles' $true) 'ztp.assign_provisioning_roles') }
+        assign_hci_rp_role        = @{ value = (ConvertTo-ZtpBoolean (& $setting 'ztp.assign_hci_rp_role' $true) 'ztp.assign_hci_rp_role') }
         managed_resource_group_name = @{ value = [string](& $setting 'ztp.managed_resource_group_name' '') }
         network_kind              = @{ value = [string](& $setting 'ztp.network_kind' 'LAN') }
         ip_assignment_type        = @{ value = $siteNetwork.IpAssignmentType }
@@ -270,7 +276,7 @@ $bicepParameters | ConvertTo-Json -Depth 10 | Set-Content $parameters
 [ordered]@{
     BootstrapCacheDirectory        = (Resolve-Path $media).Path
     BootstrapVersion               = [string]$ztp.provisioning_iso
-    IncludePreview                 = [bool](& $setting 'ztp.include_preview' $false)
+    IncludePreview                 = (ConvertTo-ZtpBoolean (& $setting 'ztp.include_preview' $false) 'ztp.include_preview')
     Oem                            = [string]$env_.hardware.vendor
     NodesFile                      = $nodesFile
     ImageDirectory                 = Join-Path (Resolve-Path $media).Path 'ztp-virtual-usb'
@@ -279,16 +285,16 @@ $bicepParameters | ConvertTo-Json -Depth 10 | Set-Content $parameters
     ShareHost                      = $shareHost
     ShareName                      = [string]$ztp.share_name
     ShareAccountName               = [string](& $setting 'ztp.share_account_name' 'svc-ztp-media')
-    KeepShare                      = [bool](& $setting 'ztp.keep_share' $false)
+    KeepShare                      = (ConvertTo-ZtpBoolean (& $setting 'ztp.keep_share' $false) 'ztp.keep_share')
     VoucherDirectory               = Join-Path (Resolve-Path $media).Path 'vouchers'
     VoucherWaitMinutes             = [int](& $setting 'ztp.timeouts.voucher_wait_minutes' 120)
     RfsWriteAttribute              = (Get-ZtpRfsWriteAttribute -Environment $env_)
-    SkipCertificateCheck           = (-not [bool](& $setting 'ztp.verify_bmc_certificate' $false))
+    SkipCertificateCheck           = (-not (ConvertTo-ZtpBoolean (& $setting 'ztp.verify_bmc_certificate' $false) 'ztp.verify_bmc_certificate'))
     EventLogPath                   = $events
     BootstrapTimeoutMinutes        = [int](& $setting 'ztp.timeouts.bootstrap_minutes' 120)
     BootstrapVoucherTimeoutMinutes = [int](& $setting 'ztp.timeouts.bootstrap_voucher_minutes' 90)
     BootstrapStallMinutes          = [int](& $setting 'ztp.timeouts.bootstrap_stall_minutes' 20)
-    SkipAzureCheck                 = [bool](& $setting 'ztp.skip_azure_check' $false)
+    SkipAzureCheck                 = (ConvertTo-ZtpBoolean (& $setting 'ztp.skip_azure_check' $false) 'ztp.skip_azure_check')
     Location                       = [string]$env_.azure_resources.location
     SubscriptionId                 = $clusterSub
     ResourceGroupName              = $rg
@@ -335,7 +341,7 @@ try {
 
     Set-AzContext -Tenant $tenant -Subscription $clusterSub -Scope Process -WarningAction SilentlyContinue | Out-Null
     if (-not (Get-AzResourceGroup -Name $rg -ErrorAction SilentlyContinue)) {
-        if (-not [bool](& $setting 'ztp.create_resource_group' $true)) { throw "Resource group $rg doesn't exist, and provisioning.simplified.create_resource_group is false. Create it first, or set the key to true." }
+        if (-not (ConvertTo-ZtpBoolean (& $setting 'ztp.create_resource_group' $true) 'ztp.create_resource_group')) { throw "Resource group $rg doesn't exist, and provisioning.simplified.create_resource_group is false. Create it first, or set the key to true." }
         New-AzResourceGroup -Name $rg -Location ([string]$env_.azure_resources.location) -Tag $tags | Out-Null
         Write-Output "Created resource group $rg"
     }
@@ -345,8 +351,8 @@ try {
         NodeName             = $Node
         BmcCredential        = $bmc
         ConfirmNotClustered  = $true
-        SkipCertificateCheck = (-not [bool](& $setting 'ztp.verify_bmc_certificate' $false))
-        RetryProvisionOs     = [bool](& $setting 'ztp.retry_provision_os' $true)
+        SkipCertificateCheck = (-not (ConvertTo-ZtpBoolean (& $setting 'ztp.verify_bmc_certificate' $false) 'ztp.verify_bmc_certificate'))
+        RetryProvisionOs     = (ConvertTo-ZtpBoolean (& $setting 'ztp.retry_provision_os' $true) 'ztp.retry_provision_os')
         Execute              = $true
         Confirm              = $false
     }

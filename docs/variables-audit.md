@@ -8,7 +8,7 @@ This page walks every stage and script in `scripts/simplified-provisioning/` (Re
 
 ## Summary
 
-100 items. Before this change 29 were controlled and 71 were not (a literal in code, or in the wrapper that writes the settings). Now **63 are backed by a variable** (the 29, plus 34 that became keys with today's value as the default), **2 vendor assumptions were fixed**, and **35 stay hard-coded** with a reason each:
+101 items. Before this change 29 were controlled and 72 were not (a literal in code, or in the wrapper that writes the settings). Now **64 are backed by a variable** (the 29, plus 35 that became keys with today's value as the default), **2 vendor assumptions were fixed**, and **35 stay hard-coded** with a reason each:
 
 | Group | Items kept hard-coded | Why |
 | --- | --- | --- |
@@ -49,10 +49,11 @@ This page walks every stage and script in `scripts/simplified-provisioning/` (Re
 | # | What it does | Schema 5 path | Environment-file key | Default | Status |
 | --- | --- | --- | --- | --- | --- |
 | B1 | BIOS attributes set before the maintenance boot (read first, change only what differs) | `hardware.bios`, `nodes[].bios`, `hardware.bios_during_provisioning`, `nodes[].bios_during_provisioning` | the same names | none | controlled |
-| B2 | BIOS: turn the SAN adapter slots off for the install, back on in Restore | `provisioning.simplified.isolate_san_adapters` with `nodes[].san.hbas[].slot` | `ztp.isolate_san_adapters` with `cluster_nodes[].san.hbas[].slot` | true when any node lists `san.hbas` | controlled (new): was only possible by writing Dell's `Slot2` by hand |
+| B2 | BIOS: turn the SAN adapter slots off for the install; Restore puts back the value Boot found (the vendor's enabled value if it was already disabled) | `provisioning.simplified.isolate_san_adapters` with `nodes[].san.hbas[].slot` | `ztp.isolate_san_adapters` with `cluster_nodes[].san.hbas[].slot` | true when this node lists `san.hbas` | controlled (new): was only possible by writing Dell's `Slot2` by hand |
 | B3 | BIOS: enable the embedded NICs for a management or provisioning port in slot Embedded | `provisioning.simplified.enable_embedded_nics` with `nodes[].network_adapters[].slot` | `ztp.enable_embedded_nics` | true | controlled (new) |
-| B4 | The slot label to attribute mapping (`Slot{n}`, `Disabled`, `Enabled`, `EmbNic1Nic2`) | none (vendor data) | `config/oem/<vendor>.json`, `bios` | Dell only | controlled (new): data, not code; other vendors need the raw map |
-| B5 | Before any node changes: read every node's BIOS and stop on an attribute the BMC lacks | none | none | always | HARD-CODED (kept): a safety check, no reason to switch it off |
+| B4 | The slot label to attribute mapping (`Slot{n}`, `Disabled`, `Enabled`, `EmbNic1Nic2`; `verified_models` AX-760) | none (vendor data) | `config/oem/<vendor>.json`, `bios` | Dell only | controlled (new): data, not code; other vendors name the attribute per HBA |
+| B4a | The BIOS attribute and values of one HBA, for a vendor without a mapping or a label that is not `Slot <n>` | `nodes[].san.hbas[].bios_attribute`, `bios_disabled_value`, `bios_enabled_value` | `cluster_nodes[].san.hbas[].*` | the mapping's values, else `Disabled` and `Enabled` | controlled (new) |
+| B5 | Before any node changes: read every node's BIOS and attribute registry, and stop on an attribute the BMC lacks or a value it does not allow (a registry that cannot be read warns and continues) | none | none | always | HARD-CODED (kept): a safety check, no reason to switch it off |
 | B6 | BIOS applied `OnReset`, then the node is restarted (`ForceRestart`, or `On` when it is off) | none | none | OnReset, ForceRestart | HARD-CODED (kept): the machine is reinstalled next; a graceful restart buys nothing |
 | B7 | How long to wait for the BIOS to report the new values | `provisioning.simplified.timeouts.bios_minutes` | `ztp.timeouts.bios_minutes` | 30 | controlled (new) |
 | B8 | BIOS poll interval while waiting | none | none | 30 s | HARD-CODED (kept): script parameter, internal polling |
@@ -173,4 +174,4 @@ This page walks every stage and script in `scripts/simplified-provisioning/` (Re
 
 ## Moving an existing file to 5.4
 
-A file that uses none of the new keys behaves exactly as before. To let ZTP derive the BIOS plan instead of the raw Dell attributes: set `_metadata.schema_version` to `5.4.0`, list each machine's HBA in `nodes[].san.hbas[]` with `slot: "Slot 2"`, give the onboard ports `slot: "Embedded"`, and delete the raw `Slot2` and `EmbNic1Nic2` entries from `hardware.bios` and `hardware.bios_during_provisioning` (or keep them: an explicit key wins and gives the same values). The derived plan then reads `Slot2` Disabled for the install, `Slot2` Enabled after it, and `EmbNic1Nic2` Enabled.
+A file that uses none of the new keys behaves exactly as before. To let ZTP derive the BIOS plan instead of the raw Dell attributes: set `_metadata.schema_version` to `5.4.0`, list each machine's HBA in `nodes[].san.hbas[]` with `slot: "Slot 2"`, give the onboard ports `slot: "Embedded"`, and delete the raw `Slot2` and `EmbNic1Nic2` entries from `hardware.bios` and `hardware.bios_during_provisioning` (or keep them: an explicit key wins and gives the same values). The derived plan then reads `Slot2` Disabled for the install, the value Boot found put back after it (`Enabled` on the lab machines, whose slot reads Enabled before the install), and `EmbNic1Nic2` Enabled.

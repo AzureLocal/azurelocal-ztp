@@ -54,6 +54,52 @@ function Get-ZtpNodeBiosReason {
     return $reasons
 }
 
+function Get-ZtpBiosAllowedValue {
+    <#
+    .SYNOPSIS
+    The values the BMC allows for each enumeration attribute, read from the BIOS attribute registry the Bios resource names
+    (@Redfish.AttributeRegistry, then /redfish/v1/Registries/<id> and the registry document it locates). Returns a hashtable
+    attribute -> allowed value names, or $null with a warning when the registry can't be read (the check then fails open;
+    whether the attribute exists is checked separately and does not).
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Session, [AllowNull()][object]$Bios, [string]$NodeName = 'the node')
+    $id = if ($Bios -and $Bios.PSObject.Properties['@Redfish.AttributeRegistry']) { [string]$Bios.'@Redfish.AttributeRegistry' } else { '' }
+    if (-not $id) { Write-Warning "${NodeName} BIOS: the BMC names no attribute registry, so the allowed values can't be checked before the change."; return $null }
+    try {
+        $registry = Invoke-ZtpRedfish -Session $Session -Path "/redfish/v1/Registries/$id"
+        $location = @(@($registry.Location) | Where-Object { $_.Uri }) | Select-Object -First 1
+        $document = Invoke-ZtpRedfish -Session $Session -Path ([string]$location.Uri)
+        $allowed = @{}
+        foreach ($a in @($document.RegistryEntries.Attributes)) {
+            if ($a.PSObject.Properties['AttributeName'] -and $a.PSObject.Properties['Value'] -and @($a.Value).Count) { $allowed[[string]$a.AttributeName] = @($a.Value | ForEach-Object { [string]$_.ValueName }) }
+        }
+        return $allowed
+    }
+    catch {
+        Write-Warning "${NodeName} BIOS: couldn't read the attribute registry $id ($($_.Exception.Message)), so the allowed values aren't checked before the change."
+        return $null
+    }
+}
+
+function Get-ZtpBiosDisallowedValue {
+    <#
+    .SYNOPSIS
+    One message per change whose value the BMC doesn't allow for that attribute (attribute, node, value, the allowed ones).
+    Nothing for an attribute the registry doesn't list as an enumeration, or when -Allowed is $null.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([AllowNull()][object[]]$Change, [AllowNull()][System.Collections.IDictionary]$Allowed, [string]$NodeName = 'the node', [string]$BmcAddress = '')
+    if (-not $Allowed) { return }
+    foreach ($c in @($Change)) {
+        if ($null -eq $c -or -not $Allowed.Contains($c.Attribute)) { continue }
+        if ([string]$c.Desired -cnotin @($Allowed[$c.Attribute])) {
+            "${NodeName}$(if ($BmcAddress) { " ($BmcAddress)" }): the BIOS attribute $($c.Attribute) can't be set to '$($c.Desired)'; the BMC allows: $(@($Allowed[$c.Attribute]) -join ', ')."
+        }
+    }
+}
+
 function ConvertTo-ZtpBiosValue {
     <#
     .SYNOPSIS

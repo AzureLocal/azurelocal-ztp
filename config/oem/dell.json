@@ -25,6 +25,7 @@
     "enabled": "Enabled",
     "embedded_nic_attribute": "EmbNic1Nic2",
     "embedded_enabled": "Enabled",
+    "verified_models": [ "AX-760" ],
     "status": "Dell PowerEdge and AX (iDRAC): PCIe slot n is the BIOS attribute Slot<n> (Enabled, Disabled, BootDriverDisabled); the onboard NICs are EmbNic1Nic2, which ships as DisabledOs. Seen on an AX-760 (16G)."
   },
   "models": {

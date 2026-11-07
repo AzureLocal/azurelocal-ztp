@@ -820,25 +820,26 @@ Describe 'BIOS actions derived from the inventory (schema 5.4)' {
         @(Test-ZtpEnvironment -Environment $e) | Should -BeNullOrEmpty
         $n = $e.cluster_nodes[0]
         Format-Bios (Get-ZtpEnvironmentBios -Environment $e -Node $n -Kind provisioning) | Should -Be 'Slot2=Disabled'
-        Format-Bios (Get-ZtpEnvironmentBios -Environment $e -Node $n -Kind final) | Should -Be 'Slot2=Enabled,EmbNic1Nic2=Enabled'
-        Format-Bios (Get-ZtpEnvironmentBios -Environment $e -Node $n -Kind boot) | Should -Be 'Slot2=Disabled,EmbNic1Nic2=Enabled'
+        # Restore puts the slot back to the value Boot found, so the derived final state holds only the embedded NICs.
+        Format-Bios (Get-ZtpEnvironmentBios -Environment $e -Node $n -Kind final) | Should -Be 'EmbNic1Nic2=Enabled'
+        Format-Bios (Get-ZtpEnvironmentBios -Environment $e -Node $n -Kind boot) | Should -Be 'EmbNic1Nic2=Enabled,Slot2=Disabled'
         # The same file with raw maps instead of the listed HBA and no HBA listed gives the identical result.
         $raw = Read-Derived (New-DerivedFile -Name 'raw-maps' -NoHba -Edit { param($d)
                 $d.hardware['bios'] = [ordered]@{ Slot2 = 'Enabled'; EmbNic1Nic2 = 'Enabled' }
                 $d.hardware['bios_during_provisioning'] = [ordered]@{ Slot2 = 'Disabled' }
             })
-        foreach ($kind in 'provisioning', 'final', 'boot') {
+        foreach ($kind in 'provisioning', 'boot') {
             $a = Get-ZtpEnvironmentBios -Environment $e -Node $e.cluster_nodes[1] -Kind $kind
             $b = Get-ZtpEnvironmentBios -Environment $raw -Node $raw.cluster_nodes[1] -Kind $kind
-            (Format-Bios $a -split ',' | Sort-Object) -join ',' | Should -Be ((Format-Bios $b -split ',' | Sort-Object) -join ',') -Because "the $kind map must be what the raw maps give"
+            ((Format-Bios $a) -split ',' | Sort-Object) -join ',' | Should -Be (((Format-Bios $b) -split ',' | Sort-Object) -join ',') -Because "the $kind map must be what the raw maps give"
         }
     }
 
     It 'prints the derived plan with the reason for each decision' {
         $e = Read-Derived (New-DerivedFile -Name 'plan')
         $plan = @(Get-ZtpDerivedBiosPlan -Environment $e)
-        $plan | Should -Contain 'PLAN: node-01 BIOS Slot2 Disabled for the install because nodes[0].san.hbas[0] is in Slot 2 (the Restore stage sets it back to Enabled)'
-        $plan | Should -Contain 'PLAN: node-02 BIOS Slot2 Disabled for the install because nodes[1].san.hbas[0] is in Slot 2 (the Restore stage sets it back to Enabled)'
+        $plan | Should -Contain 'PLAN: node-01 BIOS Slot2 Disabled for the install because nodes[0].san.hbas[0] is in Slot 2 (the Restore stage sets it back to its original value, or Enabled if it was already Disabled)'
+        $plan | Should -Contain 'PLAN: node-02 BIOS Slot2 Disabled for the install because nodes[1].san.hbas[0] is in Slot 2 (the Restore stage sets it back to its original value, or Enabled if it was already Disabled)'
         @($plan | Where-Object { $_ -like 'PLAN: node-01 BIOS EmbNic1Nic2 Enabled because the management port ''Embedded NIC 1'' of nodes[[]0] is in slot Embedded*' }).Count | Should -Be 1
         @(Get-ZtpDerivedBiosPlan -Environment $e -Node 'node-02').Count | Should -Be 2 -Because 'only the named node''s decisions'
     }
@@ -856,7 +857,7 @@ Describe 'BIOS actions derived from the inventory (schema 5.4)' {
         $e = Read-Derived (New-DerivedFile -Name 'slots' -Edit { param($d) $d.nodes[0].san.hbas[0].slot = 'Slot5'; $d.nodes[0].san.hbas += [ordered]@{ slot = 'slot-7'; type = 'iscsi_offload' } })
         $derived = Get-ZtpDerivedBios -Environment $e -Node $e.cluster_nodes[0]
         Format-Bios $derived.During | Should -Be 'Slot5=Disabled,Slot7=Disabled'
-        Format-Bios $derived.Final | Should -Be 'Slot5=Enabled,Slot7=Enabled,EmbNic1Nic2=Enabled'
+        Format-Bios $derived.Final | Should -Be 'EmbNic1Nic2=Enabled'
         (Get-ZtpDerivedBios -Environment $e -Node $e.cluster_nodes[1]).During.Keys | Should -Be @('Slot2') -Because 'each node follows its own inventory'
     }
 
@@ -927,12 +928,16 @@ Describe 'BIOS actions derived from the inventory (schema 5.4)' {
         # The HBA is listed, the vendor has no bios section, and the file gives no raw map: stop, naming the vendor and the way out.
         $file = New-DerivedFile -Name 'no-mapping' -Vendor 'Contoso'
         $message = Get-AssertText $file
-        $message | Should -BeLike '*nodes[[]0] (node-01).san.hbas[[]0] is in Slot 2*no BIOS slot mapping for vendor ''Contoso''*won''t guess*hardware.bios_during_provisioning*isolate_san_adapters*'
-        # The same file with the raw map the operator already writes is fine; the plan says the explicit map is used.
-        $fine = Read-Derived (New-DerivedFile -Name 'no-mapping-raw' -Vendor 'Contoso' -Edit { param($d) $d.hardware['bios_during_provisioning'] = [ordered]@{ PciSlot2 = 'Off' }; $d.hardware['bios'] = [ordered]@{ PciSlot2 = 'On' } })
+        $message | Should -BeLike '*nodes[[]0] (node-01).san.hbas[[]0] is in Slot 2*no BIOS slot mapping for vendor ''Contoso''*won''t guess*bios_attribute*isolate_san_adapters*'
+        # An unrelated explicit key no longer excuses the missing mapping: the safety stop stays.
+        $other = Get-AssertText (New-DerivedFile -Name 'no-mapping-unrelated' -Vendor 'Contoso' -Edit { param($d) $d.hardware['bios_during_provisioning'] = [ordered]@{ SriovGlobalEnable = 'Disabled' } })
+        $other | Should -BeLike '*no BIOS slot mapping for vendor ''Contoso''*'
+        # The HBA's own bios_attribute is what works without a mapping.
+        $fine = Read-Derived (New-DerivedFile -Name 'no-mapping-own' -Vendor 'Contoso' -Edit { param($d) foreach ($n in $d.nodes) { $n.san.hbas[0]['bios_attribute'] = 'PciSlot2'; $n.san.hbas[0]['bios_disabled_value'] = 'Off'; $n.san.hbas[0]['bios_enabled_value'] = 'On' } })
         @(Test-ZtpEnvironment -Environment $fine) | Should -BeNullOrEmpty
-        @(Get-ZtpDerivedBiosPlan -Environment $fine -Node 'node-01')[0] | Should -BeLike '*not isolated by derivation: ZTP has no slot mapping for vendor ''Contoso''*using hardware.bios_during_provisioning as written (PciSlot2=Off)*'
         Format-Bios (Get-ZtpEnvironmentBios -Environment $fine -Node $fine.cluster_nodes[0] -Kind provisioning) | Should -Be 'PciSlot2=Off'
+        (Get-ZtpDerivedBios -Environment $fine -Node $fine.cluster_nodes[0]).Fallback['PciSlot2'].restore | Should -Be 'On'
+        @(Get-ZtpDerivedBiosPlan -Environment $fine -Node 'node-01')[0] | Should -BeLike 'PLAN: node-01 BIOS PciSlot2 Off for the install because nodes[[]0].san.hbas[[]0] is in Slot 2 (the Restore stage sets it back to its original value, or On if it was already Off)'
     }
 
     It 'leaves the embedded NICs alone for an unmapped vendor unless the switch asks for them' {
@@ -966,11 +971,12 @@ Describe 'BIOS actions derived from the inventory (schema 5.4)' {
 
         $good = New-DerivedFile -Name 'run-good'
         $text = Get-StepText (& (Join-Path $bin 'Invoke-ZtpEnvironment.ps1') -InfrastructureFile $good *>&1)
-        $text | Should -BeLike '*PLAN: node-01 BIOS Slot2 Disabled for the install because nodes[[]0].san.hbas[[]0] is in Slot 2 (the Restore stage sets it back to Enabled)*'
-        $text | Should -BeLike '*BIOS set by the Boot stage before the maintenance boot: node-01 Slot2=Disabled, EmbNic1Nic2=Enabled*'
-        $text | Should -BeLike '*BIOS set back by the Restore stage after Network: node-01 Slot2=Enabled*'
+        $text | Should -BeLike '*PLAN: node-01 BIOS Slot2 Disabled for the install because nodes[[]0].san.hbas[[]0] is in Slot 2 (the Restore stage sets it back to its original value, or Enabled if it was already Disabled)*'
+        $text | Should -BeLike '*BIOS set by the Boot stage before the maintenance boot: node-01 EmbNic1Nic2=Enabled, Slot2=Disabled*'
+        $text | Should -BeLike '*BIOS set back by the Restore stage after Network: node-01 Slot2=<value before Boot>*'
         $nodes = (Get-Content -LiteralPath $nodesFile -Raw | ConvertFrom-Json).nodes
-        "$($nodes[0].bios.Slot2) $($nodes[0].bios.EmbNic1Nic2) $($nodes[0].bios_restore.Slot2)" | Should -Be 'Disabled Enabled Enabled'
+        "$($nodes[0].bios.Slot2) $($nodes[0].bios.EmbNic1Nic2) $($nodes[0].bios_restore.Slot2)" | Should -Be 'Disabled Enabled '
+        "$($nodes[0].bios_restore_fallback.Slot2.when_found) $($nodes[0].bios_restore_fallback.Slot2.restore)" | Should -Be 'Disabled Enabled' -Because 'a slot Boot finds already disabled goes back to Enabled'
         $nodes[0].bios_restore.PSObject.Properties.Name | Should -Be @('Slot2') -Because 'the embedded NICs stay enabled'
         $nodes[0].bios_reason.Slot2 | Should -BeLike 'derived: nodes[[]0].san.hbas[[]0] is in Slot 2*'
         $nodes[0].bios_reason.EmbNic1Nic2 | Should -BeLike 'derived: the management port ''Embedded NIC 1'' is in slot Embedded*'
@@ -1036,7 +1042,7 @@ Describe 'Every ZTP setting is a key of the master schema (schema 5.4)' {
         $z = Read-ZtpInfrastructure -Path (Join-Path $TestDrive 'tk-infrastructure.ztp.example.yml')
         $z.cluster_nodes[0].san.hbas[0].slot | Should -Be 'Slot 2'
         ($z.cluster_nodes[0].network_adapters | Where-Object name -EQ 'Embedded NIC 1').slot | Should -Be 'Embedded'
-        Format-Bios (Get-ZtpEnvironmentBios -Environment $z -Node $z.cluster_nodes[0] -Kind boot) | Should -Be 'Slot2=Disabled,EmbNic1Nic2=Enabled' -Because 'the ZTP template writes no raw attribute at all'
+        Format-Bios (Get-ZtpEnvironmentBios -Environment $z -Node $z.cluster_nodes[0] -Kind boot) | Should -Be 'EmbNic1Nic2=Enabled,Slot2=Disabled' -Because 'the ZTP template writes no raw attribute at all'
     }
 
     AfterAll { $env:AZL_TOOLKIT_ROOT = $script:savedToolkitRoot54b }
@@ -1196,5 +1202,172 @@ $global:ztpE_runs.Add([pscustomobject]@{ Script = 'Invoke-ZtpProvisioning.ps1'; 
         $run = $global:ztpE_runs[0].Params
         $run['SkipCertificateCheck'] | Should -BeFalse
         $run['RetryProvisionOs'] | Should -BeFalse
+    }
+}
+
+Describe 'Derived BIOS: hardware-safety rules (restore target, shared slots, per-HBA attribute, switches, conflicts)' {
+    BeforeAll {
+        $script:savedToolkitRoot54e = $env:AZL_TOOLKIT_ROOT
+        $env:AZL_TOOLKIT_ROOT = Join-Path $TestDrive 'no-toolkit-here'
+        $script:oemRoot2 = Join-Path $script:repoRoot 'config/oem'
+        function New-SafeFile {
+            param([string]$Name = [guid]::NewGuid().ToString('N'), [scriptblock]$Edit, [string]$Vendor = 'Dell', [switch]$NoHba)
+            $script:safeEdit = $Edit; $script:safeVendor = $Vendor; $script:safeNoHba = [bool]$NoHba
+            New-TestInfrastructureV5 -Name "safe-$Name" -Edit {
+                param($d)
+                $d.hardware.vendor = $script:safeVendor
+                if (-not $script:safeNoHba) { foreach ($n in $d.nodes) { $n['san'] = [ordered]@{ hbas = @([ordered]@{ slot = 'Slot 2'; type = 'fibre_channel' }) } } }
+                if ($script:safeEdit) { & $script:safeEdit $d }
+            }
+        }
+        function Read-Safe { param([string]$File) Read-ZtpInfrastructure -Path $File }
+        function Get-SafeText { param([string]$Path) try { Assert-ZtpEnvironment -Environment (Read-ZtpInfrastructure -Path $Path) -Source 'infra.yml' -InformationAction SilentlyContinue; '' } catch { $_.Exception.Message } }
+        function Format-Safe { param($Bios) @($Bios.Keys | ForEach-Object { "$_=$($Bios[$_])" }) -join ',' }
+    }
+    AfterAll { $env:AZL_TOOLKIT_ROOT = $script:savedToolkitRoot54e }
+
+    It 'leaves the derived slot out of the final state, so Restore puts back what Boot found, with the exception recorded' {
+        $e = Read-Safe (New-SafeFile -Name 'restore-target')
+        $derived = Get-ZtpDerivedBios -Environment $e -Node $e.cluster_nodes[0]
+        $derived.Final.Contains('Slot2') | Should -BeFalse
+        $derived.During['Slot2'] | Should -Be 'Disabled'
+        "$($derived.Fallback['Slot2'].when_found) $($derived.Fallback['Slot2'].restore)" | Should -Be 'Disabled Enabled'
+        # An explicit final value for the slot wins and needs no exception.
+        $own = Read-Safe (New-SafeFile -Name 'restore-explicit' -Edit { param($d) $d.hardware['bios'] = [ordered]@{ Slot2 = 'BootDriverDisabled' } })
+        $x = Get-ZtpDerivedBios -Environment $own -Node $own.cluster_nodes[0]
+        $x.Fallback.Count | Should -Be 0
+        Format-Safe (Get-ZtpEnvironmentBios -Environment $own -Node $own.cluster_nodes[0] -Kind final) | Should -Be 'EmbNic1Nic2=Enabled,Slot2=BootDriverDisabled'
+    }
+
+    It 'stops when a network port only CONTAINS the HBA''s slot number: <Label>' -ForEach @(
+        @{ Label = 'Slot 2 Port 1' }, @{ Label = 'PCIe Slot 2' }, @{ Label = 'Riser 1 Slot 2' }, @{ Label = 'slot_2' }, @{ Label = 'SLOT-2 (rear)' }
+    ) {
+        $script:looseLabel = $Label
+        $file = New-SafeFile -Name 'loose' -Edit { param($d) $d.nodes[0].network_adapters += [ordered]@{ name = 'Extra Port'; mac_address = '02:00:00:00:00:99'; slot = $script:looseLabel; roles = @('compute'); ip_assignment = 'none' } }
+        (Get-SafeText $file) | Should -BeLike "*nodes[[]0] (node-01).san.hbas[[]0] is in Slot 2, which also holds the network port 'Extra Port'*"
+    }
+
+    It 'lets a NIC in another slot through, including one whose number only starts like the HBA''s (Slot 22)' {
+        $script:looseLabel = 'Slot 22 Port 1'
+        $e = Read-Safe (New-SafeFile -Name 'other-slot' -Edit { param($d) $d.nodes[0].network_adapters += [ordered]@{ name = 'Extra Port'; mac_address = '02:00:00:00:00:98'; slot = $script:looseLabel; roles = @('compute'); ip_assignment = 'none' } })
+        @(Test-ZtpEnvironment -Environment $e) | Should -BeNullOrEmpty
+        $script:looseLabel = 'Slot 3 Port 2'
+        $e = Read-Safe (New-SafeFile -Name 'slot-3' -Edit { param($d) $d.nodes[0].network_adapters += [ordered]@{ name = 'Extra Port 3'; mac_address = '02:00:00:00:00:97'; slot = $script:looseLabel; roles = @('compute'); ip_assignment = 'none' } })
+        @(Test-ZtpEnvironment -Environment $e) | Should -BeNullOrEmpty
+    }
+
+    It 'warns, without stopping, about a port in an OCP or riser position that has no slot number' {
+        $script:looseLabel = 'OCP 1'
+        $e = Read-Safe (New-SafeFile -Name 'ocp' -Edit { param($d) $d.nodes[0].network_adapters += [ordered]@{ name = 'OCP Port'; mac_address = '02:00:00:00:00:96'; slot = $script:looseLabel; roles = @('compute'); ip_assignment = 'none' } })
+        @(Test-ZtpEnvironment -Environment $e) | Should -BeNullOrEmpty
+        @(Get-ZtpDerivedBiosPlan -Environment $e -Node 'node-01' | Where-Object { $_ -like "*BIOS warning: the network port 'OCP Port' is in 'OCP 1', which has no slot number*" }).Count | Should -Be 1
+    }
+
+    It 'with no vendor mapping, isolates only an HBA that names its own attribute, and an unrelated explicit key no longer excuses the rest' {
+        $both = Read-Safe (New-SafeFile -Name 'one-own' -Vendor 'Contoso' -Edit { param($d)
+                $d.nodes[0].san.hbas += [ordered]@{ slot = 'Slot 4'; bios_attribute = 'PciSlot4'; bios_disabled_value = 'Off' }
+                $d.hardware['bios_during_provisioning'] = [ordered]@{ SriovGlobalEnable = 'Disabled' }
+            })
+        $derived = Get-ZtpDerivedBios -Environment $both -Node $both.cluster_nodes[0]
+        Format-Safe $derived.During | Should -Be 'PciSlot4=Off'
+        @($derived.Problems).Count | Should -Be 1 -Because 'the Slot 2 HBA has neither a mapping nor its own attribute'
+        $derived.Problems[0] | Should -BeLike '*san.hbas[[]0] is in Slot 2*no BIOS slot mapping*bios_attribute*'
+        $derived.Fallback['PciSlot4'].restore | Should -Be 'Enabled' -Because 'the default enabled value when neither the HBA nor a mapping gives one'
+    }
+
+    It 'lets an HBA''s own attribute and values override the vendor mapping' {
+        $e = Read-Safe (New-SafeFile -Name 'own-over-mapping' -Edit { param($d) $d.nodes[0].san.hbas[0]['bios_attribute'] = 'SlotX'; $d.nodes[0].san.hbas[0]['bios_enabled_value'] = 'On'; $d.nodes[0].san.hbas[0]['bios_disabled_value'] = 'Off' })
+        $derived = Get-ZtpDerivedBios -Environment $e -Node $e.cluster_nodes[0]
+        Format-Safe $derived.During | Should -Be 'SlotX=Off'
+        $derived.Fallback['SlotX'].restore | Should -Be 'On'
+        # An explicit bios_during_provisioning key for the same attribute still wins.
+        $win = Read-Safe (New-SafeFile -Name 'own-explicit' -Edit { param($d) $d.nodes[0].san.hbas[0]['bios_attribute'] = 'SlotX'; $d.nodes[0]['bios_during_provisioning'] = [ordered]@{ SlotX = 'Hidden' } })
+        Format-Safe (Get-ZtpEnvironmentBios -Environment $win -Node $win.cluster_nodes[0] -Kind provisioning) | Should -Be 'SlotX=Hidden'
+    }
+
+    It 'accepts an HBA label that is not a slot when the HBA names its attribute' {
+        $e = Read-Safe (New-SafeFile -Name 'ocp-hba' -Vendor 'Contoso' -Edit { param($d) $d.nodes[0].san.hbas[0].slot = 'OCP 2'; $d.nodes[0].san.hbas[0]['bios_attribute'] = 'OcpSlot'; $d.nodes[1].san.hbas[0]['bios_attribute'] = 'PciSlot2' })
+        @(Test-ZtpEnvironment -Environment $e) | Should -BeNullOrEmpty
+        Format-Safe (Get-ZtpDerivedBios -Environment $e -Node $e.cluster_nodes[0]).During | Should -Be 'OcpSlot=Disabled'
+    }
+
+    It 'decides per node: a node without HBAs gets none, whatever the other nodes list, and a node with them is isolated whatever the environment lists' {
+        $e = Read-Safe (New-SafeFile -Name 'per-node' -Edit { param($d) $d.nodes[1].Remove('san') })
+        (Get-ZtpDerivedBios -Environment $e -Node $e.cluster_nodes[0]).During.Count | Should -Be 1
+        (Get-ZtpDerivedBios -Environment $e -Node $e.cluster_nodes[1]).During.Count | Should -Be 0
+        $alone = [ordered]@{ hardware = $e.hardware; ztp = [ordered]@{}; cluster_nodes = @() }
+        Format-Safe (Get-ZtpDerivedBios -Environment $alone -Node $e.cluster_nodes[0]).During | Should -Be 'Slot2=Disabled'
+    }
+
+    It 'reads the switches strictly: true and false in any case are booleans, 0 and yes are problems' {
+        ConvertTo-ZtpBoolean $true | Should -BeTrue
+        ConvertTo-ZtpBoolean 'true' | Should -BeTrue; ConvertTo-ZtpBoolean 'TRUE' | Should -BeTrue
+        ConvertTo-ZtpBoolean 'false' | Should -BeFalse; ConvertTo-ZtpBoolean 'False' | Should -BeFalse; ConvertTo-ZtpBoolean ' FALSE ' | Should -BeFalse
+        foreach ($bad in '0', '1', 'yes', 'no', '', 2, @('x')) { { ConvertTo-ZtpBoolean $bad 'some.key' } | Should -Throw "some.key must be true or false*" }
+    }
+
+    It 'treats the string ''false'' as false for isolate_san_adapters and enable_embedded_nics, never as true' {
+        foreach ($text in 'false', 'False', 'FALSE') {
+            $script:switchText = $text
+            $e = Read-Safe (New-SafeFile -Name 'str-false' -Edit { param($d) $d.provisioning.simplified['isolate_san_adapters'] = $script:switchText; $d.provisioning.simplified['enable_embedded_nics'] = $script:switchText })
+            @(Test-ZtpEnvironment -Environment $e) | Should -BeNullOrEmpty
+            $derived = Get-ZtpDerivedBios -Environment $e -Node $e.cluster_nodes[0]
+            $derived.During.Count | Should -Be 0; $derived.Final.Count | Should -Be 0
+        }
+    }
+
+    It 'names the key when a switch is not a boolean: <Value>' -ForEach @(@{ Value = '0' }, @{ Value = 'yes' }, @{ Value = 'off' }) {
+        $script:switchText = $Value
+        foreach ($key in 'isolate_san_adapters', 'enable_embedded_nics', 'create_resource_group', 'apply_site_settings', 'retry_provision_os', 'skip_azure_check', 'include_preview') {
+            $script:switchKey = $key
+            $text = Get-SafeText (New-SafeFile -Name 'bad-switch' -Edit { param($d) $d.provisioning.simplified[$script:switchKey] = $script:switchText })
+            $text | Should -BeLike "*provisioning.simplified.$key must be true or false, not '$Value'*" -Because $key
+        }
+        $text = Get-SafeText (New-SafeFile -Name 'bad-bmc' -Edit { param($d) $d.hardware.bmc['verify_certificate'] = $script:switchText })
+        $text | Should -BeLike "*hardware.bmc.verify_certificate must be true or false, not '$Value'*"
+    }
+
+    It 'rejects two derivations that target one attribute with different values' {
+        $dir = Join-Path $TestDrive 'oem-conflict'; $null = New-Item -ItemType Directory -Force -Path $dir
+        Set-Content -LiteralPath (Join-Path $dir 'dell.json') -Value '{ "oem": "Dell", "bios": { "slot_attribute": "EmbNic{n}Nic2", "disabled": "Disabled", "enabled": "Enabled", "embedded_nic_attribute": "EmbNic1Nic2", "embedded_enabled": "Enabled" } }'
+        $e = Read-Safe (New-SafeFile -Name 'conflict' -Edit { param($d) $d.nodes[0].san.hbas[0].slot = 'Slot 1' })
+        $derived = Get-ZtpDerivedBios -Environment $e -Node $e.cluster_nodes[0] -ConfigRoot $dir
+        @($derived.Problems).Count | Should -Be 1
+        $derived.Problems[0] | Should -BeLike '*one BIOS attribute, EmbNic1Nic2, both to the slot of a SAN adapter (value Disabled for the install) and to the embedded NICs (value Enabled)*'
+    }
+
+    It 'ignores a duplicate HBA row for the same slot with a warning, and rejects two rows that disagree' {
+        $dup = Read-Safe (New-SafeFile -Name 'dup' -Edit { param($d) $d.nodes[0].san.hbas += [ordered]@{ slot = 'slot2'; model = 'Same card twice' } })
+        $derived = Get-ZtpDerivedBios -Environment $dup -Node $dup.cluster_nodes[0]
+        @($derived.Problems).Count | Should -Be 0
+        Format-Safe $derived.During | Should -Be 'Slot2=Disabled'
+        @($derived.Plan | Where-Object { $_ -like '*BIOS warning: nodes[[]0].san.hbas[[]1] (slot2) targets Slot2, which an earlier adapter already isolates; the duplicate row is ignored.' }).Count | Should -Be 1
+        $clash = Read-Safe (New-SafeFile -Name 'clash' -Edit { param($d) $d.nodes[0].san.hbas[0]['bios_attribute'] = 'SlotX'; $d.nodes[0].san.hbas += [ordered]@{ slot = 'Slot 4'; bios_attribute = 'SlotX'; bios_disabled_value = 'Off' } })
+        (Get-ZtpDerivedBios -Environment $clash -Node $clash.cluster_nodes[0]).Problems[0] | Should -BeLike '*both target the BIOS attribute SlotX, with different values*'
+    }
+
+    It 'warns, and does not block, when the model is not one the Dell mapping was verified on' {
+        $ok = Read-Safe (New-SafeFile -Name 'model-ok')
+        @((Get-ZtpDerivedBios -Environment $ok -Node $ok.cluster_nodes[0]).Plan | Where-Object { $_ -like '*slot mapping verified on*' }).Count | Should -Be 0
+        $other = Read-Safe (New-SafeFile -Name 'model-other' -Edit { param($d) $d.hardware.model = 'AX-650' })
+        $derived = Get-ZtpDerivedBios -Environment $other -Node $other.cluster_nodes[0]
+        @($derived.Problems).Count | Should -Be 0
+        $derived.During['Slot2'] | Should -Be 'Disabled'
+        @($derived.Plan | Where-Object { $_ -like 'PLAN: node-01 BIOS warning: slot mapping verified on: AX-760; for AX-650 confirm that attribute Slot2, EmbNic1Nic2 controls the adapter''s slot before running.' }).Count | Should -Be 1
+        $none = Read-Safe (New-SafeFile -Name 'model-none' -Edit { param($d) $d.hardware.Remove('model') })
+        @((Get-ZtpDerivedBios -Environment $none -Node $none.cluster_nodes[0]).Plan | Where-Object { $_ -like '*for an unspecified model (hardware.model)*' }).Count | Should -Be 1
+    }
+
+    It 'handles an embedded port that only has the role provisioning, and names the management port when there is one' {
+        $e = Read-Safe (New-SafeFile -Name 'embedded-prov' -NoHba -Edit { param($d)
+                foreach ($p in $d.nodes[0].network_adapters) { if ($p.slot -eq 'Embedded') { $p.slot = 'Slot 1' } }
+                $d.nodes[0].network_adapters += [ordered]@{ name = 'LOM 3'; mac_address = '02:00:00:00:00:95'; slot = 'Embedded'; roles = @('provisioning'); ip_assignment = 'none' }
+            })
+        $derived = Get-ZtpDerivedBios -Environment $e -Node $e.cluster_nodes[0]
+        @($derived.Problems).Count | Should -Be 0
+        Format-Safe $derived.Final | Should -Be 'EmbNic1Nic2=Enabled'
+        $derived.Plan | Should -Contain "PLAN: node-01 BIOS EmbNic1Nic2 Enabled because the provisioning port 'LOM 3' of nodes[0] is in slot Embedded (the OS can't see disabled embedded NICs)"
+        $both = Read-Safe (New-SafeFile -Name 'embedded-both' -NoHba -Edit { param($d) $d.nodes[0].network_adapters += [ordered]@{ name = 'LOM 3'; mac_address = '02:00:00:00:00:94'; slot = 'Embedded'; roles = @('provisioning'); ip_assignment = 'none' } })
+        (Get-ZtpDerivedBios -Environment $both -Node $both.cluster_nodes[0]).Plan[0] | Should -BeLike "*the management port 'Embedded NIC 1' of nodes[[]0]*"
     }
 }

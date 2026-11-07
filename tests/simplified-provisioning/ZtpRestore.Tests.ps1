@@ -173,3 +173,38 @@ Describe 'Restore-ZtpBios.ps1' {
         & $script:calls | Should -BeNullOrEmpty
     }
 }
+
+Describe 'Restore-ZtpBios.ps1 puts back what Boot found (derived slots)' {
+    BeforeEach {
+        $env:ZTPR_LOG = Join-Path $TestDrive "calls-$([guid]::NewGuid().ToString('N')).jsonl"
+        Remove-Item Env:\ZTPR_FAIL, Env:\ZTPR_ALREADY, Env:\ZTPR_NORESULT, Env:\ZTPR_NONTERM, Env:\ZTPR_STATUS -ErrorAction SilentlyContinue
+        $script:nodesWithFallback = {
+            $n = [ordered]@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11'; bios_restore = [ordered]@{ Slot2 = '' }; bios_restore_fallback = [ordered]@{ Slot2 = [ordered]@{ when_found = 'Disabled'; restore = 'Enabled' } } }
+            $f = Join-Path $TestDrive "nodes-fb-$([guid]::NewGuid().ToString('N')).json"
+            @{ nodes = @($n) } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $f
+            $f
+        }
+        $script:planOf = { param($original) @(& $script:restore -NodeName node-01 -NodesFile (& $script:nodesWithFallback) -Original @{ 'node-01' = $original } | Where-Object { $_ -is [string] }) }
+    }
+
+    It 'restores the original value, not the vendor''s enabled one: BootDriverDisabled and DisabledOs stay as found' {
+        (& $script:planOf @{ Slot2 = 'BootDriverDisabled' }) | Should -BeLike 'PLAN: node-01 Restore BIOS Slot2=BootDriverDisabled (from the value before Boot):*'
+        (& $script:planOf @{ Slot2 = 'DisabledOs' }) | Should -BeLike 'PLAN: node-01 Restore BIOS Slot2=DisabledOs (from the value before Boot):*'
+        (& $script:planOf @{ Slot2 = 'Enabled' }) | Should -BeLike 'PLAN: node-01 Restore BIOS Slot2=Enabled (from the value before Boot):*'
+    }
+
+    It 'turns a slot Boot found already disabled back on: a machine our own run left off must not stay off' {
+        (& $script:planOf @{ Slot2 = 'Disabled' }) | Should -BeLike 'PLAN: node-01 Restore BIOS Slot2=Enabled (from the vendor''s enabled value: Boot found Slot2 already Disabled):*'
+    }
+
+    It 'stops, naming the way out, when the saved value is gone' {
+        $message = try { & $script:restore -NodeName node-01 -NodesFile (& $script:nodesWithFallback) -Original @{}; '' } catch { $_.Exception.Message }
+        $message | Should -BeLike '*no value saved for Slot2 before Boot changed it (the run state lost it)*Set hardware.bios.Slot2 to the final value*'
+    }
+
+    It 'applies the restored value with -Execute' {
+        $rows = @(& $script:restore -NodeName node-01 -NodesFile (& $script:nodesWithFallback) -Original @{ 'node-01' = @{ Slot2 = 'Disabled' } } -Credential $script:bmc -ConfirmNotClustered -Execute -Confirm:$false -InformationAction SilentlyContinue)
+        $rows[0].Restored.Slot2 | Should -Be 'Enabled'
+        (& $script:calls)[0].attributes.Slot2 | Should -Be 'Enabled'
+    }
+}

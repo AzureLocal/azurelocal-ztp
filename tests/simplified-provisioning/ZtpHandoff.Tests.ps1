@@ -61,7 +61,7 @@ Describe 'New-ZtpHandoff.ps1' {
         $h.site.name | Should -Be 'site-example'; $h.site.resourceId | Should -Match '/sites/site-example$'
         $h.solution.vsrVersion | Should -Be '12.2609.1003.7'
         $n1 = $h.nodes | Where-Object name -EQ 'node-01'
-        @($n1.PSObject.Properties.Name) | Should -Be @('name', 'serial', 'edgeMachineName', 'edgeMachineId', 'arcMachineName', 'arcMachineResourceId', 'arcMachineResourceGroup', 'ready', 'managementAddressVerified', 'managementAddressReason', 'biosRestored', 'managementMode', 'networkAdapters')
+        @($n1.PSObject.Properties.Name) | Should -Be @('name', 'serial', 'edgeMachineName', 'edgeMachineId', 'arcMachineName', 'arcMachineResourceId', 'arcMachineResourceGroup', 'ready', 'managementAddressVerified', 'managementAddressReason', 'biosRestored', 'biosRestoreComplete', 'biosNotRestored', 'managementMode', 'networkAdapters')
         $n1.arcMachineName | Should -Be '00000000-0000-0000-0000-000000000000-1'; $n1.serial | Should -Be 'EXAMPLE1'; $n1.ready | Should -BeTrue
         $n1.edgeMachineName | Should -Be 'node-01'; $n1.edgeMachineId | Should -Match '/edgeMachines/node-01$'
         $n1.arcMachineResourceId | Should -Match '/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1$'
@@ -75,6 +75,23 @@ Describe 'New-ZtpHandoff.ps1' {
         $raw = Get-Content $r.HandoffPath -Raw
         foreach ($gone in '"sbe"', '"bootstrap"', '"timestamps"', '"connectivity"', 'ipAddress', 'macAddress') { $raw | Should -Not -Match $gone -Because "the handoff carries only what Azure generated ($gone)" }
         $raw | Should -Not -Match 'BEGIN OWNERSHIP'
+    }
+
+    It 'says an unfinished BIOS restore is unfinished: biosRestoreComplete false, with the attributes Restore did not confirm' {
+        $doc = Get-Content -LiteralPath $global:ztpH_nodes -Raw | ConvertFrom-Json -AsHashtable
+        foreach ($n in $doc.nodes) { $n.bios_restore = [ordered]@{ Slot2 = ''; Slot3 = 'Enabled' } }
+        $file = Join-Path $TestDrive 'nodes-with-restore.json'
+        $doc | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $file
+        $h = & $global:ztpH_run @{ NodesFile = $file; RestoredBios = @{ 'node-01' = [ordered]@{ Slot2 = 'Enabled'; Slot3 = 'Enabled' }; 'node-02' = [ordered]@{ Slot3 = 'Enabled' } } }
+        $n1 = @($h.nodes | Where-Object { $_['name'] -eq 'node-01' })[0]; $n2 = @($h.nodes | Where-Object { $_['name'] -eq 'node-02' })[0]
+        $n1.biosRestoreComplete | Should -BeTrue; @($n1.biosNotRestored).Count | Should -Be 0
+        $n2.biosRestoreComplete | Should -BeFalse; @($n2.biosNotRestored) | Should -Be @('Slot2')
+        # Restore confirmed nothing for a node that needed it (it failed or never ran): false, naming every attribute.
+        $h = & $global:ztpH_run @{ NodesFile = $file }
+        foreach ($n in $h.nodes) { $n.biosRestoreComplete | Should -BeFalse; @($n.biosNotRestored) | Should -Be @('Slot2', 'Slot3') }
+        # A node list with nothing to restore is complete.
+        $h = & $global:ztpH_run @{}
+        foreach ($n in $h.nodes) { $n.biosRestoreComplete | Should -BeTrue }
     }
 
     It 'records each port as Azure reports it after the install, matched by MAC to the file, with the mode, and prints a table' {

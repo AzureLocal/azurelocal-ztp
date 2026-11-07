@@ -307,3 +307,66 @@ Set-Content -LiteralPath (Join-Path $env:ZTP_TEST_BIOS_DIR "bios-$NodeName.txt")
         @(Get-ChildItem -LiteralPath $dir -Filter 'mount-*.txt').Count | Should -Be 2
     }
 }
+
+Describe 'Allowed values: a value the BMC does not allow stops the run before any change' {
+    BeforeAll {
+        $global:biosT_origRedfish = ${function:global:Invoke-ZtpRedfish}
+        function global:Invoke-ZtpRedfish {
+            param($Session, [string]$Path, [string]$Method = 'Get', [hashtable]$Body, [int]$MaxAttempts = 3)
+            if ($Path -eq '/redfish/v1/Registries/BiosAttributeRegistryT') { $global:biosT_calls.Add([pscustomobject]@{ Method = 'Get'; Path = $Path; Body = $null }); return [pscustomobject]@{ Location = @([pscustomobject]@{ Language = 'en'; Uri = '/redfish/v1/Registries/BiosAttributeRegistryT/doc.json' }) } }
+            if ($Path -eq '/redfish/v1/Registries/BiosAttributeRegistryT/doc.json') {
+                if ($global:biosT_regFail) { throw 'Redfish Get on 198.51.100.11 failed with HTTP 404' }
+                $names = @('Enabled', 'BootDriverDisabled')
+                if ($global:biosT_allowDisabled) { $names += 'Disabled' }
+                $slot2 = [pscustomobject]@{ AttributeName = 'Slot2'; Type = 'Enumeration'; Value = @($names | ForEach-Object { [pscustomobject]@{ ValueName = $_ } }) }
+                $emb = [pscustomobject]@{ AttributeName = 'EmbNic1Nic2'; Type = 'Enumeration'; Value = @('Enabled', 'DisabledOs' | ForEach-Object { [pscustomobject]@{ ValueName = $_ } }) }
+                $serial = [pscustomobject]@{ AttributeName = 'SerialNumber'; Type = 'String' }
+                return [pscustomobject]@{ RegistryEntries = [pscustomobject]@{ Attributes = @($slot2, $emb, $serial) } }
+            }
+            $r = & $global:biosT_origRedfish -Session $Session -Path $Path -Method $Method -Body $Body -MaxAttempts $MaxAttempts
+            if ($Method -eq 'Get' -and $Path -like '*/Bios' -and $r) { $r | Add-Member -NotePropertyName '@Redfish.AttributeRegistry' -NotePropertyValue 'BiosAttributeRegistryT' -Force }
+            $r
+        }
+    }
+    AfterAll {
+        Set-Item -Path Function:global:Invoke-ZtpRedfish -Value $global:biosT_origRedfish
+        Remove-Variable -Scope Global -Name biosT_regFail, biosT_allowDisabled -ErrorAction SilentlyContinue
+    }
+    BeforeEach { $global:biosT_regFail = $false; $global:biosT_allowDisabled = $false }
+
+    It 'names the attribute, node, value and the allowed ones, and writes nothing' {
+        Reset-TestBmc -Current @{ Slot2 = 'Enabled'; EmbNic1Nic2 = 'DisabledOs' }
+        $message = try { & $script:run @{ Attributes = [ordered]@{ Slot2 = 'Disabled' }; Credential = $script:bmc; ConfirmNotClustered = $true; Execute = $true; Confirm = $false }; '' } catch { $_.Exception.Message }
+        $message | Should -BeLike "Nothing was changed. node-01 (198.51.100.11): the BIOS attribute Slot2 can't be set to 'Disabled'; the BMC allows: Enabled, BootDriverDisabled."
+        @(& $script:writes).Count | Should -Be 0
+    }
+
+    It 'also stops in the read-only pass the Boot stage runs on every node first' {
+        Reset-TestBmc -Current @{ Slot2 = 'Enabled'; EmbNic1Nic2 = 'DisabledOs' }
+        { & $script:run @{ Attributes = [ordered]@{ Slot2 = 'Disabled' }; Credential = $script:bmc } } | Should -Throw "*can't be set to 'Disabled'*"
+        @(& $script:writes).Count | Should -Be 0
+    }
+
+    It 'goes on when the registry allows the value' {
+        $global:biosT_allowDisabled = $true
+        Reset-TestBmc -Current @{ Slot2 = 'Enabled'; EmbNic1Nic2 = 'DisabledOs' }
+        $row = & $script:run @{ Attributes = [ordered]@{ Slot2 = 'Disabled' }; Credential = $script:bmc; ConfirmNotClustered = $true; Execute = $true; Confirm = $false }
+        $row.Status | Should -Be 'Changed'
+    }
+
+    It 'checks only enumerations, and a value that is already there needs no check' {
+        Reset-TestBmc -Current @{ Slot2 = 'Disabled'; EmbNic1Nic2 = 'DisabledOs' }
+        $row = & $script:run @{ Attributes = [ordered]@{ Slot2 = 'Disabled' }; Credential = $script:bmc; ConfirmNotClustered = $true; Execute = $true; Confirm = $false }
+        $row.Status | Should -Be 'AlreadySet'
+    }
+
+    It 'warns and continues when the registry can not be read, but still fails on an attribute the BMC does not have' {
+        $global:biosT_regFail = $true
+        Reset-TestBmc -Current @{ Slot2 = 'Enabled'; EmbNic1Nic2 = 'DisabledOs' }
+        $out = @(& $script:run @{ Attributes = [ordered]@{ Slot2 = 'Disabled' }; Credential = $script:bmc; ConfirmNotClustered = $true; Execute = $true; Confirm = $false; WarningAction = 'Continue' } 3>&1)
+        ($out | Where-Object { $_ -isnot [System.Management.Automation.WarningRecord] -and $_.PSObject.Properties['Status'] }).Status | Should -Be 'Changed'
+        (@($out | Where-Object { $_ -is [System.Management.Automation.WarningRecord] } | ForEach-Object Message) -join ' ') | Should -BeLike "*couldn't read the attribute registry BiosAttributeRegistryT*the allowed values aren't checked*"
+        Reset-TestBmc -Current @{ Slot2 = 'Enabled' }
+        { & $script:run @{ Attributes = [ordered]@{ Slot9 = 'Disabled' }; Credential = $script:bmc; WarningAction = 'SilentlyContinue' } } | Should -Throw '*The BIOS has no attribute Slot9*'
+    }
+}

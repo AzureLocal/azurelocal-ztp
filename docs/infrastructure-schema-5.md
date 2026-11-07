@@ -97,19 +97,21 @@ These keys belong to OS configuration and deployment. ZTP doesn't map them, does
 
 | The file says | ZTP does | Switch (default) |
 | --- | --- | --- |
-| `nodes[].san.hbas[].slot: "Slot 2"` | Turns that PCIe slot off in the BIOS for the install (so the maintenance environment can't install onto a SAN LUN) and on again in the Restore stage. | `provisioning.simplified.isolate_san_adapters` (true when any node lists `san.hbas`, else false) |
+| `nodes[].san.hbas[].slot: "Slot 2"` | Turns that PCIe slot off in the BIOS for the install (so the maintenance environment can't install onto a SAN LUN). The Restore stage puts it back to the value Boot found; if Boot found it already disabled (a crashed earlier run left it), to the vendor's enabled value. | `provisioning.simplified.isolate_san_adapters` (true when THIS node lists `san.hbas`, else false) |
 | A `management` or `provisioning` port with `slot: Embedded` | Makes sure the embedded NICs are enabled, and leaves them so (Dell ships them as `DisabledOs`). | `provisioning.simplified.enable_embedded_nics` (true) |
 
-The slot label to attribute mapping is data, in `config/oem/<vendor>.json`, section `bios`: `slot_attribute` (`Slot{n}`), `disabled`, `enabled`, `embedded_nic_attribute`, `embedded_enabled`. Only Dell has one (validated on an AX-760). For a vendor without it ZTP says so and asks for the raw attribute in `hardware.bios_during_provisioning`; it never guesses a name. To add a vendor, add its `bios` section.
+The slot label to attribute mapping is data, in `config/oem/<vendor>.json`, section `bios`: `slot_attribute` (`Slot{n}`), `disabled`, `enabled`, `embedded_nic_attribute`, `embedded_enabled`. Only Dell has one (`verified_models`: AX-760; on another model the plan prints a warning to confirm the attribute, and does not block). For a vendor without it an HBA must name its own attribute, `nodes[].san.hbas[].bios_attribute` (with optional `bios_disabled_value` and `bios_enabled_value`); otherwise ZTP stops. An unrelated raw key in `bios_during_provisioning` does not excuse the missing mapping, and ZTP never guesses a name. To add a vendor, add its `bios` section.
 
-Precedence: an explicit key (in `hardware.bios`, `nodes[].bios` or the `bios_during_provisioning` twins) always wins over a derived one. The plan output prints each decision with its reason:
+Restore target: ZTP does not assume the original value was the vendor's "enabled". Boot saves each attribute's value before it changes anything, and Restore puts that back (`BootDriverDisabled` stays `BootDriverDisabled`). The one exception is a slot Boot found already at the isolating value: it goes back to the enabled value. If the saved value is lost, Restore stops and asks for `hardware.bios.<attribute>`. An explicit `hardware.bios` value wins. The handoff records `biosRestoreComplete` and `biosNotRestored` per node, so an unfinished restore is visible.
+
+Precedence: an explicit key (in `hardware.bios`, `nodes[].bios` or the `bios_during_provisioning` twins) always wins over a derived one for the same attribute and phase; two derivations that target one attribute with different values are a problem. The plan output prints each decision with its reason:
 
 ```
 PLAN: node-01 BIOS Slot2 Disabled for the install because nodes[0].san.hbas[0] is in Slot 2 (the Restore stage sets it back to Enabled)
 PLAN: node-01 BIOS EmbNic1Nic2 Enabled because the management port 'Embedded NIC 1' of nodes[0] is in slot Embedded (the OS can't see disabled embedded NICs)
 ```
 
-Everything that can be wrong is found before ZTP touches a machine: a slot label that is not `Slot <n>`, a slot that also holds a network port, a vendor with no mapping and no raw map. A slot the BMC's BIOS doesn't have is found by the Boot stage, which reads every node's BIOS first and stops before it changes any of them, saying why it looked for that attribute.
+Everything that can be wrong is found before ZTP touches a machine: a slot label that is not `Slot <n>`, a slot that also holds a network port (the port's label is read loosely, so `Slot 2 Port 1` or `PCIe Slot 2` count), a vendor with no mapping and no `bios_attribute`, two derivations on one attribute. The Boot stage then reads every node's BIOS and the BMC's attribute registry first and stops before it changes any node, if an attribute is missing (saying why ZTP looked for it) or the registry does not allow the value (attribute, node, value, the allowed ones). If the registry cannot be read it warns and continues; whether the attribute exists is always checked. Switches are read strictly: a boolean, or the strings `true` and `false` in any case; `0` or `yes` is a problem naming the key.
 
 ## Every setting is a key (schema 5.4)
 

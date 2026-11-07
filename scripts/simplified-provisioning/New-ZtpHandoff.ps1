@@ -10,6 +10,8 @@ only what Azure generated during ZTP, never a value the infrastructure file alre
             with the management MAC, carries the infrastructure file's address) and managementAddressReason (why not, in
             plain language: the mode, the port, its MAC, what it has now and what the file expects; null when verified),
             biosRestored: the BIOS attributes the Restore stage set back (attribute -> value; empty when none),
+            biosRestoreComplete (false when the node list expected attributes to be set back and Restore did not confirm
+            every one) and biosNotRestored (those attribute names), so an unfinished restore is visible to the next tool,
             managementMode { mode (A, B, C or null), name, ipAssignment }: A Reserved (dhcp_reservation), B Static with
             DHCP, C Static without management DHCP; null without a node list, and
             networkAdapters[]: every port as Azure reports it after the install (edgeMachines/<node>/networkAdapters
@@ -155,6 +157,10 @@ foreach ($name in $NodeName) {
         [ordered]@{ mode = $(if ($m.Mode) { $m.Mode } else { $null }); name = $m.Name; ipAssignment = $m.IpAssignment }
     }
     else { $null }
+    # Attributes the node list says Restore must set back (bios_restore), minus the ones it confirmed.
+    $expected = @(if ($fileNode) { $br = Get-ZtpPropertyValue $fileNode 'bios_restore' $null; if ($br -is [System.Collections.IDictionary]) { $br.Keys | ForEach-Object { [string]$_ } } elseif ($br) { $br.PSObject.Properties.Name } })
+    $confirmed = @(if ($RestoredBios.Contains($name) -and $RestoredBios[$name] -is [System.Collections.IDictionary]) { $RestoredBios[$name].Keys | ForEach-Object { [string]$_ } } elseif ($RestoredBios.Contains($name) -and $RestoredBios[$name]) { $RestoredBios[$name].PSObject.Properties.Name })
+    $notRestored = @($expected | Where-Object { $_ -notin $confirmed })
     $rows.Add([ordered]@{
             name                      = $name
             serial                    = $(if ($serials.ContainsKey($name)) { $serials[$name] } else { $null })
@@ -167,6 +173,8 @@ foreach ($name in $NodeName) {
             managementAddressVerified = $verified
             managementAddressReason   = $reason
             biosRestored              = $(if ($RestoredBios.Contains($name)) { $RestoredBios[$name] } else { [ordered]@{} })
+            biosRestoreComplete       = ($notRestored.Count -eq 0)
+            biosNotRestored           = @($notRestored)
             managementMode            = $mode
             networkAdapters           = @(Get-HandoffAdapter -Machine $name -FileNode $fileNode)
         })

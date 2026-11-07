@@ -97,6 +97,11 @@ try {
     $biosPath = if ($system.PSObject.Properties['Bios'] -and $system.Bios.PSObject.Properties['@odata.id']) { [string]$system.Bios.'@odata.id' } else { "$($system.'@odata.id')/Bios" }
     $bios = Invoke-ZtpRedfish -Session $session -Path $biosPath
     $changes = @(Get-ZtpBiosChange -Current $bios.Attributes -Desired $want -Reason $Reason)
+    # Before any change (also in the read-only pass the Boot stage runs on every node first): a value the BMC doesn't allow.
+    if ($changes.Count) {
+        $refused = @(Get-ZtpBiosDisallowedValue -Change $changes -Allowed (Get-ZtpBiosAllowedValue -Session $session -Bios $bios -NodeName $NodeName) -NodeName $NodeName -BmcAddress $BmcAddress)
+        if ($refused.Count) { throw "Nothing was changed. $($refused -join ' ')" }
+    }
     foreach ($k in $want.Keys) { $v = $bios.Attributes.$k; $original[$k] = $(if ($v -is [bool]) { $v.ToString().ToLowerInvariant() } else { [string]$v }) }
     if ($changes.Count -eq 0) {
         Write-Information -MessageData "$NodeName BIOS: already $text." -InformationAction Continue

@@ -104,7 +104,12 @@ foreach ($node in $NodeName) {
         if ($final) { $set[$k] = $final; $from[$k] = 'hardware.bios' }
         else {
             $before = Get-Value $saved $k
-            if ($null -eq $before -or "$before" -eq '') { $problems.Add("${node}: no value saved for $k before Boot changed it (the run state lost it). Set hardware.bios.$k to the final value.") }
+            $exception = Get-Value (Get-Value $entry 'bios_restore_fallback') $k
+            if ($null -eq $before -or "$before" -eq '') { $problems.Add("${node}: no value saved for $k before Boot changed it (the run state lost it), so Restore can't tell what to put back. Set hardware.bios.$k to the final value.") }
+            elseif ($exception -and [string]$before -ceq [string](Get-Value $exception 'when_found') -and (Get-Value $exception 'restore')) {
+                # Boot found the slot already at the isolating value: an earlier run of ours left it off. It must not stay off.
+                $set[$k] = [string](Get-Value $exception 'restore'); $from[$k] = "the vendor's enabled value: Boot found $k already $before"
+            }
             else { $set[$k] = [string]$before; $from[$k] = 'the value before Boot' }
         }
     }

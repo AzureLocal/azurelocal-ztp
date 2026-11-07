@@ -149,7 +149,7 @@ function Test-ZtpEnvironment {
     # The optional settings (schema 5.4): a wrong type or a value out of range is named before anything runs.
     foreach ($k in 'isolate_san_adapters', 'enable_embedded_nics', 'create_resource_group', 'apply_site_settings', 'use_key_vault_configuration', 'assign_provisioning_roles', 'assign_hci_rp_role', 'skip_azure_check', 'include_preview', 'retry_provision_os', 'keep_share', 'rfs_write_attribute', 'verify_bmc_certificate') {
         $v = Get-ZtpEnvValue -Environment $Environment -Path "ztp.$k"
-        if ($null -ne $v -and $v -isnot [bool]) { $problems.Add("ztp.$k must be true or false, not '$v'.") }
+        if ($null -ne $v) { try { $null = ConvertTo-ZtpBoolean $v "ztp.$k" } catch { $problems.Add($_.Exception.Message) } }
     }
     foreach ($spec in @(
             @{ Path = 'ztp.network_kind'; Values = 'LAN', 'WLAN' }
@@ -659,24 +659,59 @@ function Read-ZtpOemFile {
     return (Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -AsHashtable -Depth 20)
 }
 
+function ConvertTo-ZtpBoolean {
+    <#
+    .SYNOPSIS
+    A switch from the file as a real boolean. Accepts a boolean, or the strings true and false in any case; anything else
+    (0, yes, an empty list) throws, because [bool]'false' is true and a misread switch would act on hardware.
+    .PARAMETER Name
+    The key, in the message.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([AllowNull()][object]$Value, [string]$Name = 'the value')
+    if ($Value -is [bool]) { return $Value }
+    if ($Value -is [string]) {
+        if ($Value.Trim() -ieq 'true') { return $true }
+        if ($Value.Trim() -ieq 'false') { return $false }
+    }
+    throw "$Name must be true or false, not '$Value'."
+}
+
+function Get-ZtpLooseSlotNumber {
+    <#
+    .SYNOPSIS
+    The first slot number anywhere in a label ('Slot 2 Port 1', 'PCIe Slot 2', 'Riser 1 Slot 2' give 2), or $null. For the
+    comparison of a network port's slot with a SAN adapter's, where missing a shared slot would cut the port.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][object]$Label)
+    if (([string]$Label) -match '(?i)slot\s*[_-]?\s*(\d+)') { return [int]$Matches[1] }
+    return $null
+}
+
 function Get-ZtpDerivedBios {
     <#
     .SYNOPSIS
     The BIOS values ZTP derives for one node from the inventory, with the reason for each, so nobody has to write a vendor's
     attribute names. Final and During are attribute -> value maps (Get-ZtpEnvironmentBios puts them under the explicit
-    keys, which win), Plan holds one 'PLAN:' line per decision, Problems what stops the run before it touches the hardware.
+    keys, which win), Fallback says what Restore does when the value it saved is the isolating one, Plan holds one 'PLAN:'
+    line per decision, Problems what stops the run before it touches the hardware.
     .DESCRIPTION
-    1. Isolate the SAN adapters (ztp.isolate_san_adapters, schema provisioning.simplified.isolate_san_adapters; default true
-       when any node lists san.hbas): for every cluster_nodes[].san.hbas[] with a PCIe slot label ('Slot 2'), During gets the
-       vendor's slot attribute set to its disabled value, so the maintenance environment can't install onto a SAN LUN, and
-       Final gets the enabled value, which the Restore stage sets back.
+    1. Isolate this node's SAN adapters (ztp.isolate_san_adapters, schema provisioning.simplified.isolate_san_adapters;
+       default true when THIS node lists san.hbas): for every cluster_nodes[].san.hbas[], During gets the BIOS attribute of
+       its slot set to the disabled value, so the maintenance environment can't install onto a SAN LUN. The attribute is the
+       HBA's own bios_attribute, else the vendor's slot_attribute for a 'Slot 2' label. Final does NOT get the enabled value:
+       Restore puts back the value Boot found (the saved original), except that a slot Boot found already disabled (a crashed
+       earlier run) goes back to the vendor's enabled value (Fallback). An explicit hardware.bios key for it wins.
     2. Enable the embedded NICs (ztp.enable_embedded_nics, default true): when a management or provisioning port has slot
        Embedded, Final gets the vendor's embedded-NIC attribute enabled (Dell ships them as DisabledOs).
     The vendor's attribute names are data: config/oem/<vendor>.json, section bios (slot_attribute with {n}, disabled, enabled,
-    embedded_nic_attribute, embedded_enabled). A vendor without that section has no guessed mapping: with explicit
-    bios_during_provisioning keys the explicit ones are used and the plan says so; without them, it is a problem. An unknown
-    slot label, or a slot that also holds a network port, is a problem. A slot that doesn't exist in the BMC's BIOS is caught
-    by the Boot stage before it changes anything (Set-ZtpBios.ps1 reads the attributes first).
+    embedded_nic_attribute, embedded_enabled, verified_models). Without that section there is no guessed mapping: an HBA then
+    needs its own bios_attribute, or it is a problem. An unknown slot label, a slot that also holds a network port (found by
+    a loose reading of the port's label), or two derivations that target one attribute with different values, is a problem.
+    A slot that doesn't exist in the BMC's BIOS, or a value the BMC doesn't allow, is caught by the Boot stage before it
+    changes any node (Set-ZtpBios.ps1 reads the attributes and the registry first).
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject])]
@@ -686,9 +721,9 @@ function Get-ZtpDerivedBios {
         [int]$Index = -1,
         [string]$ConfigRoot
     )
-    $final = [ordered]@{}; $during = [ordered]@{}; $reasons = [ordered]@{}
+    $final = [ordered]@{}; $during = [ordered]@{}; $reasons = [ordered]@{}; $fallback = [ordered]@{}
     $plan = [System.Collections.Generic.List[string]]::new(); $problems = [System.Collections.Generic.List[string]]::new()
-    $result = { [pscustomobject]@{ Final = $final; During = $during; Reasons = $reasons; Plan = $plan.ToArray(); Problems = $problems.ToArray() } }
+    $result = { [pscustomobject]@{ Final = $final; During = $during; Reasons = $reasons; Fallback = $fallback; Plan = $plan.ToArray(); Problems = $problems.ToArray() } }
     $name = [string]$Node['name']
     if ($Index -lt 0) {
         $names = @(@($Environment['cluster_nodes']) | ForEach-Object { if ($_ -is [System.Collections.IDictionary]) { [string]$_['name'] } })
@@ -702,63 +737,85 @@ function Get-ZtpDerivedBios {
     $embedded = @($ports | Where-Object { [string]$_['slot'] -match '^\s*embedded\b' -and (@($_['roles']) -contains 'management' -or @($_['roles']) -contains 'provisioning') })
     if (-not $hbas.Count -and -not $embedded.Count) { return (& $result) }
 
+    # A switch that isn't a boolean is reported by the key check; here it falls back to its default.
     $isolateSwitch = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.isolate_san_adapters'
-    $anyHbas = [bool]@(@($Environment['cluster_nodes']) | Where-Object { $_ -is [System.Collections.IDictionary] -and $_['san'] -is [System.Collections.IDictionary] -and $_['san']['hbas'] -and @($_['san']['hbas']).Count })
-    $isolate = if ($null -ne $isolateSwitch) { [bool]$isolateSwitch } else { $anyHbas }
+    $isolate = $hbas.Count -gt 0
+    if ($null -ne $isolateSwitch) { try { $isolate = ConvertTo-ZtpBoolean $isolateSwitch 'provisioning.simplified.isolate_san_adapters' } catch { Write-Verbose $_.Exception.Message } }
     $embedSwitch = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.enable_embedded_nics'
-    $embedOn = if ($null -ne $embedSwitch) { [bool]$embedSwitch } else { $true }
+    $embedOn = $true
+    if ($null -ne $embedSwitch) { try { $embedOn = ConvertTo-ZtpBoolean $embedSwitch 'provisioning.simplified.enable_embedded_nics' } catch { Write-Verbose $_.Exception.Message } }
 
     $vendor = [string](Get-ZtpEnvValue -Environment $Environment -Path 'hardware.vendor')
+    $model = [string](Get-ZtpEnvValue -Environment $Environment -Path 'hardware.model')
     $oemArgs = @{ Vendor = $vendor }
     if ($ConfigRoot) { $oemArgs.ConfigRoot = $ConfigRoot }
     $oem = Read-ZtpOemFile @oemArgs
     $mapping = if ($oem -and $oem['bios'] -is [System.Collections.IDictionary]) { $oem['bios'] } else { $null }
+    $slotMapped = $mapping -and "$($mapping['slot_attribute'])" -match '\{n\}' -and $mapping['disabled'] -and $mapping['enabled']
     $explicitFinal = Get-ZtpEnvironmentBios -Environment $Environment -Node $Node -Kind final -ExplicitOnly
     $explicitDuring = Get-ZtpEnvironmentBios -Environment $Environment -Node $Node -Kind provisioning -ExplicitOnly
     $noMapping = "config/oem/$(if ($vendor) { $vendor.ToLowerInvariant() } else { '<vendor>' }).json has no bios section"
+    $fromMapping = [System.Collections.Generic.List[string]]::new()   # attributes whose name came from the vendor mapping
 
     if ($isolate) {
-        $j = 0
+        $seen = @{}
+        $j = -1
         foreach ($hba in $hbas) {
+            $j++
             $label = [string]$hba['slot']
             $where = "$path.san.hbas[$j]"
-            $j++
+            $ownAttribute = [string]$hba['bios_attribute']
             $number = ConvertTo-ZtpSlotNumber $label
-            if ($null -eq $number) {
-                $problems.Add("$at.san.hbas[$($j - 1)].slot '$label' isn't a PCIe slot label such as 'Slot 2', so ZTP can't derive the BIOS attribute that turns it off for the OS install. Use 'Slot <n>', or set provisioning.simplified.isolate_san_adapters to false and write the vendor's attribute in hardware.bios_during_provisioning.")
+            if (-not $ownAttribute -and $null -eq $number) {
+                $problems.Add("$at.san.hbas[$j].slot '$label' isn't a PCIe slot label such as 'Slot 2', so ZTP can't derive the BIOS attribute that turns it off for the OS install. Use 'Slot <n>', give the HBA its own bios_attribute, or set provisioning.simplified.isolate_san_adapters to false and write the vendor's attribute in hardware.bios_during_provisioning.")
                 continue
             }
-            $shared = @($ports | Where-Object { (ConvertTo-ZtpSlotNumber $_['slot']) -eq $number -and @(@($_['roles']) | Where-Object { $_ -and $_ -ne 'unused' }).Count })
-            if ($shared.Count) {
-                $problems.Add("$at.san.hbas[$($j - 1)] is in $label, which also holds the network port '$($shared[0]['name'])' (roles $(@($shared[0]['roles']) -join ', ')). Turning the slot off for the OS install would cut that port. Correct the slot of one of them, or set provisioning.simplified.isolate_san_adapters to false.")
-                continue
-            }
-            if (-not $mapping -or "$($mapping['slot_attribute'])" -notmatch '\{n\}' -or -not $mapping['disabled'] -or -not $mapping['enabled']) {
-                if ($explicitDuring.Count) {
-                    $plan.Add("PLAN: $name BIOS: $where ($label) not isolated by derivation: ZTP has no slot mapping for vendor '$vendor' ($noMapping); using hardware.bios_during_provisioning as written ($(@($explicitDuring.Keys | ForEach-Object { "$_=$($explicitDuring[$_])" }) -join ', ')).")
+            if ($null -ne $number) {
+                $shared = @($ports | Where-Object { (Get-ZtpLooseSlotNumber $_['slot']) -eq $number -and @(@($_['roles']) | Where-Object { $_ -and $_ -ne 'unused' }).Count })
+                if ($shared.Count) {
+                    $problems.Add("$at.san.hbas[$j] is in $label, which also holds the network port '$($shared[0]['name'])' (slot '$($shared[0]['slot'])', roles $(@($shared[0]['roles']) -join ', ')). Turning the slot off for the OS install would cut that port. Correct the slot of one of them, or set provisioning.simplified.isolate_san_adapters to false.")
+                    continue
                 }
-                else {
-                    $problems.Add("$at.san.hbas[$($j - 1)] is in $label and must be turned off for the OS install, but ZTP has no BIOS slot mapping for vendor '$vendor' ($noMapping), and it won't guess an attribute name. Write the vendor's attribute in hardware.bios_during_provisioning (and its final value in hardware.bios), or set provisioning.simplified.isolate_san_adapters to false.")
-                }
+            }
+            if ($ownAttribute) {
+                $attribute = $ownAttribute
+                $off = if ($hba['bios_disabled_value']) { [string]$hba['bios_disabled_value'] } elseif ($slotMapped) { [string]$mapping['disabled'] } else { 'Disabled' }
+                $on = if ($hba['bios_enabled_value']) { [string]$hba['bios_enabled_value'] } elseif ($slotMapped) { [string]$mapping['enabled'] } else { 'Enabled' }
+            }
+            elseif ($slotMapped) {
+                $attribute = ([string]$mapping['slot_attribute']).Replace('{n}', [string]$number)
+                $off = [string]$mapping['disabled']; $on = [string]$mapping['enabled']
+                $fromMapping.Add($attribute)
+            }
+            else {
+                $problems.Add("$at.san.hbas[$j] is in $label and must be turned off for the OS install, but ZTP has no BIOS slot mapping for vendor '$vendor' ($noMapping), and it won't guess an attribute name. Give the HBA its own bios_attribute (nodes[].san.hbas[].bios_attribute, the vendor's BIOS attribute for that slot), or set provisioning.simplified.isolate_san_adapters to false.")
                 continue
             }
-            $attribute = ([string]$mapping['slot_attribute']).Replace('{n}', [string]$number)
-            $reasons[$attribute] = "derived: $where is in $label, so ZTP looked for the BIOS attribute $attribute; check the slot label"
-            $off = [string]$mapping['disabled']; $on = [string]$mapping['enabled']
-            $back = if ($explicitFinal.Contains($attribute)) { "$($explicitFinal[$attribute]) from hardware.bios" } else { $on }
+            if ($seen.ContainsKey($attribute)) {
+                if ($seen[$attribute] -ceq $off) { $plan.Add("PLAN: $name BIOS warning: $where ($label) targets $attribute, which an earlier adapter already isolates; the duplicate row is ignored.") }
+                else { $problems.Add("$at.san.hbas[$j] and an earlier adapter both target the BIOS attribute $attribute, with different values ($off and $($seen[$attribute])). Correct the slots or the bios_disabled_value.") }
+                continue
+            }
+            $seen[$attribute] = $off
+            $back = if ($explicitFinal.Contains($attribute)) { "$($explicitFinal[$attribute]) from hardware.bios" } else { "its original value, or $on if it was already $off" }
             if ($explicitDuring.Contains($attribute)) {
                 $plan.Add("PLAN: $name BIOS $attribute $($explicitDuring[$attribute]) for the install, from hardware.bios_during_provisioning (explicit; it replaces the derived $off for $where in $label); the Restore stage sets it back to $back")
             }
             else {
                 $during[$attribute] = $off
                 $plan.Add("PLAN: $name BIOS $attribute $off for the install because $where is in $label (the Restore stage sets it back to $back)")
+                # Restore puts back what Boot found, unless that is the isolating value itself (a crashed earlier run left it).
+                if (-not $explicitFinal.Contains($attribute)) { $fallback[$attribute] = [ordered]@{ when_found = $off; restore = $on } }
             }
-            if (-not $explicitFinal.Contains($attribute)) { $final[$attribute] = $on }
+            $reasons[$attribute] = "derived: $where is in $label, so ZTP looked for the BIOS attribute $attribute; check the slot label"
+        }
+        foreach ($port in @($ports | Where-Object { [string]$_['slot'] -match '(?i)^\s*(ocp|riser)' -and $null -eq (Get-ZtpLooseSlotNumber $_['slot']) -and @(@($_['roles']) | Where-Object { $_ -and $_ -ne 'unused' }).Count })) {
+            if ($during.Count) { $plan.Add("PLAN: $name BIOS warning: the network port '$($port['name'])' is in '$($port['slot'])', which has no slot number, so ZTP can't tell whether it shares a slot with an adapter it turns off.") }
         }
     }
 
     if ($embedOn -and $embedded.Count) {
-        $port = @($embedded | Where-Object { @($_['roles']) -contains 'management' } | Select-Object -First 1) + @($embedded) | Select-Object -First 1
+        $port = @(@($embedded | Where-Object { @($_['roles']) -contains 'management' } | Select-Object -First 1) + @($embedded)) | Select-Object -First 1
         $role = if (@($port['roles']) -contains 'management') { 'management' } else { 'provisioning' }
         $attribute = if ($mapping) { [string]$mapping['embedded_nic_attribute'] } else { '' }
         if (-not $attribute -or -not $mapping['embedded_enabled']) {
@@ -773,10 +830,22 @@ function Get-ZtpDerivedBios {
             $v = if ($explicitDuring.Contains($attribute)) { $explicitDuring[$attribute] } else { $explicitFinal[$attribute] }
             $plan.Add("PLAN: $name BIOS $attribute $v, as hardware.bios says (explicit; the $role port '$($port['name'])' is in slot Embedded)")
         }
+        elseif ($during.Contains($attribute) -and $during[$attribute] -cne [string]$mapping['embedded_enabled']) {
+            $problems.Add("${at}: the vendor mapping gives one BIOS attribute, $attribute, both to the slot of a SAN adapter (value $($during[$attribute]) for the install) and to the embedded NICs (value $($mapping['embedded_enabled'])). Check config/oem/$($vendor.ToLowerInvariant()).json.")
+        }
         else {
             $final[$attribute] = [string]$mapping['embedded_enabled']
+            $fromMapping.Add($attribute)
             $reasons[$attribute] = "derived: the $role port '$($port['name'])' is in slot Embedded, so ZTP looked for the embedded-NIC BIOS attribute $attribute"
             $plan.Add("PLAN: $name BIOS $attribute $($mapping['embedded_enabled']) because the $role port '$($port['name'])' of $path is in slot Embedded (the OS can't see disabled embedded NICs)")
+        }
+    }
+
+    # A mapping verified on some models only: say so, and don't block.
+    if ($fromMapping.Count -and $mapping -and $mapping['verified_models']) {
+        $verified = @($mapping['verified_models'] | ForEach-Object { [string]$_ })
+        if ($verified.Count -and $model -notin $verified) {
+            $plan.Add("PLAN: $name BIOS warning: slot mapping verified on: $($verified -join ', '); for $(if ($model) { $model } else { 'an unspecified model (hardware.model)' }) confirm that attribute $(($fromMapping | Select-Object -Unique) -join ', ') controls the adapter's slot before running.")
         }
     }
     return (& $result)
@@ -808,11 +877,11 @@ function Get-ZtpRfsWriteAttribute {
     [OutputType([bool])]
     param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment, [string]$ConfigRoot)
     $own = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.rfs_write_attribute'
-    if ($null -ne $own) { return [bool]$own }
+    if ($null -ne $own) { return (ConvertTo-ZtpBoolean $own 'hardware.bmc.rfs_write_attribute') }
     $oemArgs = @{ Vendor = [string](Get-ZtpEnvValue -Environment $Environment -Path 'hardware.vendor') }
     if ($ConfigRoot) { $oemArgs.ConfigRoot = $ConfigRoot }
     $oem = Read-ZtpOemFile @oemArgs
-    if ($oem -and $oem['bmc'] -is [System.Collections.IDictionary] -and $oem['bmc'].Contains('rfsWriteAttribute')) { return [bool]$oem['bmc']['rfsWriteAttribute'] }
+    if ($oem -and $oem['bmc'] -is [System.Collections.IDictionary] -and $oem['bmc'].Contains('rfsWriteAttribute')) { return (ConvertTo-ZtpBoolean $oem['bmc']['rfsWriteAttribute'] 'bmc.rfsWriteAttribute') }
     return $true
 }
 
@@ -1062,6 +1131,7 @@ function ConvertFrom-ZtpInfrastructureV5 {
                         $h = [ordered]@{ slot = [string]$_['slot'] }
                         $h['type'] = $(if ($_['type']) { [string]$_['type'] } else { 'fibre_channel' })
                         if ($_['model']) { $h['model'] = [string]$_['model'] }
+                        foreach ($k in 'bios_attribute', 'bios_disabled_value', 'bios_enabled_value') { if ($_[$k]) { $h[$k] = [string]$_[$k] } }
                         $h
                     }) }
         }
@@ -1107,8 +1177,9 @@ function ConvertFrom-ZtpInfrastructureV5 {
     foreach ($k in 'ntp', 'usb_image', 'maintenance_environment', 'timeouts') {
         if ($simplified[$k] -is [System.Collections.IDictionary]) { $ztp[$k] = $simplified[$k] }
     }
-    if ($null -ne (& $v 'hardware.bmc.rfs_write_attribute')) { $ztp['rfs_write_attribute'] = [bool](& $v 'hardware.bmc.rfs_write_attribute') }
-    if ($null -ne (& $v 'hardware.bmc.verify_certificate')) { $ztp['verify_bmc_certificate'] = [bool](& $v 'hardware.bmc.verify_certificate') }
+    # Kept as the file wrote them: the key check reports a value that is not a boolean.
+    if ($null -ne (& $v 'hardware.bmc.rfs_write_attribute')) { $ztp['rfs_write_attribute'] = & $v 'hardware.bmc.rfs_write_attribute' }
+    if ($null -ne (& $v 'hardware.bmc.verify_certificate')) { $ztp['verify_bmc_certificate'] = & $v 'hardware.bmc.verify_certificate' }
     & $put $ztp 'media_path' $simplified['media_path']
     & $put $ztp 'evidence_path' $simplified['evidence_path']
     & $put $ztp 'azl_rp_object_id' (& $v 'azure.hci_resource_provider_object_id')
