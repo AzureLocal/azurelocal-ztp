@@ -64,9 +64,9 @@ param assign_hci_rp_role bool = true
 param managed_resource_group_name string = ''
 @description('Network settings: LAN or WLAN kind.')
 param network_kind string = 'LAN'
-@description('Network settings: Automatic (DHCP) or Manual.')
+@description('Network settings: Automatic (DHCP) or Manual. Invoke-ZtpEnvironment.ps1 sets Manual when the management addresses are static, Automatic otherwise.')
 param ip_assignment_type string = 'Automatic'
-@description('Network settings for Manual assignment: addressRange { startIp, endIp }, defaultGateway, dnsServers, subnetMask, vLanId.')
+@description('Network settings for Manual assignment: addressRange { startIp, endIp } (site_ip_range, default the nodes\' lowest to highest management address), defaultGateway, dnsServers, subnetMask, vLanId (integer).')
 param ipv4 object = {}
 @description('Time settings: Automatic or Manual NTP.')
 param ntp_configuration_choice string = 'Automatic'
@@ -252,11 +252,16 @@ resource hciRpRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (as
 }
 
 // ------------------------------------------------------------------ edge machines (claim with the ownership voucher)
-// arcMachineResourceId names the Arc machine (2026-10-01 spec, EdgeMachines_CreateOrUpdate example). Without it the
-// service names it ROE1-<cloudId>, and an Arc machine can't be renamed. Default: the node name, so Arc matches the host.
+// arcMachineResourceId names the Arc machine (2026-10-01 spec, EdgeMachines_CreateOrUpdate example). Default: the node name,
+// so Arc matches the host. Open research item: in live runs (2026-11) the service overwrote it at claim time, and the Arc
+// machines still came out as ROE1-<id> and then <device-id>-1. It is sent anyway, and the handoff reads the name the
+// service actually used from the edge machine after Ready.
 // A static management address goes per machine in siteDetails.deviceConfiguration.network.networkAdapters[], keyed by
 // the port's MAC (NetworkAdapter: ipAssignmentType Manual, macAddress, adapterName, ipAddress, subnetMask, gateway,
-// dnsAddressArray, vlanId). The site's network setting stays as configured above for every other port.
+// dnsAddressArray, vlanId). It pins each machine to its own address; the site's Manual range above is what the portal shows.
+// For dhcp and preconfigured the entry is left out, not sent as Automatic: Automatic is what the service applies to every
+// port without an entry (a provisioned edge machine reports networkAdapters [{ ipAssignmentType: Automatic }]), so an
+// Automatic entry would change nothing, and leaving it out keeps the request to the shape proven in live runs.
 var managedResourceGroupId = configuration.properties.managedResourcesConfiguration.managedResourceGroupId
 resource edgeMachines 'Microsoft.AzureStackHCI/edgeMachines@2026-10-01' = [
   for node in selectedNodes: {

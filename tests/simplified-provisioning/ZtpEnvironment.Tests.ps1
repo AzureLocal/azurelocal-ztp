@@ -162,6 +162,12 @@ Describe 'Checking the environment file' {
         @{ Case = 'an Arc machine name ends in a dot'; Edit = { param($e) $e.cluster_nodes[0].arc_machine_name = 'node-01.' }; Expect = "arc_machine_name 'node-01.' isn't a valid Arc machine name" }
         @{ Case = 'the media path is relative'; Edit = { param($e) $e.ztp.media_path = '_media' }; Expect = "ztp.media_path must be a full path such as D:\Data\azl-ztp\site\media, not '_media'" }
         @{ Case = 'the evidence path is a list'; Edit = { param($e) $e.ztp.evidence_path = @('a') }; Expect = 'ztp.evidence_path must be a single value' }
+        @{ Case = 'the site range starts after its end'; Edit = { param($e) $e.network_intents.management['site_ip_range'] = [ordered]@{ start = '192.0.2.20'; end = '192.0.2.10' } }; Expect = 'network_intents.management.site_ip_range starts at 192.0.2.20, after its end 192.0.2.10' }
+        @{ Case = 'the site range leaves the subnet'; Edit = { param($e) $e.network_intents.management['site_ip_range'] = [ordered]@{ start = '192.0.2.10'; end = '192.0.3.10' } }; Expect = "network_intents.management.site_ip_range 192.0.2.10-192.0.3.10 isn't inside network_intents.management.subnet 192.0.2.0/24" }
+        @{ Case = 'the site range has no end'; Edit = { param($e) $e.network_intents.management['site_ip_range'] = [ordered]@{ start = '192.0.2.10' } }; Expect = 'network_intents.management.site_ip_range.end is required' }
+        @{ Case = 'a static node address is outside the site range'; Edit = { param($e) $e.network_intents.management['site_ip_range'] = [ordered]@{ start = '192.0.2.11'; end = '192.0.2.11' } }; Expect = 'cluster_nodes[1] (node-02).ip_address 192.0.2.12 is outside network_intents.management.site_ip_range 192.0.2.11-192.0.2.11' }
+        @{ Case = 'a static node address is outside the subnet'; Edit = { param($e) $e.cluster_nodes[1].ip_address = '198.51.100.12' }; Expect = "cluster_nodes[1] (node-02).ip_address 198.51.100.12 isn't in network_intents.management.subnet 192.0.2.0/24" }
+        @{ Case = 'the provisioning network is unknown'; Edit = { param($e) $e.network_intents.management['provisioning_network'] = 'wifi' }; Expect = "provisioning_network must be dhcp or static, not 'wifi'" }
         @{ Case = 'a BIOS value is not a string'; Edit = { param($e) $e.hardware['bios'] = [ordered]@{ Slot2 = $true } }; Expect = "hardware.bios.Slot2 must be a string; quote it ('True')" }
         @{ Case = 'hardware.bios is a list'; Edit = { param($e) $e.hardware['bios'] = @('Slot2=Disabled') }; Expect = 'hardware.bios must be a mapping of BIOS attribute names to values' }
         @{ Case = 'a node''s BIOS attribute name has a space'; Edit = { param($e) $e.cluster_nodes[1]['bios'] = [ordered]@{ 'Slot 2' = 'Disabled' } }; Expect = "cluster_nodes[1] (node-02).bios has 'Slot 2', which isn't a BIOS attribute name" }
@@ -219,6 +225,50 @@ Describe 'Management address and Arc name settings' {
         $e.cluster_nodes[0].arc_machine_name = 'node-01'; $e.cluster_nodes[0].adapter_name = 'SLOT 3 Port 1'; $e.network_intents.management.vlan_id = 711
         @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
     }
+    It 'sets the site network to Manual for static addresses, over the nodes'' range by default' {
+        $e = Read-ZtpEnvironmentFile -Path $script:fixture
+        # Out of order in the file: the range still runs from the lowest to the highest.
+        $e.cluster_nodes[0].ip_address = '192.0.2.40'; $e.network_intents.management['vlan_id'] = 711
+        $site = Get-ZtpSiteNetwork -Environment $e
+        $site.IpAssignmentType | Should -Be 'Manual'
+        $site.Ipv4.addressRange.startIp | Should -Be '192.0.2.12'
+        $site.Ipv4.addressRange.endIp | Should -Be '192.0.2.40'
+        $site.Ipv4.defaultGateway | Should -Be '192.0.2.1'
+        $site.Ipv4.subnetMask | Should -Be '255.255.255.0'
+        @($site.Ipv4.dnsServers) | Should -Be @('192.0.2.53', '192.0.2.54')
+        $site.Ipv4.vLanId | Should -Be 711
+        $site.Ipv4.vLanId | Should -BeOfType [int]
+    }
+    It 'uses site_ip_range when the file gives it, and VLAN 0 when it gives none' {
+        $e = Read-ZtpEnvironmentFile -Path $script:fixture
+        $e.network_intents.management['site_ip_range'] = [ordered]@{ start = '192.0.2.10'; end = '192.0.2.19' }
+        $site = Get-ZtpSiteNetwork -Environment $e
+        $site.Range | Should -Be '192.0.2.10-192.0.2.19'
+        $site.Ipv4.vLanId | Should -Be 0
+        @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
+    }
+    It 'sets the site network to Automatic, with no ipv4, for <_>' -ForEach @('dhcp', 'preconfigured') {
+        $e = Read-ZtpEnvironmentFile -Path $script:fixture
+        $e.network_intents.management['ip_assignment'] = $_
+        $site = Get-ZtpSiteNetwork -Environment $e
+        $site.IpAssignmentType | Should -Be 'Automatic'
+        @($site.Ipv4.Keys).Count | Should -Be 0
+        # With DHCP the range isn't checked: the addresses come from the DHCP server.
+        $e.network_intents.management['site_ip_range'] = [ordered]@{ start = '192.0.2.11'; end = '192.0.2.11' }
+        @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
+    }
+    It 'accepts provisioning_network dhcp quietly and warns about static, which ZTP cannot set' {
+        $e = Read-ZtpEnvironmentFile -Path $script:fixture
+        $e.network_intents.management['provisioning_network'] = 'dhcp'
+        @(Get-ZtpEnvironmentWarning -Environment $e).Count | Should -Be 0
+        $e.network_intents.management['provisioning_network'] = 'static'
+        @(Test-ZtpEnvironment -Environment $e -For Provision).Count | Should -Be 0
+        (Get-ZtpEnvironmentWarning -Environment $e) | Should -BeLike '*provisioning_network is static*Configurator app*open research item*'
+        $warnings = $null
+        Assert-ZtpEnvironment -Environment $e -WarningVariable warnings -WarningAction SilentlyContinue
+        @($warnings).Count | Should -Be 1
+    }
+
     It 'turns a prefix length into a subnet mask' -ForEach @(
         @{ Prefix = 24; Mask = '255.255.255.0' }, @{ Prefix = 22; Mask = '255.255.252.0' }, @{ Prefix = 32; Mask = '255.255.255.255' }, @{ Prefix = 0; Mask = '0.0.0.0' }, @{ Prefix = 1; Mask = '128.0.0.0' }
     ) {
@@ -482,6 +532,14 @@ param($params)
         $n1.management.ip_address | Should -Be '192.0.2.11'
         $n1.management.subnet_mask | Should -Be '255.255.255.0'
         $n1.management.vlan_id | Should -Be '0'
+        # The site's network setting follows the static mode: Manual over the nodes' range.
+        $bicep.parameters.ip_assignment_type.value | Should -Be 'Manual'
+        $bicep.parameters.ipv4.value.addressRange.startIp | Should -Be '192.0.2.11'
+        $bicep.parameters.ipv4.value.addressRange.endIp | Should -Be '192.0.2.12'
+        $bicep.parameters.ipv4.value.defaultGateway | Should -Be '192.0.2.1'
+        $bicep.parameters.ipv4.value.subnetMask | Should -Be '255.255.255.0'
+        @($bicep.parameters.ipv4.value.dnsServers) | Should -Be @('192.0.2.53', '192.0.2.54')
+        $bicep.parameters.ipv4.value.vLanId | Should -Be 0
 
         $global:ztpE_runs.Script | Should -Be @('Invoke-ZtpProvisioning.ps1', 'Initialize-ZtpNode.ps1')
         $global:ztpE_runs[0].Params['NodeName'] | Should -Be @('node-01', 'node-02')
@@ -534,6 +592,16 @@ param($params)
         { & $script:envScript -InfrastructureFile $clean -MediaPath (Join-Path $repo 'media') } | Should -Throw '*media folder*(from -MediaPath) is inside the git working tree*'
         { & $script:envScript -InfrastructureFile $clean -EvidencePath (Join-Path $repo 'deep/evidence') } | Should -Throw '*evidence folder*(from -EvidencePath) is inside the git working tree*'
         Test-Path (Join-Path $repo 'media') | Should -BeFalse
+    }
+
+    It 'writes an Automatic site network with no address range when the management addresses are DHCP' {
+        $infra = New-TestEnvironment -Name 'env-dhcp-site' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-dhcp-site')) -Edit { param($e) $e.network_intents.management['ip_assignment'] = 'dhcp' }
+        $text = Get-StepText (& $script:envScript -InfrastructureFile $infra *>&1)
+        $text | Should -BeLike '*Site network: Automatic. Maintenance environment to Azure: dhcp.*'
+        $bicep = Get-Content -LiteralPath (Join-Path $script:envRoot 'scripts/simplified-provisioning/bicep/main.parameters.json') -Raw | ConvertFrom-Json
+        $bicep.parameters.ip_assignment_type.value | Should -Be 'Automatic'
+        @($bicep.parameters.ipv4.value.PSObject.Properties).Count | Should -Be 0
+        $bicep.parameters.nodes.value[0].management.ip_assignment | Should -Be 'dhcp'
     }
 
     It 'writes each node''s BIOS settings to the node list: hardware.bios with the node''s own merged over it' {

@@ -15,6 +15,10 @@ The keys, by what needs them:
     azure_identity.azure_tenant_id
     network_intents.management.subnet, .gateway, .dns_servers
     network_intents.management.ip_assignment, .vlan_id   (optional; static, dhcp or preconfigured; default static)
+    network_intents.management.site_ip_range.start, .end (optional; the site's Manual range; default the nodes' range)
+    network_intents.management.provisioning_network      (optional; dhcp or static; how the maintenance environment
+                                                          reaches Azure; static is a warning, ZTP can't set it)
+    hardware.bios, cluster_nodes[].bios                  (optional; BIOS attribute -> string value, set by the Boot stage)
     onprem.ntp_servers                         (optional)
     credentials.local_admin_username, .local_admin_password_secret   (keyvault://<vault>/<secret>)
     hardware.vendor
@@ -164,6 +168,40 @@ function Test-ZtpEnvironment {
     $vlan = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.vlan_id'
     $vlanNumber = 0
     if ($null -ne $vlan -and (-not [int]::TryParse([string]$vlan, [ref]$vlanNumber) -or $vlanNumber -lt 0 -or $vlanNumber -gt 4094)) { $problems.Add("network_intents.management.vlan_id must be 0-4094, not '$vlan'.") }
+    # The site's network setting: with static addresses, a Manual range that holds every node's address.
+    $subnetText = [string](Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.subnet')
+    $subnetOk = $subnetText -match '^\d{1,3}(\.\d{1,3}){3}/([1-9]|[12]\d|3[0-2])$' -and (& $isIp ($subnetText -split '/')[0])
+    $range = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.site_ip_range'
+    $rangeOk = $false
+    if ($null -ne $range) {
+        if ($range -isnot [System.Collections.IDictionary]) { $problems.Add('network_intents.management.site_ip_range must be a mapping with start and end.') }
+        else {
+            & $check $range 'start' 'network_intents.management.site_ip_range.start' 'ip'
+            & $check $range 'end' 'network_intents.management.site_ip_range.end' 'ip'
+            if ((& $isIp ([string]$range['start'])) -and (& $isIp ([string]$range['end']))) {
+                if ((ConvertTo-ZtpIpNumber $range['start']) -gt (ConvertTo-ZtpIpNumber $range['end'])) { $problems.Add("network_intents.management.site_ip_range starts at $($range['start']), after its end $($range['end']).") }
+                elseif ($subnetOk -and -not ((Test-ZtpAddressInSubnet $range['start'] $subnetText) -and (Test-ZtpAddressInSubnet $range['end'] $subnetText))) { $problems.Add("network_intents.management.site_ip_range $($range['start'])-$($range['end']) isn't inside network_intents.management.subnet $subnetText.") }
+                else { $rangeOk = $true }
+            }
+        }
+    }
+    $nodeValue = Get-ZtpEnvValue -Environment $Environment -Path 'cluster_nodes'
+    $nodeList = @(@($nodeValue) | Where-Object { $_ -is [System.Collections.IDictionary] })
+    if ((Get-ZtpManagementAssignment -Environment $Environment) -eq 'static') {
+        $i = 0
+        foreach ($n in $nodeList) {
+            $ip = [string]$n['ip_address']
+            if (& $isIp $ip) {
+                if ($subnetOk -and -not (Test-ZtpAddressInSubnet $ip $subnetText)) { $problems.Add("cluster_nodes[$i] ($($n['name'])).ip_address $ip isn't in network_intents.management.subnet $subnetText.") }
+                elseif ($rangeOk -and ((ConvertTo-ZtpIpNumber $ip) -lt (ConvertTo-ZtpIpNumber $range['start']) -or (ConvertTo-ZtpIpNumber $ip) -gt (ConvertTo-ZtpIpNumber $range['end']))) {
+                    $problems.Add("cluster_nodes[$i] ($($n['name'])).ip_address $ip is outside network_intents.management.site_ip_range $($range['start'])-$($range['end']); with ip_assignment static every node address is in the site range.")
+                }
+            }
+            $i++
+        }
+    }
+    $provisioning = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.provisioning_network'
+    if ($null -ne $provisioning -and [string]$provisioning -notin 'dhcp', 'static') { $problems.Add("network_intents.management.provisioning_network must be dhcp or static, not '$provisioning'.") }
     & $check $Environment 'onprem.ntp_servers' 'onprem.ntp_servers' 'textlist' -Optional
     & $check $Environment 'credentials.local_admin_username' 'credentials.local_admin_username' 'text'
     $admin = [string](Get-ZtpEnvValue -Environment $Environment -Path 'credentials.local_admin_username')
@@ -224,6 +262,77 @@ function Assert-ZtpEnvironment {
     if ($problems.Count) {
         throw "$Source is invalid ($($problems.Count) problem$(if ($problems.Count -ne 1) { 's' })):`n  - $($problems -join "`n  - ")"
     }
+    foreach ($w in @(Get-ZtpEnvironmentWarning -Environment $Environment)) { Write-Warning $w }
+}
+
+function Get-ZtpEnvironmentWarning {
+    <#
+    .SYNOPSIS
+    What in a valid environment file deserves a warning, one string each: settings ZTP accepts but doesn't act on.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment)
+    if ([string](Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.provisioning_network') -eq 'static') {
+        'network_intents.management.provisioning_network is static: the maintenance environment needs a static address to reach Azure before the machine is claimed. Learn documents only the Configurator app for that, and whether the USB image can carry a preset address is an open research item, so ZTP sets nothing for it. Without DHCP on a provisioning port, the machine never reaches Azure and no voucher is written.'
+    }
+}
+
+function ConvertTo-ZtpIpNumber {
+    # 192.0.2.1 -> its 32-bit value, for comparisons. Unsigned arithmetic only.
+    param([Parameter(Mandatory)][string]$Address)
+    $b = [ipaddress]::Parse($Address).GetAddressBytes()
+    return [uint64]$b[0] * 16777216 + [uint64]$b[1] * 65536 + [uint64]$b[2] * 256 + [uint64]$b[3]
+}
+
+function Test-ZtpAddressInSubnet {
+    # Is 192.0.2.11 inside 192.0.2.0/24?
+    param([Parameter(Mandatory)][string]$Address, [Parameter(Mandatory)][string]$Subnet)
+    $network, $bits = $Subnet -split '/'
+    $size = [uint64]1 -shl (32 - [int]$bits)
+    $start = (ConvertTo-ZtpIpNumber $network) - ((ConvertTo-ZtpIpNumber $network) % $size)
+    $value = ConvertTo-ZtpIpNumber $Address
+    return ($value -ge $start -and $value -lt $start + $size)
+}
+
+function Get-ZtpSiteNetwork {
+    <#
+    .SYNOPSIS
+    The site's network setting for simplified provisioning (Microsoft.Edge/configurations/networkConfigurations), from
+    the management mode.
+    .DESCRIPTION
+    static: Manual, with ipv4 { addressRange { startIp, endIp }, defaultGateway, dnsServers, subnetMask, vLanId }. The
+    range is network_intents.management.site_ip_range, else the lowest to the highest node address. Each edge machine
+    still pins its own address on its management port (networkAdapters, by MAC); the site range is what the portal shows.
+    dhcp: Automatic. preconfigured: Automatic too: ZTP doesn't manage the address, and the freshly installed OS takes DHCP
+    until whatever preconfigures the port does so.
+    .OUTPUTS
+    IpAssignmentType (Manual or Automatic), Ipv4 (the object for the template's ipv4 parameter; empty for Automatic),
+    Range (start-end text, or '').
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment)
+    if ((Get-ZtpManagementAssignment -Environment $Environment) -ne 'static') {
+        return [pscustomobject]@{ IpAssignmentType = 'Automatic'; Ipv4 = [ordered]@{}; Range = '' }
+    }
+    $mgmt = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management'
+    $range = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.site_ip_range'
+    if ($range -is [System.Collections.IDictionary] -and $range['start'] -and $range['end']) { $start = [string]$range['start']; $end = [string]$range['end'] }
+    else {
+        $nodeValue = Get-ZtpEnvValue -Environment $Environment -Path 'cluster_nodes'
+        $addresses = @(@($nodeValue) | ForEach-Object { [string]$_['ip_address'] } | Sort-Object { ConvertTo-ZtpIpNumber $_ })
+        $start = $addresses[0]; $end = $addresses[-1]
+    }
+    $vlan = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.vlan_id'
+    $ipv4 = [ordered]@{
+        addressRange   = [ordered]@{ startIp = $start; endIp = $end }
+        defaultGateway = [string]$mgmt['gateway']
+        dnsServers     = @($mgmt['dns_servers'] | ForEach-Object { [string]$_ })
+        subnetMask     = ConvertTo-ZtpSubnetMask -PrefixLength ([int](([string]$mgmt['subnet']) -split '/')[1])
+        vLanId         = $(if ($null -ne $vlan -and "$vlan" -ne '') { [int]$vlan } else { 0 })
+    }
+    return [pscustomobject]@{ IpAssignmentType = 'Manual'; Ipv4 = $ipv4; Range = "$start-$end" }
 }
 
 function Get-ZtpManagementAssignment {

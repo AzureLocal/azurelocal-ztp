@@ -169,6 +169,11 @@ $bicepNodes = @($nodeList | ForEach-Object {
             }
         }
     })
+# The site's network setting follows the management mode: Manual with the nodes' range for static, Automatic otherwise.
+$siteNetwork = Get-ZtpSiteNetwork -Environment $env_
+$provisioningNetwork = [string](Get-ZtpEnvValue -Environment $env_ -Path 'network_intents.management.provisioning_network')
+if (-not $provisioningNetwork) { $provisioningNetwork = 'dhcp' }
+Write-Output "Site network: $($siteNetwork.IpAssignmentType)$(if ($siteNetwork.Range) { " $($siteNetwork.Range), gateway $($siteNetwork.Ipv4.defaultGateway), mask $($siteNetwork.Ipv4.subnetMask), DNS $($siteNetwork.Ipv4.dnsServers -join ', '), VLAN $($siteNetwork.Ipv4.vLanId)" }). Maintenance environment to Azure: $provisioningNetwork."
 Write-Output "Management addresses: $mgmtMode. Arc machine names: $(($bicepNodes | ForEach-Object { "$($_.name) -> $($_.arc_machine_name)" }) -join ', ')."
 $bicepParameters = [ordered]@{
     '$schema'      = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#'
@@ -193,8 +198,8 @@ $bicepParameters = [ordered]@{
         assign_hci_rp_role        = @{ value = $true }
         managed_resource_group_name = @{ value = '' }
         network_kind              = @{ value = 'LAN' }
-        ip_assignment_type        = @{ value = 'Automatic' }
-        ipv4                      = @{ value = @{} }
+        ip_assignment_type        = @{ value = $siteNetwork.IpAssignmentType }
+        ipv4                      = @{ value = $siteNetwork.Ipv4 }
         ntp_configuration_choice  = @{ value = 'Automatic' }
         ntp_server                = @{ value = '' }
         alternate_ntp_server      = @{ value = '' }

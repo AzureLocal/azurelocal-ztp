@@ -38,9 +38,35 @@ A complete example with placeholder values is in [`examples/infrastructure.examp
 | `network_intents.management.dns_servers` | P+P | List of IPv4 | DNS on the management adapter. Learn: DNS servers can't be changed after deployment ([DNS server considerations](https://learn.microsoft.com/azure/azure-local/plan/cloud-deployment-network-considerations#dns-server-considerations)). |
 | `network_intents.management.ip_assignment` | P+P, optional | `static` (default), `dhcp` or `preconfigured` | How each node's management address is set. `static`: the provisioning service sets `ip_address`, the mask, gateway and DNS on the port with `mac_address` (edge machine `siteDetails.deviceConfiguration.network.networkAdapters[]`, `ipAssignmentType: Manual`), and Prepare checks it. `dhcp`: the port stays on DHCP, so reserve `ip_address` for the MAC; Prepare checks the node has it. `preconfigured`: the port is already set up, and ZTP doesn't change it. In every mode Prepare turns DHCP and default gateways off on the other ports. |
 | `network_intents.management.vlan_id` | Prov, optional | 0-4094, default 0 | VLAN of the management port in the provisioning request. 0 for an access port. |
+| `network_intents.management.site_ip_range.start`, `.end` | Prov, optional | IPv4, inside `subnet`, start before end | With `ip_assignment: static`, the address range of the site's network setting (`Microsoft.Edge/configurations/networkConfigurations`, Manual). Default: the lowest to the highest `cluster_nodes[].ip_address`. Every node address must be inside it. See [The site's network setting](#the-sites-network-setting). |
+| `network_intents.management.provisioning_network` | Prov, optional | `dhcp` (default) or `static` | How the maintenance environment gets the address it reaches Azure with, before the machine is claimed. `dhcp`: a DHCP server must answer on a port of the machine (on a machine with no DHCP on its management network, another port, for example a data port, carries it). `static`: the run warns and sets nothing. Learn documents only the Configurator app for a static address there, and whether the USB image can carry a preset address is an open research item. |
 | `onprem.ntp_servers` | P+P, optional | List | Time source. Prepare sets it with `w32tm` and waits until the node syncs from one of them. |
 | `credentials.local_admin_username` | P+P | Text; not `Administrator` or `Guest` | The deployment admin that Prepare creates in local Administrators. |
 | `credentials.local_admin_password_secret` | P+P | `keyvault://<vault>/<secret>` | The deployment admin's password. The vault must be in the subscription named by `ztp.admin_secret.subscription_id`. Learn asks for at least 14 characters with lowercase, uppercase, a digit and a special character ([install the OS](https://learn.microsoft.com/azure/azure-local/deploy/deployment-install-os#prerequisites)). |
+
+#### The site's network setting
+
+The site configuration has one network setting for the machines it provisions. ZTP derives it from the management mode:
+
+| `ip_assignment` | Site setting | `ipv4` |
+| --- | --- | --- |
+| `static` | `Manual` | `addressRange { startIp, endIp }` from `site_ip_range` (default: the lowest to the highest node address), `defaultGateway` and `dnsServers` from the management network, `subnetMask` from `subnet`, `vLanId` from `vlan_id` (0 when absent). |
+| `dhcp` | `Automatic` | none |
+| `preconfigured` | `Automatic` | none. ZTP doesn't manage the address, and the newly installed OS takes DHCP until whatever preconfigures the port does. |
+
+Each edge machine also pins its own address on its management port (`networkAdapters`, by MAC); the site range is what the portal shows. The plan prints both, for example `Site network: Manual 192.0.2.11-192.0.2.12, gateway 192.0.2.1, mask 255.255.255.0, DNS 192.0.2.53, 192.0.2.54, VLAN 0`.
+
+```yaml
+network_intents:
+  management:
+    subnet: 192.0.2.0/24
+    gateway: 192.0.2.1
+    dns_servers: [192.0.2.53, 192.0.2.54]
+    ip_assignment: static
+    vlan_id: 0
+    site_ip_range: { start: 192.0.2.11, end: 192.0.2.12 }   # optional; this is the default for nodes .11 and .12
+    provisioning_network: dhcp                              # optional; the default
+```
 
 ### Hardware
 
@@ -148,7 +174,7 @@ ztp:
 | Setting | Value |
 | --- | --- |
 | Site configuration name | `default` |
-| Provisioning network | `LAN`, IP assignment `Automatic` (DHCP during provisioning) |
+| Provisioning network | `LAN`. IP assignment from the management mode: `Manual` with the site range for `static`, `Automatic` otherwise (see [The site's network setting](#the-sites-network-setting)). |
 | Provisioning time | NTP `Automatic` |
 | Connectivity | `Public` (no proxy) |
 | Role assignments | Site settings, Key Vault configuration, edge machine delegations and the Azure Local resource provider role are all on. |
