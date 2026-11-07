@@ -19,7 +19,7 @@ The stages are Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, 
 
 **The result:** each machine is **Provisioned** in Azure and **Arc-connected**, with its management IP on the management NIC (found by MAC) as the infrastructure file says. The nodes are ready for OS configuration, not yet for Validate. See [What's next: OS configuration](#whats-next-os-configuration).
 
-![Azure Local ZTP flow](docs/diagrams/ztp-flow.png)
+![Azure Local ZTP flow, from start to handoff](docs/diagrams/ztp-flow-to-handoff.png)
 
 ## Status
 
