@@ -450,6 +450,32 @@ function ConvertTo-ZtpNetworkSetting {
     }
 }
 
+function Get-ZtpManagementMode {
+    <#
+    .SYNOPSIS
+    The management address mode of a node (docs/prerequisites.md, "Management address modes"), from the ip_assignment of
+    the management port (the port with role management, found by its MAC; any make or slot) and -ManagementDhcp: does the
+    management port take DHCP while the machine is provisioned? Invoke-ZtpEnvironment.ps1 writes it as management_dhcp:
+    true when the management port also has role provisioning (or the file lists no ports) and
+    networking.management.provisioning_network is dhcp.
+      A  Reserved                         dhcp_reservation: DHCP with a reservation for the management port's MAC.
+      B  Static with DHCP                 static, and DHCP on the management network.
+      C  Static without management DHCP   static, no DHCP on the management network; another port with role provisioning
+                                          takes DHCP, and the node stays reachable through Arc over it.
+    dhcp (no reservation) and preconfigured are none of the three: Mode is '' and Label says what they are.
+    #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][string]$IpAssignment, [bool]$ManagementDhcp = $true)
+    $assignment = if ($IpAssignment) { $IpAssignment.ToLowerInvariant() } else { 'static' }
+    $mode, $name = switch ($assignment) {
+        'dhcp_reservation' { 'A', 'Reserved' }
+        'static' { if ($ManagementDhcp) { 'B', 'Static with DHCP' } else { 'C', 'Static without management DHCP' } }
+        'dhcp' { '', 'dhcp without a reservation (not Mode A, B or C)' }
+        default { '', $assignment }
+    }
+    [pscustomobject]@{ Mode = $mode; Name = $name; IpAssignment = $assignment; Label = $(if ($mode) { "Mode $mode ($name)" } else { $name }) }
+}
+
 function Format-ZtpNetworkSetting {
     # "Static 192.0.2.11 255.255.255.0 gw 192.0.2.1 DNS 192.0.2.53 VLAN 0 up", for messages.
     [CmdletBinding()]

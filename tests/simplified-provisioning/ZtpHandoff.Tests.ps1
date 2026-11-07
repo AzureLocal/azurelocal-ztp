@@ -61,7 +61,7 @@ Describe 'New-ZtpHandoff.ps1' {
         $h.site.name | Should -Be 'site-example'; $h.site.resourceId | Should -Match '/sites/site-example$'
         $h.solution.vsrVersion | Should -Be '12.2609.1003.7'
         $n1 = $h.nodes | Where-Object name -EQ 'node-01'
-        @($n1.PSObject.Properties.Name) | Should -Be @('name', 'serial', 'edgeMachineName', 'edgeMachineId', 'arcMachineName', 'arcMachineResourceId', 'arcMachineResourceGroup', 'ready', 'managementAddressVerified', 'managementAddressReason', 'biosRestored')
+        @($n1.PSObject.Properties.Name) | Should -Be @('name', 'serial', 'edgeMachineName', 'edgeMachineId', 'arcMachineName', 'arcMachineResourceId', 'arcMachineResourceGroup', 'ready', 'managementAddressVerified', 'managementAddressReason', 'biosRestored', 'managementMode', 'networkAdapters')
         $n1.arcMachineName | Should -Be '00000000-0000-0000-0000-000000000000-1'; $n1.serial | Should -Be 'EXAMPLE1'; $n1.ready | Should -BeTrue
         $n1.edgeMachineName | Should -Be 'node-01'; $n1.edgeMachineId | Should -Match '/edgeMachines/node-01$'
         $n1.arcMachineResourceId | Should -Match '/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1$'
@@ -75,6 +75,62 @@ Describe 'New-ZtpHandoff.ps1' {
         $raw = Get-Content $r.HandoffPath -Raw
         foreach ($gone in '"sbe"', '"bootstrap"', '"timestamps"', '"connectivity"', 'ipAddress', 'macAddress') { $raw | Should -Not -Match $gone -Because "the handoff carries only what Azure generated ($gone)" }
         $raw | Should -Not -Match 'BEGIN OWNERSHIP'
+    }
+
+    It 'records each port as Azure reports it after the install, matched by MAC to the file, with the mode, and prints a table' {
+        # The node list Invoke-ZtpEnvironment.ps1 writes: the management port's MAC and ip_assignment, DHCP on the management
+        # network or not, and the file's ports. The management port is a converged ConnectX port here, not an onboard one.
+        $nodes = Join-Path $TestDrive "nodes-nic-$([guid]::NewGuid().ToString('N')).json"
+        @{ nodes = @(
+                [ordered]@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11'; management_mac = '00:00:5E:00:53:AA'; management_ip_assignment = 'static'; management_dhcp = $true
+                    network_adapters = @(
+                        [ordered]@{ name = 'Slot 3 Port 1'; mac_address = '00:00:5E:00:53:AA'; roles = @('management', 'compute', 'provisioning'); ip_assignment = 'static'; ip_address = '192.0.2.11' }
+                        [ordered]@{ name = 'Slot 3 Port 2'; mac_address = '00:00:5E:00:53:BB'; roles = @('storage'); ip_assignment = 'none'; ip_address = '' }) }
+                [ordered]@{ name = 'node-02'; service_tag = 'EXAMPLE2'; bmc_address = '198.51.100.12'; management_mac = '00:00:5E:00:53:CC'; management_ip_assignment = 'dhcp_reservation'; management_dhcp = $true; network_adapters = @() }) } |
+            ConvertTo-Json -Depth 6 | Set-Content $nodes
+        $adapter = {
+            param([string]$Id, [string]$Name, [string]$Mac, [string]$Description, [string]$Type, [string]$Ip, [string]$Mask, [string]$Gateway)
+            @{ name = $Id; properties = @{ networkConfiguration = @{ adapterName = $Name }; reportedProperties = @{ adapterName = $Name; macAddress = $Mac; interfaceDescription = $Description; ipInterfaceType = $Type; ip4Address = $Ip; subnetMask = $Mask; defaultGateway = $Gateway } } }
+        }
+        $global:ztpH_adapters = @{ value = @(
+                (& $adapter '00000000-0000-0000-0000-000000000001' 'Port1' '00-00-5E-00-53-AA' 'Example ConnectX-6 Dx' 'Dhcp' '192.0.2.116' '255.255.255.0' '192.0.2.1')
+                (& $adapter '00000000-0000-0000-0000-000000000002' 'Port2' '00-00-5E-00-53-BB' 'Example ConnectX-6 Dx' 'Dhcp' '198.51.100.40' '255.255.255.192' '198.51.100.1')
+                (& $adapter '00000000-0000-0000-0000-000000000003' 'Port9' '00-00-5E-00-53-DD' 'Example unlisted NIC' '' '' '' '')) }
+        Mock Invoke-AzRestMethod {
+            if ($Path -match 'edgeMachines/node-01/networkAdapters\?') { return New-ZtpHResponse 200 $global:ztpH_adapters }
+            if ($Path -match 'edgeMachines/([^/?]+)/jobs/ProvisionOs') { return New-ZtpHResponse 200 $global:ztpH_job }
+            if ($Path -match 'edgeMachines/([^/?]+)\?') { $m = $global:ztpH_machines[$Matches[1]]; if ($m) { return New-ZtpHResponse 200 $m } }
+            New-ZtpHResponse 404 $null
+        }
+        $reason = 'Mode B (Static with DHCP): the management port Port1 (MAC 00:00:5e:00:53:aa, Example ConnectX-6 Dx) has DHCP 192.0.2.116 after the install; expected static 192.0.2.11; OS configuration sets it by MAC.'
+        $a = @{ SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroupName = 'rg-example'; NodeName = 'node-01', 'node-02'; NodesFile = $nodes
+            HandoffPath = (Join-Path $TestDrive 'out/ztp-handoff-nic.json'); WarningAction = 'SilentlyContinue'; Execute = $true
+            ManagementAddressCheck = @(@{ node = 'node-01'; verified = $false; reason = $reason }, @{ node = 'node-02'; verified = $true; reason = $null }) }
+        $r = & (Join-Path $global:ztpH_scripts 'New-ZtpHandoff.ps1') @a -InformationVariable info -InformationAction SilentlyContinue
+        $h = Get-Content $r.HandoffPath -Raw | ConvertFrom-Json
+        $h.schemaVersion | Should -Be 2 -Because 'the per-port detail is additive'
+        $n1 = $h.nodes | Where-Object name -EQ 'node-01'
+        $n1.managementMode.mode | Should -Be 'B'; $n1.managementMode.name | Should -Be 'Static with DHCP'; $n1.managementMode.ipAssignment | Should -Be 'static'
+        $n1.managementAddressReason | Should -Be $reason
+        $ports = @($n1.networkAdapters)
+        $ports.Count | Should -Be 3
+        $m = $ports | Where-Object isManagement
+        @($m).Count | Should -Be 1
+        "$($m.name) $($m.macAddress) $($m.fileName) $(@($m.roles) -join ',') $($m.ipAssignment) $($m.ipAddress)/$($m.prefix) $($m.subnetMask) $($m.gateway)" | Should -Be 'Port1 00:00:5e:00:53:aa Slot 3 Port 1 management,compute,provisioning Dhcp 192.0.2.116/24 255.255.255.0 192.0.2.1'
+        $m.description | Should -Be 'Example ConnectX-6 Dx'
+        "$($m.expected.ipAssignment) $($m.expected.ipAddress)" | Should -Be 'static 192.0.2.11'
+        $storage = $ports | Where-Object name -EQ 'Port2'
+        $storage.isManagement | Should -BeFalse; $storage.prefix | Should -Be 26; $storage.expected.ipAssignment | Should -Be 'none'; $storage.expected.ipAddress | Should -BeNullOrEmpty
+        $unlisted = $ports | Where-Object name -EQ 'Port9'
+        $unlisted.ipAssignment | Should -Be 'none'; $unlisted.fileName | Should -BeNullOrEmpty; @($unlisted.roles).Count | Should -Be 0; $unlisted.expected | Should -BeNullOrEmpty
+        $n2 = $h.nodes | Where-Object name -EQ 'node-02'
+        $n2.managementMode.mode | Should -Be 'A'
+        @($n2.networkAdapters).Count | Should -Be 0 -Because 'node-02 reports no adapters here'
+        $text = @($info | ForEach-Object { [string]$_.MessageData }) -join "`n"
+        $text | Should -Match 'node-01: Mode B \(Static with DHCP, static\); management address not verified: Mode B'
+        $text | Should -Match '> +Port1 +00:00:5e:00:53:aa +management,compute,provisioning \(Slot 3 Port 1\) +Dhcp 192\.0\.2\.116/24 gw 192\.0\.2\.1 +static 192\.0\.2\.11'
+        $text | Should -Match 'Port9 +00:00:5e:00:53:dd +not in the file +none, no address'
+        $text | Should -Match 'node-02: Mode A \(Reserved, dhcp_reservation\); management address verified'
     }
 
     It 'records a node without a Network result as not verified, and reads the results from state-file hashtables' {

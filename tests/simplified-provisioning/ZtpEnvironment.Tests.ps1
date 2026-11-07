@@ -135,7 +135,7 @@ Describe 'Checking the environment file' {
         @{ Case = 'the provisioning DHCP range has no end'; Edit = { param($e) $e.network_intents.management['provisioning_dhcp_range'] = [ordered]@{ start = '192.0.2.100' } }; Expect = 'network_intents.management.provisioning_dhcp_range.end is required' }
         @{ Case = 'a provisioning-only BIOS value is not a string'; Edit = { param($e) $e.hardware['bios_during_provisioning'] = [ordered]@{ Slot2 = $false } }; Expect = "hardware.bios_during_provisioning.Slot2 must be a string" }
         @{ Case = 'a node''s provisioning-only BIOS is a list'; Edit = { param($e) $e.cluster_nodes[0]['bios_during_provisioning'] = @('Slot2') }; Expect = 'cluster_nodes[0] (node-01).bios_during_provisioning must be a mapping' }
-        @{ Case = 'the management IP assignment is unknown'; Edit = { param($e) $e.network_intents.management.ip_assignment = 'auto' }; Expect = "ip_assignment must be static, dhcp or preconfigured, not 'auto'" }
+        @{ Case = 'the management IP assignment is unknown'; Edit = { param($e) $e.network_intents.management.ip_assignment = 'auto' }; Expect = "ip_assignment must be static, dhcp_reservation, dhcp or preconfigured, not 'auto'" }
         @{ Case = 'the management VLAN is out of range'; Edit = { param($e) $e.network_intents.management.vlan_id = 5000 }; Expect = "vlan_id must be 0-4094, not '5000'" }
         @{ Case = 'an Arc machine name has a space'; Edit = { param($e) $e.cluster_nodes[0].arc_machine_name = 'node 01' }; Expect = "arc_machine_name 'node 01' isn't a valid Arc machine name" }
         @{ Case = 'an Arc machine name ends in a dot'; Edit = { param($e) $e.cluster_nodes[0].arc_machine_name = 'node-01.' }; Expect = "arc_machine_name 'node-01.' isn't a valid Arc machine name" }
@@ -618,7 +618,8 @@ Describe 'Schema 5 infrastructure.yml' {
         $e._source.format | Should -Be 'schema5'; $e._source.validator | Should -Be 'built-in'
         $n = $e.cluster_nodes[0]
         "$($n.name) $($n.ip_address) $($n.mac_address) $($n.adapter_name) $($n.ip_assignment) $($n.service_tag) $($n.idrac_ip)" | Should -Be 'node-01 192.0.2.11 02:00:00:00:00:11 Embedded NIC 1 static EXAMPLE1 198.51.100.11'
-        $n.Contains('network_adapters') | Should -BeFalse -Because 'the other ports are OS configuration'
+        @($n['network_adapters'] | ForEach-Object { $_['name'] }).Count | Should -BeGreaterThan 1 -Because 'the ports go to the node list for the handoff (ZTP still leaves them to OS configuration)'
+        @($n['network_adapters'] | Where-Object { 'management' -in $_['roles'] -and $_['ip_assignment'] -ne 'none' }).Count | Should -Be 1
         $m = $e.network_intents.management
         "$($m.subnet) $($m.gateway) $(@($m.dns_servers) -join ',') $($m.ip_assignment) $($m.vlan_id) $($m.provisioning_network)" | Should -Be '192.0.2.0/24 192.0.2.1 192.0.2.53,192.0.2.54 static 0 dhcp'
         $e.azure_identity.azure_tenant_id | Should -Be '00000000-0000-0000-0000-000000000000'
@@ -636,8 +637,12 @@ Describe 'Schema 5 infrastructure.yml' {
     }
 
     It 'maps <Case>' -ForEach @(
-        @{ Case = 'a DHCP reservation to ZTP''s dhcp, and the site network to Automatic'; Edit = { param($d) foreach ($n in $d.nodes) { $n.network_adapters[0].ip_assignment = 'dhcp_reservation' } }; Check = { param($e) $e.cluster_nodes[0].ip_assignment | Should -Be 'dhcp'; $e.network_intents.management.ip_assignment | Should -Be 'dhcp'; (Get-ZtpSiteNetwork -Environment $e).IpAssignmentType | Should -Be 'Automatic' } }
-        @{ Case = 'mixed modes per node, the site network Manual over the static node only'; Edit = { param($d) $d.networking.management['static_method'] = 'site'; $d.nodes[1].network_adapters[0].ip_assignment = 'dhcp_reservation' }; Check = { param($e) $e.cluster_nodes[1].ip_assignment | Should -Be 'dhcp'; (Get-ZtpSiteNetwork -Environment $e).Range | Should -Be '192.0.2.11-192.0.2.11' } }
+        @{ Case = 'a DHCP reservation to ZTP''s dhcp_reservation (Mode A), and the site network to Automatic'; Edit = { param($d) foreach ($n in $d.nodes) { $n.network_adapters[0].ip_assignment = 'dhcp_reservation' } }; Check = { param($e) $e.cluster_nodes[0].ip_assignment | Should -Be 'dhcp_reservation'; $e.network_intents.management.ip_assignment | Should -Be 'dhcp_reservation'; (Get-ZtpSiteNetwork -Environment $e).IpAssignmentType | Should -Be 'Automatic' } }
+        @{ Case = 'Mode C: a management port without role provisioning takes no DHCP while provisioned'; Edit = { param($d) }; Check = { param($e) Get-ZtpManagementDhcp -Environment $e -Node $e.cluster_nodes[0] | Should -BeFalse; @($e.cluster_nodes[0].network_adapters).Count | Should -Be 6 } }
+        @{ Case = 'Mode B: a management port that also carries role provisioning takes DHCP'; Edit = { param($d) foreach ($n in $d.nodes) { $n.network_adapters[0].roles = @('management', 'provisioning') } }; Check = { param($e) Get-ZtpManagementDhcp -Environment $e -Node $e.cluster_nodes[0] | Should -BeTrue } }
+        @{ Case = 'Mode C with provisioning_network static and a DHCP provisioning port: no problem and no warning'; Edit = { param($d) $d.networking.management['provisioning_network'] = 'static'; foreach ($n in $d.nodes) { $n.network_adapters[2].ip_assignment = 'dhcp' } }; Check = { param($e) @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0; @(Get-ZtpEnvironmentWarning -Environment $e).Count | Should -Be 0; Get-ZtpManagementDhcp -Environment $e -Node $e.cluster_nodes[0] | Should -BeFalse } }
+        @{ Case = 'Mode A without ip_address: allowed, nothing to compare'; Edit = { param($d) foreach ($n in $d.nodes) { $n.network_adapters[0].ip_assignment = 'dhcp_reservation'; $n.network_adapters[0].Remove('ip_address') } }; Check = { param($e) @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0; $e.cluster_nodes[0].ip_assignment | Should -Be 'dhcp_reservation' } }
+        @{ Case = 'mixed modes per node, the site network Manual over the static node only'; Edit = { param($d) $d.networking.management['static_method'] = 'site'; $d.nodes[1].network_adapters[0].ip_assignment = 'dhcp_reservation' }; Check = { param($e) $e.cluster_nodes[1].ip_assignment | Should -Be 'dhcp_reservation'; (Get-ZtpSiteNetwork -Environment $e).Range | Should -Be '192.0.2.11-192.0.2.11' } }
         @{ Case = 'a tagged management port to its VLAN'; Edit = { param($d) $d.networking.management.Remove('vlan_id'); foreach ($n in $d.nodes) { $n.network_adapters[0].vlan_mode = 'tagged' } }; Check = { param($e) $e.network_intents.management.vlan_id | Should -Be 711 } }
         @{ Case = 'a 5.0 node with management only'; Edit = { param($d) foreach ($n in $d.nodes) { $mac = $n.network_adapters[0].mac_address; $ip = $n.network_adapters[0].ip_address; $n.Remove('network_adapters'); $n['management'] = [ordered]@{ ip_address = $ip; mac_address = $mac; adapter_name = 'Port1' } } }; Check = { param($e) $e.cluster_nodes[0].adapter_name | Should -Be 'Port1'; $e.cluster_nodes[0].Contains('network_adapters') | Should -BeFalse; $e.cluster_nodes[0].ip_assignment | Should -Be 'static' } }
         @{ Case = 'a BMC user name that is not a secret, and BIOS settings'; Edit = { param($d) $d.hardware.bmc.username = 'root'; $d.hardware['bios'] = [ordered]@{ Slot2 = 'Disabled' }; $d.nodes[1]['bios'] = [ordered]@{ Slot2 = 'Enabled' } }; Check = { param($e) $e.ztp.bmc_secret.username | Should -Be 'root'; $e.ztp.bmc_secret.Contains('username_name') | Should -BeFalse; (Get-ZtpEnvironmentBios -Environment $e -Node $e.cluster_nodes[1])['Slot2'] | Should -Be 'Enabled'; (Get-ZtpEnvironmentBios -Environment $e -Node $e.cluster_nodes[0])['Slot2'] | Should -Be 'Disabled' } }
@@ -655,6 +660,7 @@ Describe 'Schema 5 infrastructure.yml' {
         @{ Case = 'no management port'; Edit = { param($d) $d.nodes[0].network_adapters[0].ip_assignment = 'none' }; Expect = 'nodes[0] (node-01): 0 ports own the management address' }
         @{ Case = 'a management port without its MAC'; Edit = { param($d) $d.nodes[0].network_adapters[0].Remove('mac_address') }; Expect = 'nodes[0] (node-01) management port mac_address is required' }
         @{ Case = 'an ISO install'; Edit = { param($d) $d.scenario.os_install = 'iso' }; Expect = "scenario.os_install is 'iso'; ZTP provisions with simplified machine provisioning" }
+        @{ Case = 'Mode C with no DHCP anywhere (G23)'; Edit = { param($d) $d.networking.management['provisioning_network'] = 'static' }; Expect = "nodes[0] (node-01): Mode C (Static without management DHCP): the maintenance environment can't reach Azure: no DHCP anywhere (G23); give a provisioning port with DHCP" }
         @{ Case = 'another schema major'; Edit = { param($d) $d._metadata.schema_version = '4.0.0' }; Expect = "_metadata.schema_version is '4.0.0'; ZTP reads schema 5.x" }
         @{ Case = 'an unlisted admin vault'; Edit = { param($d) $d.provisioning.simplified.admin.password = 'keyvault://kv-other/ztp-admin-password' }; Expect = "names vault 'kv-other', which isn't in key_vaults" }
         @{ Case = 'a node with its own BMC login'; Edit = { param($d) $d.nodes[1].bmc['username'] = 'other'; $d.nodes[1].bmc['password'] = 'keyvault://kv-example/other-bmc' }; Expect = 'nodes[1] (node-02).bmc has its own login; ZTP uses one BMC login' }
@@ -712,7 +718,13 @@ Export-ModuleMember -Function Test-AzlInfrastructure
         $text | Should -BeLike '*Note: hardware.sbe ignored: SBE belongs to OS configuration.*'
         $nodes = Get-Content -LiteralPath (Join-Path $root 'config/simplified-provisioning/nodes.json') -Raw | ConvertFrom-Json
         "$($nodes.nodes[1].name) $($nodes.nodes[1].service_tag) $($nodes.nodes[1].bmc_address) $($nodes.nodes[1].management_ip) $($nodes.nodes[1].bios.EmbNic1Nic2)" | Should -Be 'node-02 EXAMPLE2 198.51.100.12 192.0.2.12 Enabled'
+        # For the handoff: the management port's MAC and mode, and every port of the file. The fixture's management port has
+        # no role provisioning (the 100G ports carry it), so it takes no DHCP while provisioned: Mode C.
+        "$($nodes.nodes[1].management_mac) $($nodes.nodes[1].management_ip_assignment) $($nodes.nodes[1].management_dhcp)" | Should -Be '02:00:00:00:00:12 static False'
+        @($nodes.nodes[1].network_adapters).Count | Should -Be 6
+        ($nodes.nodes[1].network_adapters | Where-Object name -EQ 'Slot 3 Port 1').roles | Should -Be @('compute', 'provisioning')
         $bicep = Get-Content -LiteralPath (Join-Path $bin 'bicep/main.parameters.json') -Raw | ConvertFrom-Json
+        $bicep.parameters.nodes.value[0].management.management_dhcp | Should -BeFalse
         $m = $bicep.parameters.nodes.value[0].management
         "$($m.ip_assignment) $($m.mac_address) $($m.adapter_name) $($m.ip_address) $($m.subnet_mask) $($m.vlan_id)" | Should -Be 'static 02:00:00:00:00:11 Embedded NIC 1 192.0.2.11 255.255.255.0 0'
         $bicep.parameters.ip_assignment_type.value | Should -Be 'Automatic'

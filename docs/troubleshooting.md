@@ -102,18 +102,13 @@ If you know the address, set `cluster_nodes[].maintenance_address` and the stage
 
 The Device stage, before the claim, sets the address the way the Configurator App does: through the maintenance environment's REST service (`https://<maintenance_address>:20001/BootstrapOobeService`), `SetArcBootstrapDeviceConfiguration` for the adapter with the management MAC. A node without `maintenance_address` is found by the scan above. With `static_method: device` (the default), the site's network setting is `Automatic` and the claim carries no `Manual` adapter, so the OS install has no static address to misplace. The request and the status response were verified live. See [The Device stage](environment-file.md#the-device-stage).
 
-`static_method: site` is the old path, for environments without the Device stage: the site is `Manual` and the claim carries a `Manual` adapter by MAC, so the install puts the address on the first ready port and the Network stage has to move it.
+`static_method: site` is the old path, for environments without the Device stage: the site is `Manual` and the claim carries a `Manual` adapter by MAC, so the install puts the address on the first ready port.
 
-The Network stage, after Ready, is the backstop either way. It checks the address and fixes what's still wrong through Azure's per-NIC API (api-version 2026-10-01), with no WinRM and no firewall change:
+**Then the OS install resets every port to DHCP.** The maintenance environment's network settings don't carry into the OS (verified live, Dell AX-760, build 2610, 2026-11-07). So in Modes B and C the management port has a DHCP address (B) or none (C) when ZTP finishes, whatever the Device stage set. OS configuration sets the static by MAC: the toolkit's `Set-AzureLocalNodeConfiguration.ps1`, Network step, over Arc Run Command. Mode A (a DHCP reservation per management MAC) needs nothing set. See [Management address modes](prerequisites.md#management-address-modes).
 
-1. `GET .../edgeMachines/<node>/networkAdapters` lists the adapters. `properties.reportedProperties.macAddress` (12 hex digits, no separators, lower case on the live run) finds the management adapter; separators and case don't matter. No match stops the stage and lists the MACs found.
-2. If another adapter reports `ip_address`, `PUT .../networkAdapters/<name>/jobs/ApplyConfiguration` sets it to `Dhcp` first, and the stage waits until it no longer reports the address.
-3. `PUT .../jobs/ApplyConfiguration` on the management adapter: `ipInterfaceType: Static`, the address, mask, gateway, DNS servers, VLAN and `interfaceState: up`, with the adapter's own `networkConfiguration.adapterName`. The PUT returns 201; `GET` on the same path returns `properties.status` (`DeploymentInProgress`, then success or failure) and the steps under `reportedProperties.deploymentStatus`.
-4. An adapter that already reports the right static configuration isn't touched, so a rerun changes nothing.
+The Network stage, after Ready, only verifies. `GET .../edgeMachines/<node>/networkAdapters` (api-version 2026-10-01) lists the adapters; `properties.reportedProperties.macAddress` (12 hex digits, no separators, lower case on the live run) finds the management port, separators and case aside. No match stops the stage and lists the MACs found. Otherwise the node's result, with a reason naming the mode, the port, its MAC, what it has and what the file expects, goes to the handoff as `managementAddressVerified` and `managementAddressReason`. A static address the install reset is recorded as `Deferred` (event `ManagementAddressDeferredToOsConfiguration`), not as a failure.
 
-Every change is in `<evidence_path>\network-changes.jsonl`. Each node's result goes to the handoff as `managementAddressVerified`.
-
-The listing, the PUT and the queued job were seen live. The whole stage hasn't yet run end to end on hardware.
+**Why not fix it through Azure.** Azure Local has a per-NIC job, `PUT .../networkAdapters/<name>/jobs/ApplyConfiguration`. On two separate live runs it never started: it sat at `DeploymentInProgress` with "Job is not yet triggered as other jobs are still running", and Azure marked it `Failed` after about 35 minutes. The orchestrator's `-ApplyThroughAzure` keeps that path as an opt-in (release the address from a port that holds it, then `ipInterfaceType: Static` with the address, mask, gateway, DNS servers, VLAN and `interfaceState: up` on the management port; changes in `<evidence_path>\network-changes.jsonl`), and then fails the stage when a static address isn't set. Don't count on it.
 
 **If the stage stops.**
 
@@ -123,11 +118,7 @@ The listing, the PUT and the queued job were seen live. The whole stage hasn't y
 | Device: "no maintenance environment with the management MAC ... answers on TCP 20001" | See [The Device scan finds no node](#the-device-scan-finds-no-node). |
 | Device: "no network adapter in the maintenance environment reports the management MAC" | The message lists the MACs the maintenance environment reports. Correct `mac_address`, then run `-From Device`. |
 | "no network adapter of edge machine &lt;node&gt; reports the management MAC" | The message lists the MACs the machine reports. Correct the management port's `mac_address` in the environment file, then run `-From Network`. |
-| "reports no network adapters" | The OS install hasn't finished. Run the stage after Ready. |
-| A job stays `DeploymentInProgress` with "Job is not yet triggered as other jobs are still running" | Right after the OS install, other jobs on the machine run first. The stage waits up to 60 minutes per job. A rerun (`-From Network`) follows an unfinished job with the same target instead of sending another. |
-| "ApplyConfiguration (apply) failed" | The message has the job's status, its failed step and error. Fix the cause, then run `-From Network`. |
-
-**A risk to know.** If the management port has no address of its own while the static address sits on the wrong port, setting that port to DHCP can cut the node off from Azure until the static address is applied. The stage warns when it sees this. A DHCP server on the management network avoids it: the management port then has a lease while the address moves.
+| With `-ApplyThroughAzure`: a job stays `DeploymentInProgress` with "Job is not yet triggered as other jobs are still running", or "ApplyConfiguration (apply) failed" | The behaviour seen live. Run the stage without `-ApplyThroughAzure` (`-From Network`) and let OS configuration set the address. |
 
 ## Restore fails
 
@@ -147,13 +138,16 @@ The Restore stage sets each `bios_during_provisioning` attribute back, restarts 
 
 | Reason | Meaning | What to do |
 | --- | --- | --- |
-| `dhcp: the management port Port0 reports 192.0.2.200, the infrastructure file expects 192.0.2.12` | A `dhcp` or `preconfigured` node: ZTP only reports its address and doesn't change it. | Fix the DHCP reservation for the management MAC, or set the address in OS configuration ([Task 03 Static IP](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-03-configure-static-ip-address)). |
-| `...: the management port Port0 reports no address` | The management port has no address. | Check the port's link and the DHCP server, then OS configuration. |
+| `Mode B (Static with DHCP): the management port Port1 (MAC 00:00:5e:00:53:aa) has DHCP 192.0.2.116 after the install; expected static 192.0.2.11; OS configuration sets it by MAC.` | Expected in Mode B: the OS install reset the static the Device stage set. | Run OS configuration (`Set-AzureLocalNodeConfiguration.ps1`); its Network step sets the static by MAC. |
+| `Mode C (Static without management DHCP): the management port Port1 (MAC ...) has DHCP and no address after the install; expected static 192.0.2.11; OS configuration sets it by MAC over Arc.` | Expected in Mode C: no DHCP on the management network, so the port has no address; Arc reaches the node over the provisioning port. | The same: OS configuration sets it over Arc, before it turns DHCP off on any other port. |
+| `Mode A (Reserved): the management port Port1 (MAC ...) has DHCP 192.0.2.140 after the install; expected the reserved 192.0.2.11; check the DHCP reservation for MAC ...` | The reservation is missing or for another MAC. | Fix the reservation for the management MAC, then restart the port's lease or run OS configuration, which verifies it again. |
+| `dhcp without a reservation (not Mode A, B or C): the management port Port0 (MAC ...) has DHCP 192.0.2.200 after the install; expected 192.0.2.12; reserve the address for the MAC (Mode A) or make it static (Mode B or C).` | A `dhcp` node: ZTP only reports its address and doesn't change it. | Reserve the address (Mode A), or set the port `static` and let OS configuration set it ([Task 03 Static IP](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-03-configure-static-ip-address)). |
+| `...: the management port Port0 (MAC ...) has no address after the install; ...` | The management port has no address. | Check the port's link and the DHCP server (Mode A), then OS configuration. |
 | `...: no management MAC in the infrastructure file, so the port wasn't checked` | The environment file names no `mac_address` for the node. | Add it. OS configuration finds NICs by MAC. |
 | `no Network stage result for this node` | The state file has no Network result for the node, for example after `-Stage Handoff` with a reset state. | Run `-From Network`. |
 | `no management settings in the infrastructure file` | The node has no management block. | Add the management settings, or set the address in OS configuration. |
 
-In a full run a static node isn't unverified: the Network stage fails first if its address isn't on the management port.
+In Modes B and C an unverified static node is the normal result, not a failure: the Network stage is verify-only. Only with `-ApplyThroughAzure` does it fail when a static address is not on the management port.
 
 ## Arc machine names
 

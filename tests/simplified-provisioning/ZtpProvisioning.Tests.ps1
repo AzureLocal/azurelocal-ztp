@@ -21,7 +21,7 @@ BeforeAll {
     'TimeoutMinutes', 'Action', 'Remove', 'SharePath', 'Stage', 'SubscriptionId', 'ResourceGroupName', 'ParameterFile', 'VoucherPath', 'OsVersion',
     'SiteMode', 'Node', 'DeploymentName', 'AdminPassword', 'PollIntervalSeconds', 'RetryProvisionOs', 'ArcMachineNameMapPath', 'ExpectedMachineName',
     'Version', 'CacheDirectory', 'IncludePreview', 'MaxTrain', 'Oem', 'EventLogPath', 'VoucherTimeoutMinutes',
-    'SkipAzureCheck', 'ImageBuiltAt', 'ResetAt', 'Location', 'HandoffPath', 'ManagementAddressCheck', 'OutputPath', 'Format', 'BiosLogPath', 'ChangeLogPath', 'Original', 'RestoredBios'
+    'SkipAzureCheck', 'ImageBuiltAt', 'ResetAt', 'Location', 'HandoffPath', 'ManagementAddressCheck', 'OutputPath', 'Format', 'BiosLogPath', 'ChangeLogPath', 'Original', 'RestoredBios', 'ApplyThroughAzure'
     $paramBlock = ($names | ForEach-Object { "[object]`$$_" }) -join ', '
     foreach ($script in 'New-ZtpVirtualUsbImage.ps1', 'Start-MaintenanceBoot.ps1', 'Wait-ZtpVoucher.ps1', 'Mount-ZtpVirtualUsb.ps1', 'Publish-MaintenanceIso.ps1',
         'Invoke-ZtpAzureProvisioning.ps1', 'Test-ProvisionedMachines.ps1', 'Get-ZtpBootstrapIso.ps1', 'Wait-ZtpBootstrapComplete.ps1',
@@ -197,13 +197,33 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
         $net.Params.PollIntervalSeconds | Should -Be 5
         $net.Params.ChangeLogPath | Should -Be (Join-Path $TestDrive 'network-changes.jsonl')
         $net.Params.EventLogPath | Should -Be (Join-Path $TestDrive 'events.jsonl')
+        $net.Params.ContainsKey('ApplyThroughAzure') | Should -BeFalse -Because 'the Network stage is verify-only unless asked'
         $state = Get-Content $script:statePath -Raw | ConvertFrom-Json -AsHashtable
         $state.stages.Network.evidence | Should -Be 'node-01 Port1 00:00:5e:00:53:aa static 192.0.2.11 (Changed; released from Port3); node-02 Port1 00:00:5e:00:53:aa static 192.0.2.12 (AlreadySet)'
     }
 
-    It 'Network fails when a static node''s address is not set, and the plan shows the stage''s own plan when it is next' {
+    It 'Network is verify-only by default: a static address the OS install reset is Deferred to OS configuration, not a failure' {
+        $reason = 'Mode B (Static with DHCP): the management port Port1 (MAC 00:00:5e:00:53:aa) has DHCP 192.0.2.116 after the install; expected static 192.0.2.11; OS configuration sets it by MAC.'
+        $global:ztpRunBehavior['Set-ZtpManagementAddress.ps1'] = { param($p) foreach ($n in $p['Node']) { [pscustomobject]@{ Node = $n; Mode = 'static'; Status = 'Deferred'; AdapterName = 'Port1'; MacAddress = '00:00:5e:00:53:aa'; Address = '192.0.2.116'; ExpectedAddress = '192.0.2.11'; Verified = $false; Reason = $reason; Released = @() } } }.GetNewClosure()
+        $null = & $script:invoke @{ Execute = $true; Stage = 'Network'; Confirm = $false }
+        $state = Get-Content $script:statePath -Raw | ConvertFrom-Json -AsHashtable
+        $state.stages.Network.evidence | Should -BeLike "node-01 Port1 00:00:5e:00:53:aa static 192.0.2.116 (Deferred: $reason); node-02 *"
+        $one = @($state.stages.Network.data.managementAddress) | Where-Object { $_.node -eq 'node-01' }
+        $one.verified | Should -BeFalse
+        $one.reason | Should -Be $reason
+    }
+
+    It 'Network passes -ApplyThroughAzure on, from a parameter or the settings file, and then fails when a static node''s address is not set' {
         $global:ztpRunBehavior['Set-ZtpManagementAddress.ps1'] = { param($p) foreach ($n in $p['Node']) { [pscustomobject]@{ Node = $n; Mode = 'static'; Status = 'Planned'; AdapterName = 'Port1'; MacAddress = ''; Address = ''; Released = @() } } }
-        { & $script:invoke @{ Execute = $true; Stage = 'Network'; Confirm = $false } } | Should -Throw '*Network: the static management address of node-01 is Planned, not set*'
+        { & $script:invoke @{ Execute = $true; Stage = 'Network'; Confirm = $false } } | Should -Not -Throw -Because 'verify-only never fails on the result'
+        $global:ztpRunCalls.Clear()
+        { & $script:invoke @{ Execute = $true; Stage = 'Network'; Confirm = $false; ApplyThroughAzure = $true } } | Should -Throw '*Network: the static management address of node-01 is Planned, not set*'
+        ($global:ztpRunCalls | Where-Object Script -EQ 'Set-ZtpManagementAddress.ps1').Params.ApplyThroughAzure | Should -BeTrue
+        (Get-Command $script:orchestrator).Parameters['ApplyThroughAzure'].SwitchParameter | Should -BeTrue
+        (Get-Content -LiteralPath $script:orchestrator -Raw) | Should -Match "'NetworkTimeoutMinutes', 'ApplyThroughAzure'" -Because 'the settings file can turn it on'
+    }
+
+    It 'Network shows the stage''s own plan when it is next' {
         $global:ztpRunCalls.Clear(); $global:ztpRunBehavior = & $script:healthy
         $out = & $script:invoke @{ Stage = 'Network' }
         $plan = @($global:ztpRunCalls | Where-Object Script -EQ 'Set-ZtpManagementAddress.ps1')

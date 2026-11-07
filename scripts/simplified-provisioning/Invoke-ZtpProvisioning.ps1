@@ -36,12 +36,14 @@ file; nothing is hardcoded.
             machines claimed with the vouchers. Refuses to submit when a voucher is missing.
   Ready     Invoke-ZtpAzureProvisioning.ps1 -Stage Watch: waits until every machine is ready to cluster and returns (or,
             with -ArcMachineNameMapPath, writes) each node's Arc machine name; then Test-ProvisionedMachines.ps1.
-  Network   Set-ZtpManagementAddress.ps1: puts each static management address on the adapter with the node's management MAC
-            through the edge machine's networkAdapters API (jobs/ApplyConfiguration), first moving any other adapter that
-            holds the address to Dhcp. An adapter already right is left alone; dhcp and preconfigured nodes are only
-            reported. Needed because the OS install ignores the MAC in the edge machine request and puts the address on the
-            first ready port. Changes are logged to network-changes.jsonl beside -EventLogPath. Each node's result (address
-            verified on the management port, or why not) is recorded in the state file for the handoff.
+  Network   Set-ZtpManagementAddress.ps1, verify-only: reads each edge machine's networkAdapters report, finds the
+            management port by MAC and compares it with the file (static: the address, Static; dhcp_reservation: the
+            address, or any DHCP address without one; dhcp and preconfigured: reported only). Each node's result
+            (managementAddressVerified and a reason) is recorded in the state file for the handoff. A static address the
+            OS install reset to DHCP (it resets every port) is Deferred: OS configuration sets it by MAC. Nothing is
+            changed and no Microsoft job is waited on. -ApplyThroughAzure (opt-in, unreliable: the job never started on two
+            live runs) moves a static address through jobs/ApplyConfiguration instead, logs the changes to
+            network-changes.jsonl beside -EventLogPath, and fails the stage when a static address isn't set.
   Restore   Restore-ZtpBios.ps1: sets each BIOS value changed for the install only (the node list's bios_restore, from
             bios_during_provisioning) back to hardware.bios or to the value the Boot stage saved in the state file before
             changing it; PATCH OnReset, restart through Redfish, wait until the BIOS reports them. Then, after
@@ -52,9 +54,9 @@ file; nothing is hardcoded.
             and Arc machine names and IDs, the site, the installed solution version, each node's Network result and the BIOS
             values Restore set back); Convert-ZtpHandoffToClusterInputs.ps1 writes -ClusterInputsPath (the arc_machine_names
             block for the cluster deployment environment file). Nothing is clustered here.
-ZTP ends here: each machine is Provisioned in Azure, Arc-connected, with its management address on the management port (by
-MAC). OS configuration (OEM drivers, the SBE in C:\SBE, DHCP off on the other ports, DNS and time, the deployment admin)
-comes next, before Validate and Deploy: azurelocal-toolkit Phase 03, documented at
+ZTP ends here: each machine is Provisioned in Azure and Arc-connected, and the handoff says whether its management address
+is verified on the management port (by MAC). OS configuration (the static management address by MAC, OEM drivers, the SBE
+in C:\SBE, DHCP and the gateway off on the other ports, DNS and time, the deployment admin) comes next, before Validate and Deploy: azurelocal-toolkit Phase 03, documented at
 https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/.
 Plan by default: without -Execute the stage table and the command of every stage are printed, and the next stage shows its
 own plan (Media, Boot, Device, Azure, Network and Restore have a plan mode; Vouchers and Ready are waits). Nothing changes.
@@ -152,7 +154,12 @@ Ready and Network: poll interval.
 .PARAMETER DeviceTimeoutMinutes
 Device: how long the maintenance environment may take to report the static address.
 .PARAMETER NetworkTimeoutMinutes
-Network: how long each ApplyConfiguration job may take, and then the adapter to report its result.
+Network with -ApplyThroughAzure: how long each ApplyConfiguration job may take, and then the adapter to report its result.
+.PARAMETER ApplyThroughAzure
+Network: opt-in, unreliable. Move a static management address that isn't on the management port there through Azure's
+jobs/ApplyConfiguration, and fail the stage when it isn't set. On two live runs (Dell AX-760, build 2610) the job never
+started ("Job is not yet triggered as other jobs are still running") and Azure marked it Failed after about 35 minutes.
+Without it the stage only verifies, and OS configuration sets the address.
 .PARAMETER RestoreSettleMinutes
 Restore: how long to wait after the BIOS restart before checking that the Arc machines are Connected again (an Arc
 machine reads Connected for a while after its host went down).
@@ -220,6 +227,7 @@ param(
     [ValidateRange(0, 3600)][int]$PollIntervalSeconds = 60,
     [ValidateRange(0, 1440)][int]$DeviceTimeoutMinutes = 30,
     [ValidateRange(0, 1440)][int]$NetworkTimeoutMinutes = 60,
+    [switch]$ApplyThroughAzure,
     [ValidateRange(0, 120)][int]$RestoreSettleMinutes = 5,
     [ValidateRange(1, 240)][int]$BiosTimeoutMinutes = 30,
     [string]$StatePath = (Join-Path (Get-Location) 'ztp-provisioning.state.json'),
@@ -245,7 +253,7 @@ $settable = @('BootstrapCacheDirectory', 'BootstrapVersion', 'IncludePreview', '
     'EventLogPath', 'BootstrapTimeoutMinutes', 'BootstrapVoucherTimeoutMinutes', 'SkipAzureCheck', 'Location', 'HandoffPath', 'ClusterInputsPath',
     'NodesFile', 'NodeName', 'SourcePath', 'ImageDirectory', 'ImageNamePrefix', 'ShareHost', 'ShareName', 'VoucherDirectory',
     'VoucherFolder', 'VoucherWaitMinutes', 'RfsWriteAttribute', 'SkipCertificateCheck', 'KeepShare', 'SubscriptionId', 'ResourceGroupName',
-    'ParameterFile', 'OsVersion', 'SiteMode', 'DeploymentName', 'ArcMachineNameMapPath', 'ReadyTimeoutMinutes', 'PollIntervalSeconds', 'DeviceTimeoutMinutes', 'NetworkTimeoutMinutes', 'RestoreSettleMinutes', 'BiosTimeoutMinutes', 'StatePath')
+    'ParameterFile', 'OsVersion', 'SiteMode', 'DeploymentName', 'ArcMachineNameMapPath', 'ReadyTimeoutMinutes', 'PollIntervalSeconds', 'DeviceTimeoutMinutes', 'NetworkTimeoutMinutes', 'ApplyThroughAzure', 'RestoreSettleMinutes', 'BiosTimeoutMinutes', 'StatePath')
 # Settings of the SBE selection ZTP no longer does: an older settings file may still carry them.
 $retired = @('SbeModel', 'SbeFamily', 'SbeSolutionVersion', 'SbePackagePath')
 if ($ConfigPath) {
@@ -256,7 +264,7 @@ if ($ConfigPath) {
         if ($key -notin $settable) { throw "Unknown key '$key' in $ConfigPath. Keys: $($settable -join ', ')." }
         if ($PSBoundParameters.ContainsKey($key)) { continue }
         $value = $settings[$key]
-        if ($key -in 'RfsWriteAttribute', 'SkipCertificateCheck', 'KeepShare', 'IncludePreview', 'SkipAzureCheck') { $value = [switch][bool]$value }
+        if ($key -in 'RfsWriteAttribute', 'SkipCertificateCheck', 'KeepShare', 'IncludePreview', 'SkipAzureCheck', 'ApplyThroughAzure') { $value = [switch][bool]$value }
         Set-Variable -Name $key -Value $value
     }
 }
@@ -374,7 +382,9 @@ function Get-ZtpStageCall {
         }
         'Network' {
             $p = [ordered]@{ SubscriptionId = $SubscriptionId; ResourceGroupName = $ResourceGroupName; ParameterFile = $ParameterFile; Node = $NodeName; TimeoutMinutes = $NetworkTimeoutMinutes; PollIntervalSeconds = $PollIntervalSeconds; EventLogPath = $EventLogPath }
-            # Adapter changes are evidence: they go beside the event log, as the BIOS changes do.
+            # Verify-only unless -ApplyThroughAzure. Adapter changes (only with it) are evidence: they go beside the event
+            # log, as the BIOS changes do.
+            if ($ApplyThroughAzure) { $p.ApplyThroughAzure = $true }
             if ($EventLogPath) { $p.ChangeLogPath = Join-Path (Split-Path -Parent ([IO.Path]::GetFullPath($EventLogPath))) 'network-changes.jsonl' }
             & $act $p
             $calls.Add([pscustomobject]@{ Script = 'Set-ZtpManagementAddress.ps1'; Parameters = $p })
@@ -493,10 +503,16 @@ function Invoke-ZtpStageScript {
 
 function Get-ZtpManagementAddressCheck {
     # One Network row as the handoff's per-node result: verified when the port with the management MAC carries the address
-    # the infrastructure file gives, otherwise a short reason. A static row only gets here as AlreadySet or Changed.
+    # the infrastructure file gives, otherwise a short reason. The stage script's own Verified and Reason win; a row
+    # without them (an older stage script) is judged here.
     param([AllowNull()][object]$Row, [Parameter(Mandatory)][string]$Node)
     $result = [ordered]@{ node = $Node; verified = $false; reason = $null }
     if ($null -eq $Row) { $result.reason = 'the Network stage reported nothing for this node'; return $result }
+    if ($Row.PSObject.Properties['Verified']) {
+        $result.verified = [bool]$Row.Verified
+        if (-not $result.verified) { $result.reason = if ($Row.PSObject.Properties['Reason'] -and $Row.Reason) { [string]$Row.Reason } else { 'not verified' } }
+        return $result
+    }
     $get = { param([string]$Name) if ($Row.PSObject.Properties[$Name]) { [string]$Row.$Name } else { '' } }
     $mode = & $get 'Mode'
     $address = & $get 'Address'
@@ -618,11 +634,14 @@ foreach ($name in $run) {
             foreach ($node in $NodeName) {
                 $row = @($rows | Where-Object Node -EQ $node)
                 if ($row.Count -ne 1) { throw "Network: no result for $node." }
-                if ($row[0].Mode -eq 'static' -and $row[0].Status -notin 'AlreadySet', 'Changed') { throw "Network: the static management address of $node is $($row[0].Status), not set." }
+                # Verify-only (the default) never fails on the result: a static address the OS install reset is Deferred
+                # to OS configuration. Only -ApplyThroughAzure promises the address is set when the stage ends.
+                if ($ApplyThroughAzure -and $row[0].Mode -eq 'static' -and $row[0].Status -notin 'AlreadySet', 'Changed') { throw "Network: the static management address of $node is $($row[0].Status), not set." }
             }
             $evidence = @($rows | ForEach-Object {
                     $what = if ($_.Status -eq 'NotConfigured') { 'no management settings' } else { "$($_.AdapterName) $($_.MacAddress) $($_.Mode) $($_.Address)".Trim() }
-                    "$($_.Node) $what ($($_.Status)$(if (@($_.Released).Count) { "; released from $(@($_.Released) -join ', ')" }))"
+                    $why = if ($_.PSObject.Properties['Verified'] -and -not $_.Verified -and $_.PSObject.Properties['Reason'] -and $_.Reason -and $_.Status -ne 'NotConfigured') { ": $($_.Reason)" } else { '' }
+                    "$($_.Node) $what ($($_.Status)$(if (@($_.Released).Count) { "; released from $(@($_.Released) -join ', ')" })$why)"
                 }) -join '; '
             # Per node for the handoff: is the infrastructure file's management address on the port with the management MAC?
             $data = @{ managementAddress = @(foreach ($node in $NodeName) { Get-ZtpManagementAddressCheck -Row ($rows | Where-Object Node -EQ $node | Select-Object -First 1) -Node $node }) }

@@ -158,8 +158,10 @@ Levels are `Info`, `Warning` and `Error`. Vouchers are never logged, only their 
 | `solution.vsrVersion` | The solution build the machines actually installed. The environment file may say `latest`. |
 | `nodes[]` | `name`, `serial`, `edgeMachineName`, `edgeMachineId`, `arcMachineName`, `arcMachineResourceId`, `arcMachineResourceGroup`, `ready` |
 | `nodes[].managementAddressVerified` | From the Network stage: `true` when the port with the management MAC carries the environment file's address |
-| `nodes[].managementAddressReason` | `null` when verified. Otherwise a short reason, for example `dhcp: the management port Port0 reports 192.0.2.200, the infrastructure file expects 192.0.2.12`, or `no Network stage result for this node`. |
+| `nodes[].managementAddressReason` | `null` when verified. Otherwise a plain-language reason naming the mode, the management port, its MAC, what it has and what the file expects, for example `Mode B (Static with DHCP): the management port Port1 (MAC 00:00:5e:00:53:aa) has DHCP 192.0.2.116 after the install; expected static 192.0.2.11; OS configuration sets it by MAC.`, or `no Network stage result for this node`. |
 | `nodes[].biosRestored` | The attributes Restore set back, attribute to value. `{}` when none. |
+| `nodes[].managementMode` | `mode` (`A` Reserved, `B` Static with DHCP, `C` Static without management DHCP, or `null`), `name`, `ipAssignment`. See [Management address modes](prerequisites.md#management-address-modes). |
+| `nodes[].networkAdapters[]` | Every port as Azure reports it after the install: `name`, `macAddress`, `description`, `roles`, `fileName`, `isManagement`, `ipAssignment`, `ipAddress`, `prefix`, `subnetMask`, `gateway`, `expected`. |
 
 Schema 1 also had `sbe`, `bootstrap`, `timestamps`, `connectivity` and a top-level `arcMachineResourceGroup`. Schema 2 drops them. The maintenance ISO's version, URL and SHA-256 are in the Resolve stage's evidence: the state file's `stages.Resolve.data` and the `StageCompleted` event, for example `maintenance ISO 10.2610.0.3061 (GA), SHA256 ..., from <url>`. Times are in the event log (`StageStarted` and `StageCompleted` per stage) and the state file (`stages.<name>.completed`).
 

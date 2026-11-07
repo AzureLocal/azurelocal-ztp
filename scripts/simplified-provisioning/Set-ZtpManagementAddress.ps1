@@ -1,28 +1,38 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-Puts each node's management address on the adapter with the node's management MAC, through Azure's per-NIC API, after
-the OS install. The Network stage, between Ready and Handoff.
+Checks each node's management address on the adapter with the node's management MAC, through Azure's per-NIC report,
+after the OS install. The Network stage, between Ready and Handoff. Verify-only by default.
 .DESCRIPTION
-The OS-install request carries the management port's MAC (siteDetails.deviceConfiguration.network.networkAdapters[].
-macAddress). Azure accepts it, but the maintenance environment ignores it: it puts the static address on the first ready
-port, which on a Dell AX-760 was a ConnectX storage port, not the LOM named by MAC. Azure Local's 2026-10-01 API has a
-resource per NIC of a provisioned edge machine, and this script uses it to move the address to the right port. Per node:
-1. Lists edgeMachines/<node>/networkAdapters and finds the adapter whose reported macAddress is the management MAC of
-   the parameters file (separators and case don't matter). No match stops the node, listing the MACs found.
-2. static: when another adapter reports the node's management address, that adapter is set to Dhcp first
-   (jobs/ApplyConfiguration) and the run waits until it no longer reports the address, so two ports never carry it.
-   Then the management adapter gets ApplyConfiguration Static with the address, the mask, the gateway, the DNS servers,
-   the VLAN and interfaceState up; adapterName is the adapter's own networkConfiguration.adapterName. An adapter that
-   already reports that configuration is left alone. Each job is followed until it succeeds or fails, or -TimeoutMinutes
-   passes; every status change is logged (a job can wait queued with "Job is not yet triggered as other jobs are still
-   running" right after the OS install). After the job, the run waits until the adapter reports the new configuration.
-3. dhcp, dhcp_reservation, preconfigured: nothing changes; the management adapter's reported state is shown.
-Without -Execute only reads: it prints what it would do (PLAN: lines) and returns one row per node. With -Execute each
-change is appended to -ChangeLogPath (JSON lines: time, node, adapter, MAC, action, before, after, phase, job status),
-and the progress goes to -EventLogPath (stage Network), which monitors follow. Each row carries ExpectedAddress (the
-parameters file's ip_address), so the orchestrator can record for the handoff whether the management port carries it.
-This is ZTP's last change to a node; OS configuration (drivers, DHCP off on the other ports, DNS, time) comes after it.
+Per node, it lists edgeMachines/<node>/networkAdapters and finds the management port: the adapter whose reported
+macAddress is the MAC of the port the file gives role management (any make or slot: an onboard LOM, a PCIe or ConnectX
+port, a converged port; separators and case don't matter). No match stops the node, listing the MACs found. Then it
+compares what that port reports with the parameters file's management block, by mode (docs/prerequisites.md):
+  Mode A, Reserved (dhcp_reservation)    verified when the port has ip_address, or, without one in the file, any address.
+  Mode B, Static with DHCP (static)      verified when the port reports Static with ip_address and no other port has it.
+  Mode C, Static without management DHCP (static, management_dhcp false)   the same check.
+                    In Modes B and C the OS install resets every port, so after ZTP the management port normally has a
+                    DHCP address (B) or none (C). The row is then Deferred: OS configuration (azurelocal-toolkit,
+                    Set-AzureLocalNodeConfiguration.ps1, Network step) sets the static by MAC over Arc Run Command. The
+                    reason says so, for example "Mode B (Static with DHCP): the management port Port1 (MAC
+                    00:00:5e:00:53:aa) has DHCP 192.0.2.116 after the install; expected static 192.0.2.11; OS
+                    configuration sets it by MAC."
+  dhcp, preconfigured  reported only: verified when the port has ip_address; never changed.
+Each row carries Verified and Reason (null when verified), which the orchestrator records in the state file and the
+handoff (managementAddressVerified, managementAddressReason). Nothing is changed and no job is sent or waited on.
+Why verify-only: the Device stage sets a static address by MAC in the maintenance environment, and that works, but
+Microsoft's OS install then resets every port to DHCP (the maintenance environment's network settings don't carry into the
+OS; Dell AX-760, build 2610, 2026-11-07). Fixing it through Azure's jobs/ApplyConfiguration proved unreliable: on two
+separate runs the job never started ("Job is not yet triggered as other jobs are still running") and Azure marked it
+Failed after about 35 minutes. OS configuration runs next anyway, and sets the address by MAC.
+-ApplyThroughAzure keeps the old fix, for static nodes only (unreliable, see above): when another adapter reports the
+node's management address, that adapter is set to Dhcp first (jobs/ApplyConfiguration) and the run waits until it no
+longer reports it; then the management adapter gets ApplyConfiguration Static with the address, the mask, the gateway, the
+DNS servers, the VLAN and interfaceState up. An adapter already right is left alone. Each job is followed until it succeeds
+or fails, or -TimeoutMinutes passes, and a job that doesn't succeed fails the node.
+Without -Execute only reads and prints PLAN: lines; with -Execute the result goes to -EventLogPath (stage Network), which
+monitors follow, and with -ApplyThroughAzure each change is appended to -ChangeLogPath (JSON lines: time, node, adapter,
+MAC, action, before, after, phase, job status).
 Sign in first (Connect-AzAccount). The edge machine is named after the node, as bicep/main.bicep names it.
 .PARAMETER SubscriptionId
 Subscription of the edge machines (for example 00000000-0000-0000-0000-000000000000).
@@ -37,19 +47,25 @@ Nodes to handle (default: every node in the parameters file).
 .PARAMETER ApiVersion
 Microsoft.AzureStackHCI api-version of edgeMachines/networkAdapters and their jobs.
 .PARAMETER TimeoutMinutes
-How long to wait for each ApplyConfiguration job, and then for the adapter to report the result. 0 checks once.
+-ApplyThroughAzure: how long to wait for each ApplyConfiguration job, and then for the adapter to report the result.
+0 checks once.
 .PARAMETER PollIntervalSeconds
-How often to read a job or the adapters while waiting.
+-ApplyThroughAzure: how often to read a job or the adapters while waiting.
 .PARAMETER EventLogPath
 The ZTP event file (JSON lines, stage Network). Optional; written only with -Execute.
 .PARAMETER ChangeLogPath
-JSON-lines file every change is appended to (the run's evidence folder: network-changes.jsonl). Optional.
+-ApplyThroughAzure: JSON-lines file every change is appended to (the run's evidence folder: network-changes.jsonl).
+.PARAMETER ApplyThroughAzure
+Opt-in, unreliable: move a static address that isn't on the management port there through Azure's
+jobs/ApplyConfiguration, and wait for the jobs. Without it (the default) the stage only verifies.
 .PARAMETER Execute
-Change the adapters. Without it only the plan is printed.
+Record the result in -EventLogPath; with -ApplyThroughAzure, also change the adapters. Without it only the plan is printed.
 .EXAMPLE
 ./Set-ZtpManagementAddress.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example -ParameterFile ./bicep/main.parameters.json
 .EXAMPLE
-./Set-ZtpManagementAddress.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example -ParameterFile ./bicep/main.parameters.json -Node node-01 -ChangeLogPath D:\ZtpEvidence\network-changes.jsonl -Execute
+./Set-ZtpManagementAddress.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example -ParameterFile ./bicep/main.parameters.json -EventLogPath D:\ZtpEvidence\ztp-events.jsonl -Execute
+.EXAMPLE
+./Set-ZtpManagementAddress.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example -ParameterFile ./bicep/main.parameters.json -Node node-01 -ChangeLogPath D:\ZtpEvidence\network-changes.jsonl -ApplyThroughAzure -Execute
 #>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'The parameters are read inside the helper functions.')]
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
@@ -63,6 +79,7 @@ param(
     [ValidateRange(0, 3600)][int]$PollIntervalSeconds = 30,
     [string]$EventLogPath,
     [string]$ChangeLogPath,
+    [switch]$ApplyThroughAzure,
     [switch]$Execute
 )
 Set-StrictMode -Version Latest
@@ -181,17 +198,86 @@ function Find-ManagementAdapter([string]$NodeName, [object[]]$Rows, [string]$Mac
     throw "${NodeName}: $($match.Count) network adapters report the management MAC $(Format-ZtpMac $MacKey): $found."
 }
 
+# ------------------------------------------------------------------ verify
+function Get-ManagementVerdict {
+    # What the management port (the port with role management in the file, found by its MAC; any make or slot) reports
+    # after the OS install, against the parameters file. Verified, Reason (null when verified), Status (AlreadySet,
+    # Deferred or Reported), the event state and level, a one-line Text and the adapter row (Nic). Every message names the
+    # mode (A Reserved, B Static with DHCP, C Static without management DHCP), the port, its MAC, what it has now and what
+    # the file expects. $Rows is $null or empty when the edge machine reports no adapters yet. A MAC no adapter reports throws.
+    param([string]$NodeName, [string]$Mode, [string]$MacKey, [string]$Ip, [bool]$ManagementDhcp = $true, [AllowNull()][object[]]$Rows)
+    $label = (Get-ZtpManagementMode -IpAssignment $Mode -ManagementDhcp $ManagementDhcp).Label
+    $v = [ordered]@{ Verified = $false; Reason = $null; Status = 'Reported'; State = 'ManagementAddressReported'; Level = 'Warning'; Text = ''; Nic = $null }
+    $expectedText = switch ($Mode) {
+        'static' { if ($Ip) { "expected static $Ip" } else { 'expected a static address, but the file gives no ip_address' } }
+        'dhcp_reservation' { if ($Ip) { "expected the reserved $Ip" } else { 'expected a reserved DHCP address (the file gives no ip_address to compare)' } }
+        default { if ($Ip) { "expected $Ip" } else { 'the file gives no address to compare' } }
+    }
+    $setBy = if (-not $ManagementDhcp) { 'OS configuration sets it by MAC over Arc' } else { 'OS configuration sets it by MAC' }
+    # static: an address that isn't on the management port yet is left to OS configuration.
+    $defer = {
+        param([string]$Now)
+        $v.Status = 'Deferred'; $v.State = 'ManagementAddressDeferredToOsConfiguration'; $v.Level = 'Info'
+        $v.Reason = "${label}: $Now; $expectedText; $setBy."; $v.Text = $v.Reason
+    }
+    $notVerified = { param([string]$Now, [string]$Then) $v.Reason = "${label}: $Now; $expectedText$(if ($Then) { "; $Then" })."; $v.Text = $v.Reason }
+    $verified = {
+        param([string]$Now)
+        $v.Verified = $true; $v.Reason = $null; $v.Level = 'Info'; $v.Text = "${label}: $Now."
+        if ($Mode -eq 'static') { $v.Status = 'AlreadySet'; $v.State = 'ManagementAddressAlreadySet' }
+    }
+    if (-not $MacKey) {
+        & $notVerified "no management MAC in the infrastructure file, so the management port wasn't checked" ''
+        return [pscustomobject]$v
+    }
+    $portText = "the management port (MAC $(Format-ZtpMac $MacKey))"
+    if ($null -eq $Rows -or @($Rows).Count -eq 0) {
+        $now = "the edge machine reports no network adapters yet, so $portText wasn't checked"
+        if ($Mode -eq 'static') { & $defer $now } else { & $notVerified $now '' }
+        return [pscustomobject]$v
+    }
+    $nic = Find-ManagementAdapter $NodeName $Rows $MacKey
+    $v.Nic = $nic
+    $r = $nic.Reported
+    $portText = "the management port $($nic.AdapterName) (MAC $(Format-ZtpMac $MacKey)$(if ($nic.Description) { ", $($nic.Description)" }))"
+    $has = if ($r.Type -eq 'Dhcp' -and $r.Ip) { "DHCP $($r.Ip)" }
+    elseif ($r.Type -eq 'Dhcp') { 'DHCP and no address' }
+    elseif ($r.Type -eq 'Static' -and $r.Ip) { "static $($r.Ip)" }
+    elseif ($r.Ip) { $r.Ip }
+    else { 'no address' }
+    $holders = @($Rows | Where-Object { $Ip -and $_.Mac -ne $MacKey -and $_.Reported.Ip -eq $Ip } | ForEach-Object { "$($_.AdapterName) (MAC $(Format-ZtpMac $_.Mac))" })
+    $also = if ($holders.Count) { "; $($holders -join ', ') also $(if ($holders.Count -eq 1) { 'has' } else { 'have' }) $Ip" } else { '' }
+    switch ($Mode) {
+        'static' {
+            if ($r.Type -eq 'Static' -and $Ip -and $r.Ip -eq $Ip -and $holders.Count -eq 0) { & $verified "$portText has static $Ip after the install, as expected" }
+            else { & $defer "$portText has $has after the install$also" }
+        }
+        'dhcp_reservation' {
+            if (-not $r.Ip) { & $notVerified "$portText has $has after the install" "check that the DHCP server answers and holds the reservation for MAC $(Format-ZtpMac $MacKey)" }
+            elseif (-not $Ip) { & $verified "$portText has $has after the install; the file gives no ip_address, so the reserved address can't be compared" }
+            elseif ($r.Ip -eq $Ip -and $holders.Count -eq 0) { & $verified "$portText has $has after the install, the reserved address" }
+            else { & $notVerified "$portText has $has after the install$also" "check the DHCP reservation for MAC $(Format-ZtpMac $MacKey)" }
+        }
+        default {
+            # dhcp and preconfigured: reported only, never changed.
+            if ($Ip -and $r.Ip -eq $Ip) { & $verified "$portText has $has after the install, as expected" }
+            else { & $notVerified "$portText has $has after the install" $(if ($Mode -eq 'dhcp') { 'reserve the address for the MAC (Mode A) or make it static (Mode B or C)' } else { 'preconfigured: the operator sets it' }) }
+        }
+    }
+    return [pscustomobject]$v
+}
+
 # ------------------------------------------------------------------ per node
 $failed = [System.Collections.Generic.List[string]]::new()
 foreach ($n in $selected) {
     $name = [string]$n['name']
     $mgmt = Get-ZtpPropertyValue $n 'management'
-    $row = [ordered]@{ Node = $name; Mode = ''; Status = ''; Adapter = ''; AdapterName = ''; MacAddress = ''; Address = ''; ExpectedAddress = ''; Released = @(); Changes = @() }
+    $row = [ordered]@{ Node = $name; Mode = ''; Status = ''; Adapter = ''; AdapterName = ''; MacAddress = ''; Address = ''; ExpectedAddress = ''; Verified = $false; Reason = $null; Released = @(); Changes = @() }
     try {
         if ($null -eq $mgmt) {
             Write-ZtpLog "${name}: no management block in the parameters file; the Network stage leaves its adapters alone."
             if (-not $Execute) { "PLAN: ${name}: no management settings in the parameters file; nothing to do." }
-            $row.Status = 'NotConfigured'
+            $row.Status = 'NotConfigured'; $row.Reason = 'no management settings in the infrastructure file'
             [pscustomobject]$row
             continue
         }
@@ -204,33 +290,17 @@ foreach ($n in $selected) {
         $ip = [string](Get-ZtpPropertyValue $mgmt 'ip_address' '')
         $row.ExpectedAddress = $ip
 
-        if ($mode -ne 'static') {
-            if (-not $macKey) {
-                Write-ZtpLog "${name}: $mode, and no management MAC in the parameters file; nothing to report."
-                if (-not $Execute) { "PLAN: ${name}: $mode; no change (no management MAC to report on)." }
-                $row.Status = 'Reported'
-                [pscustomobject]$row
-                continue
-            }
-            $rows = Get-NodeAdapter $name
-            if ($null -eq $rows -or $rows.Count -eq 0) {
-                if ($Execute) { throw "${name}: edge machine $name reports no network adapters. Run the Network stage after Ready (the OS install)." }
-                "PLAN: ${name}: $mode; no change. The edge machine reports no network adapters yet (they appear after the OS install)."
-                $row.Status = 'Reported'
-                [pscustomobject]$row
-                continue
-            }
-            $nic = Find-ManagementAdapter $name $rows $macKey
-            $row.Adapter = $nic.Name; $row.AdapterName = $nic.AdapterName; $row.Address = $nic.Reported.Ip
-            $text = "management port $($nic.AdapterName) ($(Format-ZtpMac $macKey)$(if ($nic.Description) { ", $($nic.Description)" })) is $mode and reports $(Format-ZtpNetworkSetting $nic.Reported)"
-            Write-ZtpLog "${name}: $text; the Network stage doesn't change it."
-            if ($ip -and $nic.Reported.Ip -and $nic.Reported.Ip -ne $ip) { Write-ZtpLog "${name}: the environment file expects $ip on $($nic.AdapterName); with $mode that takes a DHCP reservation for its MAC." -Level Warning }
-            foreach ($other in @($rows | Where-Object { $ip -and $_.Mac -ne $macKey -and $_.Reported.Ip -eq $ip })) {
-                Write-ZtpLog "${name}: $($other.AdapterName) ($(Format-ZtpMac $other.Mac)) also reports $ip." -Level Warning
-            }
-            if (-not $Execute) { "PLAN: ${name}: $mode; no change. The $text." }
-            Send-NetworkEvent $name 'ManagementAddressReported' $text
-            $row.Status = 'Reported'
+        if ($mode -ne 'static' -or -not $ApplyThroughAzure) {
+            # Verify only (the default; dhcp, dhcp_reservation and preconfigured always): read, compare, record.
+            $rows = if ($macKey) { Get-NodeAdapter $name } else { $null }
+            $verdict = Get-ManagementVerdict -NodeName $name -Mode $mode -MacKey $macKey -Ip $ip -ManagementDhcp ([string](Get-ZtpPropertyValue $mgmt 'management_dhcp' 'true') -ne 'False') -Rows $rows
+            if ($verdict.Nic) { $row.Adapter = $verdict.Nic.Name; $row.AdapterName = $verdict.Nic.AdapterName; $row.Address = $verdict.Nic.Reported.Ip }
+            $row.Status = $verdict.Status; $row.Verified = $verdict.Verified; $row.Reason = $verdict.Reason
+            $verdictText = "$($verdict.Text)$(if ($verdict.Verified) { ' Verified.' })"
+            Write-ZtpLog "${name}: $verdictText The Network stage doesn't change it." -Level $(if ($verdict.Level -eq 'Warning') { 'Warning' } else { 'Info' })
+            if (-not $Execute) { "PLAN: ${name}: $mode; verify only, no change. $verdictText" }
+            $next = if ($verdict.Status -eq 'Deferred') { 'OS configuration (azurelocal-toolkit Set-AzureLocalNodeConfiguration.ps1, Network step) sets the static address on the port with the management MAC.' } else { '' }
+            Send-NetworkEvent $name $verdict.State $verdict.Text $verdict.Level $next
             [pscustomobject]$row
             continue
         }
@@ -249,7 +319,7 @@ foreach ($n in $selected) {
         if ($null -eq $rows -or $rows.Count -eq 0) {
             if ($Execute) { throw "${name}: edge machine $name reports no network adapters. Run the Network stage after Ready (the OS install)." }
             "PLAN: ${name}: the edge machine reports no network adapters yet (they appear after the OS install). Then: ApplyConfiguration $wanted on the adapter with MAC $(Format-ZtpMac $macKey), after moving any other adapter that holds $ip to Dhcp."
-            $row.Status = 'Planned'
+            $row.Status = 'Planned'; $row.Reason = 'static: not checked yet (plan; the edge machine reports no network adapters yet)'
             [pscustomobject]$row
             continue
         }
@@ -270,6 +340,7 @@ foreach ($n in $selected) {
             if ($already) { "PLAN: ${name}: $adapterName ($(Format-ZtpMac $macKey)) already reports $wanted; no change." }
             else { "PLAN: ${name}: ApplyConfiguration on $adapterName ($(Format-ZtpMac $macKey)): $wanted (reports $(Format-ZtpNetworkSetting $nic.Reported) now); wait up to $TimeoutMinutes minutes for the job, then for the adapter to report it." }
             $row.Status = if ($already -and $holders.Count -eq 0) { 'AlreadySet' } else { 'Planned' }
+            $row.Verified = $row.Status -eq 'AlreadySet'; if (-not $row.Verified) { $row.Reason = "static: not set yet (plan); $adapterName reports $(Format-ZtpNetworkSetting $nic.Reported)" }
             $row.Address = $nic.Reported.Ip
             [pscustomobject]$row
             continue
@@ -278,7 +349,7 @@ foreach ($n in $selected) {
         if ($already -and $holders.Count -eq 0) {
             Write-ZtpLog "${name}: $adapterName already reports $wanted; nothing to change."
             Send-NetworkEvent $name 'ManagementAddressAlreadySet' "$adapterName ($(Format-ZtpMac $macKey)) already reports $wanted"
-            $row.Status = 'AlreadySet'; $row.Address = $ip
+            $row.Status = 'AlreadySet'; $row.Address = $ip; $row.Verified = $true
             [pscustomobject]$row
             continue
         }
@@ -308,7 +379,7 @@ foreach ($n in $selected) {
         }
         Write-ZtpLog "${name}: $adapterName reports $wanted."
         Send-NetworkEvent $name 'ManagementAddressSet' "$adapterName ($(Format-ZtpMac $macKey)) $wanted$(if ($row.Released) { "; released from $(@($row.Released) -join ', ')" })"
-        $row.Status = 'Changed'; $row.Address = $ip; $row.Changes = @($changes)
+        $row.Status = 'Changed'; $row.Address = $ip; $row.Verified = $true; $row.Changes = @($changes)
         [pscustomobject]$row
     }
     catch {

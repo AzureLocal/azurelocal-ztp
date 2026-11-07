@@ -27,7 +27,7 @@ Per node:
    alone. Otherwise POST SetArcBootstrapDeviceConfiguration with { Network: { NetworkAdapters: [ { MacAddress (12
    lower-case hex digits, as GetNetworkAdapters reports it), EnableDhcp false, IpAddress, SubnetMask, Gateway,
    DnsAddressArray, VlanId 0 } ] } }. Verified live (2026-11-07): the response and the status report NetworkConfig
-   Succeeded, and GetNetworkAdapters then reads the static address back on the LOM. No HostName is sent (the claim sets
+   Succeeded, and GetNetworkAdapters then reads the static address back on the management port (an onboard LOM there). No HostName is sent (the claim sets
    the host name; the verified request had none). Another adapter that holds the address statically gets an entry
    { MacAddress, EnableDhcp true } in the same request; that entry isn't proven live.
 3. Polls GET GetArcBootstrapDeviceConfigurationStatus (verified live: { Response: { Name: Bootstrap, Status,

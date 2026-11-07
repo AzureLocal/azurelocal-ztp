@@ -17,7 +17,7 @@ You supply an environment file. One command then:
 
 The stages are Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Restore and Handoff. Each stage starts only when the gate before it passes, and a rerun resumes where the last run stopped.
 
-**The result:** each machine is **Provisioned** in Azure and **Arc-connected**, with its management IP on the management NIC (found by MAC) as the infrastructure file says. The nodes are ready for OS configuration, not yet for Validate. See [What's next: OS configuration](#whats-next-os-configuration).
+**The result:** each machine is **Provisioned** in Azure and **Arc-connected**, and the handoff says, per node and per port, whether the management port (found by MAC) has the address the infrastructure file gives. With **Mode A** (DHCP plus a reservation, recommended) it does. With a static address (Modes B and C) it doesn't yet: Microsoft's OS install resets every port, and OS configuration sets the static afterwards. The nodes are ready for OS configuration, not yet for Validate. See [Management address modes](docs/prerequisites.md#management-address-modes). See [What's next: OS configuration](#whats-next-os-configuration).
 
 ![Azure Local ZTP flow, from start to handoff](docs/diagrams/ztp-flow-to-handoff.png)
 
@@ -62,19 +62,30 @@ Read the [Operator guide](docs/operator-guide.md) before you run it.
 
 ### Things to know before you run it
 
-- **Static management address by MAC, before the claim.** `networking.management.static_method` is `device` (the default) or `site`. With `device`, the Device stage sets the address on the management port in the maintenance environment, the site's network setting is **Automatic**, and the claim carries no `Manual` adapter. `site` keeps the earlier path (site `Manual` over `site_ip_range`) for environments without the Device stage. The Network stage checks the address after the install either way.
+- **Static management address by MAC, before the claim.** `networking.management.static_method` is `device` (the default) or `site`. With `device`, the Device stage sets the address on the management port in the maintenance environment, the site's network setting is **Automatic**, and the claim carries no `Manual` adapter. `site` keeps the earlier path (site `Manual` over `site_ip_range`) for environments without the Device stage. The OS install resets every port to DHCP afterwards, so the Network stage only verifies, and OS configuration sets the static again by MAC.
 - **No maintenance address needed.** Without `maintenance_address`, the Device stage scans `networking.management.provisioning_dhcp_range` (default: the management subnet, at most 4096 addresses) on TCP 20001 and finds each node by its management MAC.
 - **Restore stage.** `hardware.bios_during_provisioning` holds BIOS values for the install only. Boot applies them; Restore sets them back to `hardware.bios` (or the value saved before Boot), restarts the node, and waits until it's Connected again. Without the key, Restore does nothing.
-- **Handoff schema 2.** The handoff carries only what Azure generated: the site, the installed `solution.vsrVersion`, and per node the edge and Arc machine names and IDs, `managementAddressVerified` and `biosRestored`. It no longer carries `sbe`, `bootstrap`, `timestamps`, `connectivity` or a top-level `arcMachineResourceGroup`.
+- **Network stage: verify-only.** It reads Azure's per-NIC report, finds the management port by MAC, and records `managementAddressVerified` with a reason that names the mode, the port, its MAC, what it has and what the file expects. It never sends or waits on a Microsoft job: `jobs/ApplyConfiguration` never started on two live runs. `-ApplyThroughAzure` keeps that path as an opt-in, documented as unreliable.
+- **Handoff schema 2.** The handoff carries what Azure generated: the site, the installed `solution.vsrVersion`, and per node the edge and Arc machine names and IDs, `managementAddressVerified`, `managementMode`, `biosRestored` and `networkAdapters[]` (every port as Azure reports it after the install, matched by MAC to the file). It no longer carries `sbe`, `bootstrap`, `timestamps`, `connectivity` or a top-level `arcMachineResourceGroup`.
 - **No SBE.** The OS install discovers its own SBE, and OS configuration stages it. A file with `hardware.sbe` or `ztp.node_preparation` still works; the run ignores them with a `Note:` line.
 
 ## What's next: OS configuration
 
-ZTP doesn't install OEM drivers, stage the SBE in `C:\SBE`, turn DHCP off on the other NICs, set DNS or time on the host, or create the deployment admin. Those happen in OS configuration, [azurelocal-toolkit Phase 03: OS Configuration](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/), before Validate and Deploy.
+ZTP doesn't set a static management address after the install, install OEM drivers, stage the SBE in `C:\SBE`, turn DHCP and the gateway off on the other NICs, set DNS or time on the host, or create the deployment admin. Those happen in OS configuration, [azurelocal-toolkit Phase 03: OS Configuration](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/), before Validate and Deploy. The toolkit's `Set-AzureLocalNodeConfiguration.ps1` does them over Arc Run Command, finding every port by MAC.
+
+**The management address after ZTP, by mode** ([Management address modes](docs/prerequisites.md#management-address-modes)):
+
+| Mode | `ip_assignment` | The management port after ZTP | OS configuration |
+| --- | --- | --- | --- |
+| A, Reserved (recommended) | `dhcp_reservation` | Its reserved address, from DHCP | Verifies it, leaves DHCP on |
+| B, Static with DHCP | `static` | A DHCP address: the OS install reset the static the Device stage set | Sets the static by MAC |
+| C, Static without management DHCP | `static` | No address; Arc reaches the node over the provisioning port | Sets the static by MAC over Arc |
+
+Modes B and C are supported, but the static address isn't in place when ZTP finishes: Microsoft's OS install resets the ports, and Microsoft's post-install per-NIC API (`jobs/ApplyConfiguration`) didn't run in our tests. Run OS configuration after ZTP.
 
 | Step | Page |
 | --- | --- |
-| Check the static management address ZTP set | [Task 03: Static IP](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-03-configure-static-ip-address) |
+| Set the static management address by MAC (Modes B and C; the handoff says which nodes need it) | [Task 03: Static IP](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-03-configure-static-ip-address) |
 | Turn DHCP off on the other NICs | [Task 04: Disable DHCP on all adapters](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-04-disable-dhcp-on-management-adapter) |
 | Set DNS | [Task 05: DNS](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-05-configure-dns-servers) |
 | Set time | [Task 07: NTP](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-07-configure-time-synchronization-ntp) |

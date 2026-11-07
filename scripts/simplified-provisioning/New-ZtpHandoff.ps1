@@ -6,13 +6,23 @@ Writes ztp-handoff.json: what Azure generated during ZTP, once every machine is 
 Reads (GET only) each edge machine and its ProvisionOs job, requires every machine to be ready to cluster, and records
 only what Azure generated during ZTP, never a value the infrastructure file already holds:
   nodes[]   name, serial, edgeMachineName, edgeMachineId, arcMachineName, arcMachineResourceId, arcMachineResourceGroup,
-            ready, and the Network stage's result: managementAddressVerified (true when the port with the management MAC
-            carries the infrastructure file's address) and managementAddressReason (why not; null when verified), and
-            biosRestored: the BIOS attributes the Restore stage set back (attribute -> value; empty when none).
+            ready, and the Network stage's result: managementAddressVerified (true when the management port, the port
+            with the management MAC, carries the infrastructure file's address) and managementAddressReason (why not, in
+            plain language: the mode, the port, its MAC, what it has now and what the file expects; null when verified),
+            biosRestored: the BIOS attributes the Restore stage set back (attribute -> value; empty when none),
+            managementMode { mode (A, B, C or null), name, ipAssignment }: A Reserved (dhcp_reservation), B Static with
+            DHCP, C Static without management DHCP; null without a node list, and
+            networkAdapters[]: every port as Azure reports it after the install (edgeMachines/<node>/networkAdapters
+            reportedProperties): name (the OS name), macAddress, description, roles and fileName (the file's port with
+            that MAC; empty and null when the file doesn't list it), isManagement, ipAssignment (Dhcp, Static or
+            none), ipAddress, prefix, subnetMask, gateway, and expected { ipAssignment, ipAddress } from the file.
+            The fields after biosRestored are additive: schemaVersion stays 2, and a reader of the earlier fields
+            (Convert-ZtpHandoffToClusterInputs.ps1, the toolkit's Read-AzlHandoff) reads it unchanged.
   solution  vsrVersion: the solution build actually installed (the infrastructure file may say latest).
   subscriptionId, resourceGroup, site { resourceId, name }, schemaVersion (2), generatedUtc, tool.
-Addresses, MACs, the bootstrap ISO and timestamps aren't here: the addresses and MACs are in the infrastructure file every
-tool reads, and the ISO details and timestamps are in the run's state file, stage evidence and event log.
+The bootstrap ISO and timestamps aren't here: they are in the run's state file, stage evidence and event log. The ports'
+addresses after the install are, because they are what OS configuration starts from. A short table per node (ports, MACs,
+roles, address now, expected) is also printed.
 Feed it to Convert-ZtpHandoffToClusterInputs.ps1 to get the arc_machine_names block for the cluster deployment environment
 file. The handoff holds Azure resource IDs of your subscription: keep it out of source control.
 .PARAMETER SubscriptionId
@@ -60,6 +70,54 @@ $ErrorActionPreference = 'Stop'
 
 $serials = @{}
 if ($Nodes -or $NodesFile) { foreach ($n in @(Get-ZtpNodeList -Nodes $Nodes -NodesFile $NodesFile -NodeName $NodeName)) { $serials[$n.Name] = $n.Serial } }
+# The file's view of each node, from the node list Invoke-ZtpEnvironment.ps1 writes: the management port's MAC and
+# ip_assignment, whether it takes DHCP while provisioned (management_dhcp: Mode B or C), and every port with its roles.
+# An older node list without them gives no mode and no file match.
+$fileNodes = @{}
+foreach ($n in @(if ($Nodes) { $Nodes } elseif ($NodesFile) { Import-ZtpNodeFile -Path $NodesFile })) {
+    $key = [string](Get-ZtpPropertyValue $n 'name' '')
+    if ($key) { $fileNodes[$key] = $n }
+}
+function ConvertTo-HandoffMacKey([string]$Mac) { try { ConvertTo-ZtpMacKey $Mac } catch { $Mac.ToLowerInvariant() } }
+function ConvertTo-HandoffPrefix([string]$Mask) {
+    if (-not $Mask) { return $null }
+    $parsed = $null
+    if (-not [ipaddress]::TryParse($Mask, [ref]$parsed)) { return $null }
+    return (@($parsed.GetAddressBytes() | ForEach-Object { [Convert]::ToString($_, 2) }) -join '').Replace('0', '').Length
+}
+function Get-HandoffAdapter {
+    # The node's ports as Azure reports them after the install (edgeMachines/<node>/networkAdapters reportedProperties),
+    # each matched by MAC to the file's port: its roles, its name in the file and what the file expects. isManagement is
+    # the port with the management MAC (the port the file gives role management; any make or slot).
+    param([string]$Machine, [object]$FileNode)
+    $list = Invoke-ZtpArm -Method GET -Path "$rgPath/$Machine/networkAdapters" -ApiVersion $ApiVersion -AllowNotFound
+    if ($null -eq $list) { return @() }
+    $filePorts = @(@(Get-ZtpPropertyValue $FileNode 'network_adapters' @()) | Where-Object { $null -ne $_ })
+    $mgmtMac = ConvertTo-HandoffMacKey ([string](Get-ZtpPropertyValue $FileNode 'management_mac' ''))
+    if (-not $mgmtMac) {
+        $owner = @($filePorts | Where-Object { 'management' -in @(Get-ZtpPropertyValue $_ 'roles' @()) -and [string](Get-ZtpPropertyValue $_ 'ip_assignment' '') -notin '', 'none' }) | Select-Object -First 1
+        if ($owner) { $mgmtMac = ConvertTo-HandoffMacKey ([string](Get-ZtpPropertyValue $owner 'mac_address' '')) }
+    }
+    $out = @(foreach ($nic in @(Get-ZtpNetworkAdapterRow -List $list)) {
+        $file = @($filePorts | Where-Object { (ConvertTo-HandoffMacKey ([string](Get-ZtpPropertyValue $_ 'mac_address' ''))) -eq $nic.Mac }) | Select-Object -First 1
+        $r = $nic.Reported
+        [ordered]@{
+            name         = $nic.AdapterName
+            macAddress   = Format-ZtpMac $nic.Mac
+            description  = $(if ($nic.Description) { $nic.Description } else { $null })
+            roles        = @(if ($file) { @(Get-ZtpPropertyValue $file 'roles' @()) | ForEach-Object { [string]$_ } })
+            fileName     = $(if ($file -and (Get-ZtpPropertyValue $file 'name' '')) { [string](Get-ZtpPropertyValue $file 'name' '') } else { $null })
+            isManagement = [bool]($mgmtMac -and $nic.Mac -eq $mgmtMac)
+            ipAssignment = $(if ($r.Type) { $r.Type } else { 'none' })
+            ipAddress    = $(if ($r.Ip) { $r.Ip } else { $null })
+            prefix       = ConvertTo-HandoffPrefix $r.Mask
+            subnetMask   = $(if ($r.Mask) { $r.Mask } else { $null })
+            gateway      = $(if ($r.Gateway) { $r.Gateway } else { $null })
+            expected     = $(if ($file) { [ordered]@{ ipAssignment = [string](Get-ZtpPropertyValue $file 'ip_assignment' ''); ipAddress = $(if (Get-ZtpPropertyValue $file 'ip_address' '') { [string](Get-ZtpPropertyValue $file 'ip_address' '') } else { $null }) } } else { $null })
+        }
+    })
+    return $out
+}
 
 # The Network stage's result per node (hashtables from the state file, or objects).
 $checks = @{}
@@ -91,6 +149,12 @@ foreach ($name in $NodeName) {
     $reason = if ($verified) { $null }
     elseif ($null -eq $check) { 'no Network stage result for this node' }
     else { $r = [string](Get-ZtpPropertyValue $check 'reason' ''); if ($r) { $r } else { 'not verified' } }
+    $fileNode = if ($fileNodes.ContainsKey($name)) { $fileNodes[$name] } else { $null }
+    $mode = if ($fileNode -and (Get-ZtpPropertyValue $fileNode 'management_ip_assignment' '')) {
+        $m = Get-ZtpManagementMode -IpAssignment ([string](Get-ZtpPropertyValue $fileNode 'management_ip_assignment' '')) -ManagementDhcp ([string](Get-ZtpPropertyValue $fileNode 'management_dhcp' 'true') -ne 'False')
+        [ordered]@{ mode = $(if ($m.Mode) { $m.Mode } else { $null }); name = $m.Name; ipAssignment = $m.IpAssignment }
+    }
+    else { $null }
     $rows.Add([ordered]@{
             name                      = $name
             serial                    = $(if ($serials.ContainsKey($name)) { $serials[$name] } else { $null })
@@ -103,6 +167,8 @@ foreach ($name in $NodeName) {
             managementAddressVerified = $verified
             managementAddressReason   = $reason
             biosRestored              = $(if ($RestoredBios.Contains($name)) { $RestoredBios[$name] } else { [ordered]@{} })
+            managementMode            = $mode
+            networkAdapters           = @(Get-HandoffAdapter -Machine $name -FileNode $fileNode)
         })
 }
 if ($notReady.Count -gt 0) { throw "Not ready to cluster: $($notReady -join '; '). No handoff written; rerun Wait-ZtpMachineReady.ps1." }
@@ -122,6 +188,21 @@ $handoff = [ordered]@{
     solution       = [ordered]@{ vsrVersion = $(if (@($vsr).Count) { @($vsr)[0] } else { $null }) }
     nodes          = @($rows)
 }
+# Each node's ports on screen: what the operator gets from ZTP, and what OS configuration still has to set.
+foreach ($row in $rows) {
+    $m = $row.managementMode
+    $modeText = if ($m -and $m.mode) { "Mode $($m.mode) ($($m.name), $($m.ipAssignment))" } elseif ($m) { $m.name } else { 'mode unknown (no management settings in the node list)' }
+    Write-ZtpLog "$($row.name): $modeText; management address $(if ($row.managementAddressVerified) { 'verified' } else { "not verified: $($row.managementAddressReason)" })"
+    if (-not @($row.networkAdapters).Count) { Write-ZtpLog '  the edge machine reports no network adapters'; continue }
+    Write-ZtpLog ('  {0,-2} {1,-16} {2,-17} {3,-26} {4,-24} {5}' -f '', 'port', 'MAC', 'roles (name in the file)', 'now', 'expected')
+    foreach ($a in $row.networkAdapters) {
+        $now = if ($a.ipAddress) { "$($a.ipAssignment) $($a.ipAddress)$(if ($null -ne $a.prefix) { "/$($a.prefix)" })$(if ($a.gateway) { " gw $($a.gateway)" })" } else { "$($a.ipAssignment), no address" }
+        $roles = if (@($a.roles).Count) { "$(@($a.roles) -join ',')$(if ($a.fileName) { " ($($a.fileName))" })" } else { 'not in the file' }
+        $expected = if ($a.expected) { "$($a.expected.ipAssignment)$(if ($a.expected.ipAddress) { " $($a.expected.ipAddress)" })" } else { '' }
+        Write-ZtpLog ('  {0,-2} {1,-16} {2,-17} {3,-26} {4,-24} {5}' -f $(if ($a.isManagement) { '>' } else { '' }), $a.name, $a.macAddress, $roles, $now, $expected)
+    }
+}
+
 if (-not $Execute) {
     Write-ZtpLog "PLAN: would write $HandoffPath for $($NodeName -join ', ') (all ready to cluster). Add -Execute."
     return [pscustomobject]$handoff

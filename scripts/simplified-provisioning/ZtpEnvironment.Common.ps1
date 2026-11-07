@@ -12,7 +12,8 @@ The keys Invoke-ZtpEnvironment.ps1 reads:
     cluster_nodes[].maintenance_address               (optional; where the Device stage reaches the maintenance environment)
     azure_identity.azure_tenant_id
     network_intents.management.subnet, .gateway, .dns_servers
-    network_intents.management.ip_assignment, .vlan_id   (optional; static, dhcp or preconfigured; default static)
+    network_intents.management.ip_assignment, .vlan_id   (optional; static, dhcp_reservation, dhcp or preconfigured;
+                                                          default static)
     network_intents.management.static_method             (optional; device (default) or site; who sets a static
                                                           address: the Device stage by MAC, with the site Automatic and
                                                           no Manual adapter in the claim, or Microsoft's OS install from
@@ -23,7 +24,9 @@ The keys Invoke-ZtpEnvironment.ps1 reads:
                                                           maintenance environment of a node without maintenance_address;
                                                           default the management subnet)
     network_intents.management.provisioning_network      (optional; dhcp or static; how the maintenance environment
-                                                          reaches Azure; static is a warning, ZTP can't set it)
+                                                          reaches Azure: dhcp, DHCP on the management network
+                                                          (Mode A or B); static, none there (Mode C: another port
+                                                          with role provisioning must have DHCP))
     hardware.bios, cluster_nodes[].bios                  (optional; BIOS attribute -> string value: the machine's final
                                                           state, set by the Boot stage)
     hardware.bios_during_provisioning, cluster_nodes[].bios_during_provisioning (optional; temporary values for the
@@ -146,7 +149,8 @@ function Test-ZtpEnvironment {
             if ($n -isnot [System.Collections.IDictionary]) { $problems.Add("$label must be a mapping with name, ip_address and mac_address."); $index++; continue }
             & $check $n 'name' "$label.name" 'text'
             if ($name) { if ($seen.ContainsKey($name.ToLowerInvariant())) { $problems.Add("$label.name '$name' is used twice.") } else { $seen[$name.ToLowerInvariant()] = $true } }
-            & $check $n 'ip_address' "$label.ip_address" 'ip'
+            # A static address needs ip_address; Mode A (dhcp_reservation), dhcp and preconfigured can go without (nothing to compare).
+            & $check $n 'ip_address' "$label.ip_address" 'ip' -Optional:((Get-ZtpManagementAssignment -Environment $Environment -Node $n) -ne 'static')
             & $check $n 'mac_address' "$label.mac_address" 'mac'
             & $check $n 'adapter_name' "$label.adapter_name" 'text' -Optional
             & $check $n 'arc_machine_name' "$label.arc_machine_name" 'text' -Optional
@@ -160,7 +164,7 @@ function Test-ZtpEnvironment {
             & $checkBios (Get-ZtpEnvValue -Environment $n -Path 'bios') "$label.bios"
             & $checkBios (Get-ZtpEnvValue -Environment $n -Path 'bios_during_provisioning') "$label.bios_during_provisioning"
             $nodeMode = Get-ZtpEnvValue -Environment $n -Path 'ip_assignment'
-            if ($null -ne $nodeMode -and [string]$nodeMode -notin 'static', 'dhcp', 'preconfigured') { $problems.Add("$label.ip_assignment must be static, dhcp or preconfigured, not '$nodeMode'.") }
+            if ($null -ne $nodeMode -and [string]$nodeMode -notin 'static', 'dhcp_reservation', 'dhcp', 'preconfigured') { $problems.Add("$label.ip_assignment must be static, dhcp_reservation, dhcp or preconfigured, not '$nodeMode'.") }
             $index++
         }
     }
@@ -170,7 +174,7 @@ function Test-ZtpEnvironment {
     & $check $Environment 'network_intents.management.gateway' 'network_intents.management.gateway' 'ip'
     & $check $Environment 'network_intents.management.dns_servers' 'network_intents.management.dns_servers' 'iplist'
     $mode = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.ip_assignment'
-    if ($null -ne $mode -and [string]$mode -notin 'static', 'dhcp', 'preconfigured') { $problems.Add("network_intents.management.ip_assignment must be static, dhcp or preconfigured, not '$mode'.") }
+    if ($null -ne $mode -and [string]$mode -notin 'static', 'dhcp_reservation', 'dhcp', 'preconfigured') { $problems.Add("network_intents.management.ip_assignment must be static, dhcp_reservation, dhcp or preconfigured, not '$mode'.") }
     $vlan = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.vlan_id'
     $vlanNumber = 0
     if ($null -ne $vlan -and (-not [int]::TryParse([string]$vlan, [ref]$vlanNumber) -or $vlanNumber -lt 0 -or $vlanNumber -gt 4094)) { $problems.Add("network_intents.management.vlan_id must be 0-4094, not '$vlan'.") }
@@ -305,6 +309,86 @@ function Get-ZtpEnvironmentNote {
     if ($ztp -is [System.Collections.IDictionary] -and $ztp.Contains('node_preparation')) { 'ztp.node_preparation ignored: SBE belongs to OS configuration.' }
 }
 
+function Get-ZtpEnvironmentPort {
+    <#
+    .SYNOPSIS
+    A node's ports from the file, one ordered dictionary each { name, mac_address, roles, ip_assignment, ip_address }:
+    cluster_nodes[].network_adapters (mapped from a schema 5 file), else the one management port cluster_nodes[] describes
+    (mac_address, adapter_name, ip_address). For the handoff's per-port detail. Nothing assumes a make or a slot: the
+    management port is the one with role management.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Node, [System.Collections.IDictionary]$Environment)
+    $listed = Get-ZtpEnvValue -Environment $Node -Path 'network_adapters'
+    if ($listed) {
+        foreach ($p in @($listed)) {
+            if ($p -isnot [System.Collections.IDictionary]) { continue }
+            [ordered]@{ name = [string]$p['name']; mac_address = [string]$p['mac_address']; roles = @(@($p['roles']) | Where-Object { $_ } | ForEach-Object { [string]$_ }); ip_assignment = [string]$p['ip_assignment']; ip_address = [string]$p['ip_address'] }
+        }
+        return
+    }
+    if (-not $Node['mac_address']) { return }
+    $mode = if ($Environment) { Get-ZtpManagementAssignment -Environment $Environment -Node $Node } elseif ($Node['ip_assignment']) { [string]$Node['ip_assignment'] } else { 'static' }
+    [ordered]@{ name = [string]$Node['adapter_name']; mac_address = [string]$Node['mac_address']; roles = @('management'); ip_assignment = $mode; ip_address = [string]$Node['ip_address'] }
+}
+
+function Test-ZtpProvisioningDhcpPort {
+    # True when the node has a port with role provisioning, other than the management port, whose ip_assignment gives it
+    # DHCP (dhcp or dhcp_reservation): the maintenance environment's way to Azure in Mode C (no DHCP on the management
+    # network). Reads schema 5 network_adapters, raw or mapped (cluster_nodes[].network_adapters).
+    param([System.Collections.IDictionary]$Node)
+    if (-not $Node) { return $false }
+    foreach ($p in @($Node['network_adapters'])) {
+        if ($p -isnot [System.Collections.IDictionary]) { continue }
+        $roles = @(@($p['roles']) | ForEach-Object { [string]$_ })
+        if ('provisioning' -in $roles -and 'management' -notin $roles -and [string]$p['ip_assignment'] -in 'dhcp', 'dhcp_reservation') { return $true }
+    }
+    return $false
+}
+
+function Get-ZtpManagementDhcp {
+    <#
+    .SYNOPSIS
+    Does the node's management port (role management, found by its MAC) take DHCP while the machine is provisioned? That
+    tells Mode B (Static with DHCP) from Mode C (Static without management DHCP) for a static address. True when
+    network_intents.management.provisioning_network is dhcp (the default) and the management port also has role
+    provisioning, or the file lists no ports for the node (one management port, the maintenance environment's way to Azure).
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment, [Parameter(Mandatory)][System.Collections.IDictionary]$Node)
+    if ([string](Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.provisioning_network') -eq 'static') { return $false }
+    $ports = @(@($Node['network_adapters']) | Where-Object { $_ -is [System.Collections.IDictionary] })
+    $owner = @($ports | Where-Object { 'management' -in @($_['roles']) -and [string]$_['ip_assignment'] -notin '', 'none' }) | Select-Object -First 1
+    if (-not $owner) { return $true }
+    return ('provisioning' -in @($owner['roles']))
+}
+
+function Test-ZtpV5ManagementReach {
+    <#
+    .SYNOPSIS
+    Mode C without a way to Azure, in a schema 5 file: a static management port, no DHCP on the management network
+    (networking.management.provisioning_network static), and no other port with role provisioning on DHCP. The
+    maintenance environment then can't reach Azure (G23). The toolkit's AZL-024 is the same rule; this one runs only when
+    the toolkit isn't there, so the run still stops before it touches the hardware.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Data)
+    if ([string](Get-ZtpEnvValue -Environment $Data -Path 'networking.management.provisioning_network') -ne 'static') { return }
+    $i = 0
+    $nodeValue = Get-ZtpEnvValue -Environment $Data -Path 'nodes'
+    foreach ($n in @($nodeValue)) {
+        if ($n -is [System.Collections.IDictionary]) {
+            $port = Get-ZtpV5ManagementPort -Data $Data -Node $n
+            if ($port.Count -eq 1 -and $port.Mode -eq 'static' -and -not (Test-ZtpProvisioningDhcpPort -Node $n)) {
+                "nodes[$i] ($($n['name'])): Mode C (Static without management DHCP): the maintenance environment can't reach Azure: no DHCP anywhere (G23); give a provisioning port with DHCP (a port with role provisioning and ip_assignment dhcp or dhcp_reservation)."
+            }
+        }
+        $i++
+    }
+}
+
 function Get-ZtpEnvironmentWarning {
     <#
     .SYNOPSIS
@@ -316,6 +400,11 @@ function Get-ZtpEnvironmentWarning {
     # The toolkit warns about a schema 5 file itself (AZL-024), for the same reason.
     $origin = $Environment['_source']
     if ($origin -is [System.Collections.IDictionary] -and $origin['format'] -eq 'schema5' -and @($origin['warnings'] | Where-Object { $_ -like 'AZL-024 *' }).Count) { return }
+    # Mode C: no DHCP on the management network, but every node has another port with role provisioning on DHCP, which the
+    # maintenance environment reaches Azure through. Nothing to warn about.
+    $nodeValue = Get-ZtpEnvValue -Environment $Environment -Path 'cluster_nodes'
+    $nodes = @(@($nodeValue) | Where-Object { $_ -is [System.Collections.IDictionary] })
+    if ($nodes.Count -and @($nodes | Where-Object { -not (Test-ZtpProvisioningDhcpPort -Node $_) }).Count -eq 0) { return }
     if ([string](Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.provisioning_network') -eq 'static') {
         'network_intents.management.provisioning_network is static: the maintenance environment needs a static address to reach Azure before the machine is claimed. Learn documents only the Configurator app for that, and whether the USB image can carry a preset address is an open research item, so ZTP sets nothing for it. Without DHCP on a provisioning port, the machine never reaches Azure and no voucher is written.'
     }
@@ -402,8 +491,9 @@ function Get-ZtpStaticMethod {
 function Get-ZtpManagementAssignment {
     <#
     .SYNOPSIS
-    How each node's management address is set: static (the provisioning service sets ip_address on the port with
-    mac_address), dhcp (stays DHCP; reserve ip_address for the MAC) or preconfigured (ZTP doesn't
+    How each node's management address is set: static (Mode B or C: the Device stage sets ip_address on the port with
+    mac_address, OS configuration again after the install), dhcp_reservation (Mode A: stays DHCP, the DHCP server reserves
+    ip_address for the MAC), dhcp (stays DHCP, no reservation) or preconfigured (ZTP doesn't
     change the port). Default static. With -Node, the node's own cluster_nodes[].ip_assignment wins (the schema 5 reader sets
     it from each node's management port).
     #>
@@ -530,8 +620,9 @@ function Resolve-ZtpNodeSelection {
 # The mapping is in docs/infrastructure-schema-5.md.
 # ======================================================================================================================
 
-# A schema 5 port's ip_assignment as ZTP's management mode. ZTP's dhcp leaves the port on DHCP and expects ip_address.
-$script:ZtpPortMode = @{ static = 'static'; dhcp_reservation = 'dhcp'; dhcp = 'dhcp'; preconfigured = 'preconfigured' }
+# A schema 5 port's ip_assignment as ZTP's management mode: dhcp_reservation (Mode A) and dhcp stay apart, so the Network
+# stage and the handoff can tell a reservation from a lease that can change.
+$script:ZtpPortMode = @{ static = 'static'; dhcp_reservation = 'dhcp_reservation'; dhcp = 'dhcp'; preconfigured = 'preconfigured' }
 
 function Get-ZtpEnvironmentFormat {
     <#
@@ -679,7 +770,9 @@ function ConvertFrom-ZtpInfrastructureV5 {
         if ($n['rack_position']) { $node['rack_position'] = $n['rack_position'] }
         if ($n['bios'] -is [System.Collections.IDictionary]) { $node['bios'] = $n['bios'] }
         if ($n['bios_during_provisioning'] -is [System.Collections.IDictionary]) { $node['bios_during_provisioning'] = $n['bios_during_provisioning'] }
-        # The node's other ports aren't mapped: setting them up (DHCP off and so on) is OS configuration.
+        # The node's ports, as the file lists them, for the handoff's per-port detail and the Mode C check. ZTP doesn't
+        # set them up: DHCP and the gateway off on the other ports is OS configuration.
+        if ($n['network_adapters']) { $node['network_adapters'] = @(Get-ZtpEnvironmentPort -Node $n) }
         $nodes.Add($node)
     }
 
@@ -819,6 +912,8 @@ function Read-ZtpInfrastructure {
         $validator = "azurelocal-toolkit ($module)"
     }
     foreach ($p in @(Test-ZtpInfrastructureV5 -Data $data)) { $problems.Add($p) }
+    # The toolkit's AZL-024 stops Mode C without a DHCP provisioning port; without the toolkit, ZTP's own check does.
+    if (-not $module) { foreach ($p in @(Test-ZtpV5ManagementReach -Data $data)) { $problems.Add($p) } }
     $env_ = ConvertFrom-ZtpInfrastructureV5 -Data $data
     $version = [string](Get-ZtpEnvValue -Environment $data -Path '_metadata.schema_version')
     $env_['_source'] = [ordered]@{ format = 'schema5'; schema_version = $version; path = $full; validator = $validator; problems = $problems.ToArray(); warnings = $warnings.ToArray(); ignored = @(if ((Get-ZtpEnvValue -Environment $data -Path 'hardware.sbe') -is [System.Collections.IDictionary]) { 'hardware.sbe' }) }

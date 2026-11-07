@@ -162,7 +162,7 @@ Describe 'Network adapter helpers' {
     }
 }
 
-Describe 'Set-ZtpManagementAddress.ps1' {
+Describe 'Set-ZtpManagementAddress.ps1 -ApplyThroughAzure (opt-in, unreliable)' {
     BeforeEach {
         $global:netT_calls = [System.Collections.Generic.List[object]]::new()
         $global:netT_jobs = @{}
@@ -181,7 +181,7 @@ Describe 'Set-ZtpManagementAddress.ps1' {
 
     It 'plans without -Execute: reads the adapters, prints the release and the static address, changes nothing' {
         $params = & $script:writeParameters (& $script:static)
-        $out = @(& $script:run @{ ParameterFile = $params })
+        $out = @(& $script:run @{ ApplyThroughAzure = $true; ParameterFile = $params })
         & $script:puts | Should -BeNullOrEmpty
         $plan = @($out | Where-Object { $_ -is [string] })
         $plan[0] | Should -BeLike 'PLAN: node-01: release 192.0.2.11 from Port3 (00:00:5e:00:53:bb) first: ApplyConfiguration Dhcp*'
@@ -195,16 +195,16 @@ Describe 'Set-ZtpManagementAddress.ps1' {
 
     It 'plans for a node whose edge machine has no adapters yet' {
         $global:netT_noAdapters = $true
-        $out = @(& $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)) })
+        $out = @(& $script:run @{ ApplyThroughAzure = $true; ParameterFile = (& $script:writeParameters (& $script:static)) })
         ($out | Where-Object { $_ -is [string] }) | Should -BeLike '*reports no network adapters yet*00:00:5e:00:53:aa*'
-        { & $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false } } | Should -Throw '*reports no network adapters. Run the Network stage after Ready*'
+        { & $script:run @{ ApplyThroughAzure = $true; ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false } } | Should -Throw '*reports no network adapters. Run the Network stage after Ready*'
     }
 
     It 'finds the management adapter by MAC whatever the separators and case on either side' {
         $global:netT_adapters[$script:storage].reported.ip4Address = '192.0.2.21'
         $global:netT_adapters[$script:lom].reported.macAddress = '00:00:5E:00:53:AA'
         $m = & $script:static; $m.mac_address = '00005e0053aa'
-        $row = & $script:run @{ ParameterFile = (& $script:writeParameters $m); Execute = $true; Confirm = $false }
+        $row = & $script:run @{ ApplyThroughAzure = $true; ParameterFile = (& $script:writeParameters $m); Execute = $true; Confirm = $false }
         $put = @(& $script:puts)
         $put.Count | Should -Be 1
         $put[0].Path | Should -Match "/edgeMachines/node-01/networkAdapters/$($script:lom)/jobs/ApplyConfiguration\?api-version=2026-10-01$"
@@ -222,7 +222,7 @@ Describe 'Set-ZtpManagementAddress.ps1' {
     }
 
     It 'releases the address from the adapter that holds it first, waits, then sets it on the management adapter' {
-        $row = & $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false }
+        $row = & $script:run @{ ApplyThroughAzure = $true; ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false }
         $put = @(& $script:puts)
         $put.Count | Should -Be 2
         $put[0].Path | Should -Match "/networkAdapters/$($script:storage)/jobs/ApplyConfiguration\?"
@@ -254,21 +254,21 @@ Describe 'Set-ZtpManagementAddress.ps1' {
     It 'changes nothing when the management adapter already reports the static configuration' {
         $global:netT_adapters[$script:storage] = New-NetTAdapter -AdapterName 'Port3' -Mac '00005e0053bb' -Description 'Example storage NIC' -Type 'Dhcp'
         $global:netT_adapters[$script:lom] = New-NetTAdapter -AdapterName 'Port1' -Mac '00005e0053aa' -Description 'Example LOM' -Type 'Static' -Ip '192.0.2.11' -Mask '255.255.255.0' -Gateway '192.0.2.1' -Dns '192.0.2.53', '192.0.2.54'
-        $row = & $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false }
+        $row = & $script:run @{ ApplyThroughAzure = $true; ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false }
         & $script:puts | Should -BeNullOrEmpty
         $row.Status | Should -Be 'AlreadySet'
         $row.Address | Should -Be '192.0.2.11'
         Test-Path -LiteralPath $script:changeLog | Should -BeFalse
         @(& $script:eventsOf | ForEach-Object state) | Should -Be @('ManagementAddressAlreadySet')
         # And the plan says so.
-        $plan = @(& $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)) } | Where-Object { $_ -is [string] })
+        $plan = @(& $script:run @{ ApplyThroughAzure = $true; ParameterFile = (& $script:writeParameters (& $script:static)) } | Where-Object { $_ -is [string] })
         $plan | Should -BeLike '*Port1 (00:00:5e:00:53:aa) already reports Static 192.0.2.11*no change*'
     }
 
     It 'follows a job that waits queued behind other jobs until it succeeds, logging each status change once' {
         $global:netT_adapters[$script:storage].reported.ip4Address = '192.0.2.21'
         $global:netT_sequence[$script:lom] = @('Queued', 'Queued', 'Queued', 'Applying', 'Succeeded')
-        $a = & $script:argsFor @{ ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false }
+        $a = & $script:argsFor @{ ApplyThroughAzure = $true; ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false }
         $row = & $script:setNetwork @a -InformationVariable info
         $row.Status | Should -Be 'Changed'
         @($global:netT_calls | Where-Object { $_.Method -eq 'GET' -and $_.Path -like "*/$($script:lom)/jobs/*" }).Count | Should -Be 6 -Because 'one look before the PUT, then five polls'
@@ -285,7 +285,7 @@ Describe 'Set-ZtpManagementAddress.ps1' {
     It 'stops with the reason when the job fails, and records the failure' {
         $global:netT_adapters[$script:storage].reported.ip4Address = '192.0.2.21'
         $global:netT_sequence[$script:lom] = @('Applying', 'Failed')
-        { & $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false } } |
+        { & $script:run @{ ApplyThroughAzure = $true; ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false } } |
             Should -Throw '*Port1 (00:00:5e:00:53:aa) ApplyConfiguration (apply) failed: status DeploymentFailed*step ApplyNetworkConfiguration Failed*NetworkConfigurationFailed*'
         @(& $script:changesOf | ForEach-Object phase) | Should -Be @('requested', 'failed')
         $failed = & $script:eventsOf | Where-Object state -EQ 'ManagementAddressFailed'
@@ -296,7 +296,7 @@ Describe 'Set-ZtpManagementAddress.ps1' {
     It 'stops when a job does not finish within the timeout' {
         $global:netT_adapters[$script:storage].reported.ip4Address = '192.0.2.21'
         $global:netT_sequence[$script:lom] = @('Queued')
-        { & $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false; TimeoutMinutes = 0 } } |
+        { & $script:run @{ ApplyThroughAzure = $true; ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false; TimeoutMinutes = 0 } } |
             Should -Throw "*didn't finish within 0 minutes; last: DeploymentInProgress*not yet triggered*"
         @(& $script:changesOf | ForEach-Object phase) | Should -Be @('requested', 'timedOut')
     }
@@ -305,17 +305,17 @@ Describe 'Set-ZtpManagementAddress.ps1' {
         $global:netT_adapters[$script:storage].reported.ip4Address = '192.0.2.21'
         $target = [ordered]@{ adapterName = 'Port1'; ip4Address = '192.0.2.11'; subnetMask = '255.255.255.0'; defaultGateway = '192.0.2.1'; dnsServers = @('192.0.2.53', '192.0.2.54'); ipInterfaceType = 'Static'; vlanId = 0; interfaceState = 'up' }
         $global:netT_jobs[$script:lom] = @{ Target = $target; Sequence = @('Queued', 'Queued', 'Succeeded'); Index = 0 }
-        $row = & $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false }
+        $row = & $script:run @{ ApplyThroughAzure = $true; ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false }
         & $script:puts | Should -BeNullOrEmpty
         $row.Status | Should -Be 'Changed'
     }
 
     It 'fails clearly when no adapter reports the management MAC, listing the MACs it found' {
         $m = & $script:static; $m.mac_address = '00:00:5E:00:53:DD'
-        { & $script:run @{ ParameterFile = (& $script:writeParameters $m); Execute = $true; Confirm = $false } } |
+        { & $script:run @{ ApplyThroughAzure = $true; ParameterFile = (& $script:writeParameters $m); Execute = $true; Confirm = $false } } |
             Should -Throw '*no network adapter of edge machine node-01 reports the management MAC 00:00:5e:00:53:dd. Found: Port1 00:00:5e:00:53:aa (Example LOM); Port3 00:00:5e:00:53:bb (Example storage NIC); Port4 00:00:5e:00:53:cc*'
         & $script:puts | Should -BeNullOrEmpty
-        { & $script:run @{ ParameterFile = (& $script:writeParameters $m) } } | Should -Throw '*reports the management MAC 00:00:5e:00:53:dd*' -Because 'the plan fails the same way'
+        { & $script:run @{ ApplyThroughAzure = $true; ParameterFile = (& $script:writeParameters $m) } } | Should -Throw '*reports the management MAC 00:00:5e:00:53:dd*' -Because 'the plan fails the same way'
     }
 
     It 'only reports the management adapter for dhcp, dhcp_reservation and preconfigured' {
@@ -341,6 +341,154 @@ Describe 'Set-ZtpManagementAddress.ps1' {
 
     It 'needs the address, mask and gateway for a static node' {
         $m = & $script:static; $m.gateway = ''; $m.subnet_mask = ''
-        { & $script:run @{ ParameterFile = (& $script:writeParameters $m) } } | Should -Throw '*needs gateway, subnet_mask in the parameters file*'
+        { & $script:run @{ ApplyThroughAzure = $true; ParameterFile = (& $script:writeParameters $m) } } | Should -Throw '*needs gateway, subnet_mask in the parameters file*'
+    }
+}
+
+Describe 'Set-ZtpManagementAddress.ps1 verify-only (the default)' {
+    BeforeEach {
+        $global:netT_calls = [System.Collections.Generic.List[object]]::new()
+        $global:netT_jobs = @{}
+        $global:netT_sequence = @{}
+        $global:netT_noAdapters = $false
+        # The live finding (Dell AX-760, build 2610): the Device stage set the static by MAC, then the OS install reset every
+        # port to DHCP. The management port (an onboard LOM in this example) has a DHCP lease; nothing holds the static.
+        $global:netT_adapters = [ordered]@{
+            $script:lom     = New-NetTAdapter -AdapterName 'Port1' -Mac '00005e0053aa' -Description 'Example LOM' -Type 'Dhcp' -Ip '192.0.2.116' -Mask '255.255.255.0' -Gateway '192.0.2.1' -Dns '192.0.2.53'
+            $script:storage = New-NetTAdapter -AdapterName 'Port3' -Mac '00005e0053bb' -Description 'Example storage NIC' -Type 'Dhcp'
+            $script:spare   = New-NetTAdapter -AdapterName 'Port4' -Mac '00005e0053cc' -Description 'Example storage NIC' -Type 'Dhcp'
+        }
+        $script:changeLog = Join-Path $TestDrive "network-changes-$([guid]::NewGuid().ToString('N')).jsonl"
+        $script:events = Join-Path $TestDrive "events-$([guid]::NewGuid().ToString('N')).jsonl"
+        Mock Start-Sleep {}
+        $script:execute = { param([System.Collections.IDictionary]$Management) & $script:run @{ ParameterFile = (& $script:writeParameters $Management); Execute = $true; Confirm = $false } }
+        $script:noJobs = { @($global:netT_calls | Where-Object { $_.Method -ne 'GET' -or $_.Path -match '/jobs/' }) | Should -BeNullOrEmpty -Because 'verify-only never sends, reads or waits on a Microsoft job' }
+    }
+
+    It 'Mode B: records a static address the OS install reset to DHCP as Deferred to OS configuration, and never sends a job' {
+        $row = & $script:execute (& $script:static)
+        & $script:noJobs
+        $row.Status | Should -Be 'Deferred'
+        $row.Verified | Should -BeFalse
+        $row.Reason | Should -Be 'Mode B (Static with DHCP): the management port Port1 (MAC 00:00:5e:00:53:aa, Example LOM) has DHCP 192.0.2.116 after the install; expected static 192.0.2.11; OS configuration sets it by MAC.'
+        $row.AdapterName | Should -Be 'Port1'
+        $row.Address | Should -Be '192.0.2.116'
+        Test-Path -LiteralPath $script:changeLog | Should -BeFalse
+        $events = @(& $script:eventsOf)
+        @($events | ForEach-Object state) | Should -Be @('ManagementAddressDeferredToOsConfiguration')
+        $events[0].stage | Should -Be 'Network'
+        $events[0].level | Should -Be 'Info'
+        $events[0].nextAction | Should -Match 'OS configuration.*Set-AzureLocalNodeConfiguration\.ps1.*management MAC'
+    }
+
+    It 'Mode C: names the mode and says OS configuration sets it over Arc when the management port has no address' {
+        $global:netT_adapters[$script:lom] = New-NetTAdapter -AdapterName 'Port1' -Mac '00005e0053aa' -Description 'Example LOM' -Type 'Dhcp'
+        $m = & $script:static; $m.management_dhcp = $false
+        $row = & $script:execute $m
+        & $script:noJobs
+        $row.Status | Should -Be 'Deferred'
+        $row.Reason | Should -Be 'Mode C (Static without management DHCP): the management port Port1 (MAC 00:00:5e:00:53:aa, Example LOM) has DHCP and no address after the install; expected static 192.0.2.11; OS configuration sets it by MAC over Arc.'
+    }
+
+    It 'keys off the MAC alone: a management port on any card or slot, under any name' {
+        # A converged ConnectX port carries the management role here; the onboard ports aren't the management port.
+        $global:netT_adapters[$script:storage] = New-NetTAdapter -AdapterName 'Slot 3 Port 1' -Mac '00005e0053bb' -Description 'Example ConnectX-6 Dx' -Type 'Static' -Ip '192.0.2.11' -Mask '255.255.255.0' -Gateway '192.0.2.1'
+        $m = & $script:static; $m.mac_address = '00:00:5E:00:53:BB'
+        $row = & $script:execute $m
+        $row.Status | Should -Be 'AlreadySet'
+        $row.Verified | Should -BeTrue
+        $row.AdapterName | Should -Be 'Slot 3 Port 1'
+    }
+
+    It 'verifies a static address that is already on the management port' {
+        $global:netT_adapters[$script:lom] = New-NetTAdapter -AdapterName 'Port1' -Mac '00005e0053aa' -Description 'Example LOM' -Type 'Static' -Ip '192.0.2.11' -Mask '255.255.255.0' -Gateway '192.0.2.1' -Dns '192.0.2.53', '192.0.2.54'
+        $row = & $script:execute (& $script:static)
+        & $script:noJobs
+        $row.Status | Should -Be 'AlreadySet'
+        $row.Verified | Should -BeTrue
+        $row.Reason | Should -BeNullOrEmpty
+        @(& $script:eventsOf | ForEach-Object state) | Should -Be @('ManagementAddressAlreadySet')
+    }
+
+    It 'does not verify a static address another port holds, and names that port' {
+        $global:netT_adapters[$script:storage] = New-NetTAdapter -AdapterName 'Port3' -Mac '00005e0053bb' -Description 'Example storage NIC' -Type 'Static' -Ip '192.0.2.11' -Mask '255.255.255.0'
+        $row = & $script:execute (& $script:static)
+        & $script:noJobs
+        $row.Status | Should -Be 'Deferred'
+        $row.Reason | Should -Match 'Port1 \(MAC 00:00:5e:00:53:aa, Example LOM\) has DHCP 192\.0\.2\.116 after the install; Port3 \(MAC 00:00:5e:00:53:bb\) also has 192\.0\.2\.11; expected static 192\.0\.2\.11'
+    }
+
+    It 'Mode A: verifies the reserved address, and says what to check when the port has another one' {
+        $m = & $script:static; $m.ip_assignment = 'dhcp_reservation'; $m.ip_address = '192.0.2.116'
+        $row = & $script:execute $m
+        & $script:noJobs
+        $row.Status | Should -Be 'Reported'
+        $row.Verified | Should -BeTrue
+        (& $script:eventsOf | Select-Object -Last 1).level | Should -Be 'Info'
+        $m.ip_address = '192.0.2.11'
+        $row = & $script:execute $m
+        $row.Verified | Should -BeFalse
+        $row.Reason | Should -Be 'Mode A (Reserved): the management port Port1 (MAC 00:00:5e:00:53:aa, Example LOM) has DHCP 192.0.2.116 after the install; expected the reserved 192.0.2.11; check the DHCP reservation for MAC 00:00:5e:00:53:aa.'
+        (& $script:eventsOf | Select-Object -Last 1).level | Should -Be 'Warning'
+    }
+
+    It 'Mode A without ip_address: verified when the port has any DHCP address' {
+        $m = & $script:static; $m.ip_assignment = 'dhcp_reservation'; $m.ip_address = ''
+        (& $script:execute $m).Verified | Should -BeTrue
+        $global:netT_adapters[$script:lom] = New-NetTAdapter -AdapterName 'Port1' -Mac '00005e0053aa' -Description 'Example LOM' -Type 'Dhcp'
+        $row = & $script:execute $m
+        $row.Verified | Should -BeFalse
+        $row.Reason | Should -Match '^Mode A \(Reserved\): the management port Port1 .* has DHCP and no address after the install; expected a reserved DHCP address'
+    }
+
+    It 'only reports dhcp and preconfigured, never changing them' {
+        foreach ($mode in 'dhcp', 'preconfigured') {
+            $m = & $script:static; $m.ip_assignment = $mode
+            $row = & $script:execute $m
+            $row.Status | Should -Be 'Reported' -Because $mode
+            $row.Verified | Should -BeFalse -Because $mode
+            $row.Reason | Should -Match "^$mode.*Port1 .* has DHCP 192\.0\.2\.116 after the install; expected 192\.0\.2\.11" -Because $mode
+        }
+        $row.Reason | Should -Match 'preconfigured: the operator sets it'
+        & $script:noJobs
+    }
+
+    It 'records a node whose edge machine reports no adapters yet instead of failing' {
+        $global:netT_noAdapters = $true
+        $row = & $script:execute (& $script:static)
+        $row.Status | Should -Be 'Deferred'
+        $row.Reason | Should -Match 'reports no network adapters yet'
+        $m = & $script:static; $m.ip_assignment = 'dhcp_reservation'
+        $row = & $script:execute $m
+        $row.Status | Should -Be 'Reported'
+        $row.Verified | Should -BeFalse
+    }
+
+    It 'still stops on a management MAC no port reports: the file is wrong, and OS configuration would fail the same way' {
+        $m = & $script:static; $m.mac_address = '00:00:5E:00:53:DD'
+        { & $script:execute $m } | Should -Throw '*no network adapter of edge machine node-01 reports the management MAC 00:00:5e:00:53:dd*'
+        (& $script:eventsOf | Select-Object -Last 1).state | Should -Be 'ManagementAddressFailed'
+    }
+
+    It 'plans without -Execute: prints the verdict, writes no event' {
+        $out = @(& $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)) })
+        ($out | Where-Object { $_ -is [string] }) | Should -BeLike 'PLAN: node-01: static; verify only, no change. Mode B (Static with DHCP): the management port Port1*expected static 192.0.2.11; OS configuration sets it by MAC.'
+        Test-Path -LiteralPath $script:events | Should -BeFalse
+        & $script:noJobs
+    }
+}
+
+Describe 'Get-ZtpManagementMode' {
+    It 'names <IpAssignment> with management DHCP <Dhcp> as <Label>' -ForEach @(
+        @{ IpAssignment = 'dhcp_reservation'; Dhcp = $true; Mode = 'A'; Label = 'Mode A (Reserved)' }
+        @{ IpAssignment = 'static'; Dhcp = $true; Mode = 'B'; Label = 'Mode B (Static with DHCP)' }
+        @{ IpAssignment = 'STATIC'; Dhcp = $true; Mode = 'B'; Label = 'Mode B (Static with DHCP)' }
+        @{ IpAssignment = 'static'; Dhcp = $false; Mode = 'C'; Label = 'Mode C (Static without management DHCP)' }
+        @{ IpAssignment = 'dhcp'; Dhcp = $true; Mode = ''; Label = 'dhcp without a reservation (not Mode A, B or C)' }
+        @{ IpAssignment = 'preconfigured'; Dhcp = $true; Mode = ''; Label = 'preconfigured' }
+    ) {
+        $m = Get-ZtpManagementMode -IpAssignment $IpAssignment -ManagementDhcp $Dhcp
+        $m.Mode | Should -Be $Mode
+        $m.Label | Should -Be $Label
     }
 }

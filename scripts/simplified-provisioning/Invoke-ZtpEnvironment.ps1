@@ -118,6 +118,10 @@ if (-not $shareHost) { throw 'Set ztp.share_host or ztp.share_host_adapter in th
 Write-Output "Share host: $shareHost"
 
 $nodeList = @($env_.cluster_nodes)
+# How the maintenance environment reaches Azure (dhcp, the default, or static), for the summary below. Whether each
+# management port takes DHCP while provisioned (Mode B or C) is Get-ZtpManagementDhcp.
+$provisioningNetwork = [string](Get-ZtpEnvValue -Environment $env_ -Path 'network_intents.management.provisioning_network')
+if (-not $provisioningNetwork) { $provisioningNetwork = 'dhcp' }
 $Node = @(Resolve-ZtpNodeSelection -Environment $env_ -Node $Node)
 # No SBE: the OS install discovers its own, and staging one is OS configuration (hardware.sbe is accepted and ignored).
 
@@ -130,6 +134,13 @@ $scanRange = Get-ZtpEnvValue -Environment $env_ -Path 'network_intents.managemen
 $scanText = if ($scanRange -is [System.Collections.IDictionary] -and $scanRange['start'] -and $scanRange['end']) { "$($scanRange['start'])-$($scanRange['end'])" } else { '' }
 @{ nodes = @($nodeList | ForEach-Object {
             $entry = [ordered]@{ name = [string]$_.name; service_tag = [string]$_.service_tag; bmc_address = [string]$_.idrac_ip; management_ip = [string]$_.ip_address }
+            # For the handoff's per-port detail and the management address mode: the management port's MAC and
+            # ip_assignment, whether it takes DHCP while provisioned, and the file's ports (name, MAC, roles, ip_assignment,
+            # ip_address).
+            $entry.management_mac = [string]$_.mac_address
+            $entry.management_ip_assignment = Get-ZtpManagementAssignment -Environment $env_ -Node $_
+            $entry.management_dhcp = Get-ZtpManagementDhcp -Environment $env_ -Node $_
+            $entry.network_adapters = @(Get-ZtpEnvironmentPort -Node $_ -Environment $env_)
             # The Device stage reaches the maintenance environment's REST service on this address.
             $maintenance = [string](Get-ZtpEnvValue -Environment $_ -Path 'maintenance_address')
             if ($maintenance) { $entry.maintenance_address = $maintenance }
@@ -195,6 +206,8 @@ $bicepNodes = @($nodeList | ForEach-Object {
                 ip_assignment = (Get-ZtpManagementAssignment -Environment $env_ -Node $_)
                 # device: the claim carries no Manual adapter (the Device stage sets it); site: it does.
                 static_method = $staticMethod
+                # Does the management port take DHCP while provisioned? Mode B (true) or Mode C (false) for a static address.
+                management_dhcp = (Get-ZtpManagementDhcp -Environment $env_ -Node $_)
                 # The maintenance environment (Linux) reports MACs lower case with colons, as its Arc machine does.
                 mac_address   = ([string]$_.mac_address).Replace('-', ':').ToLowerInvariant()
                 adapter_name  = [string](Get-ZtpEnvValue -Environment $_ -Path 'adapter_name')
@@ -208,8 +221,6 @@ $bicepNodes = @($nodeList | ForEach-Object {
     })
 # The site's network setting: Manual with the nodes' range only for static with static_method site, Automatic otherwise.
 $siteNetwork = Get-ZtpSiteNetwork -Environment $env_
-$provisioningNetwork = [string](Get-ZtpEnvValue -Environment $env_ -Path 'network_intents.management.provisioning_network')
-if (-not $provisioningNetwork) { $provisioningNetwork = 'dhcp' }
 Write-Output "Site network: $($siteNetwork.IpAssignmentType)$(if ($siteNetwork.Range) { " $($siteNetwork.Range), gateway $($siteNetwork.Ipv4.defaultGateway), mask $($siteNetwork.Ipv4.subnetMask), DNS $($siteNetwork.Ipv4.dnsServers -join ', '), VLAN $($siteNetwork.Ipv4.vLanId)" }). Maintenance environment to Azure: $provisioningNetwork."
 $modes = @($bicepNodes | ForEach-Object { $_.management.ip_assignment } | Select-Object -Unique)
 if ($modes.Count -gt 1) { $mgmtMode = 'per node (' + (($bicepNodes | ForEach-Object { "$($_.name) $($_.management.ip_assignment)" }) -join ', ') + ')'; Write-Warning "The management addresses mix $($modes -join ' and ')$(if ($staticMethod -eq 'site') { "; the site's network setting is Manual over the static ones" })." }

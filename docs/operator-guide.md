@@ -83,7 +83,7 @@ The template gives each edge machine's identity the right to assign **Key Vault 
 | Management host to each node's maintenance environment | TCP 20001 | HTTPS to the maintenance environment's REST service, for the Device stage (self-signed certificate). That's the node's `maintenance_address` when the file gives one. Otherwise the Device stage scans every address of `provisioning_dhcp_range` (default: the management subnet), so the host must reach that whole range on TCP 20001. |
 | Management host to the internet | TCP 443 | Azure Resource Manager, Microsoft Entra ID, Key Vault, and the maintenance ISO download (`aka.ms/aep/installeros/<YYMM>`) |
 | Nodes to Azure | TCP 443 and 80 | Learn's firewall requirements. No HTTPS inspection. See [Learn: firewall requirements](https://learn.microsoft.com/azure/azure-local/concepts/firewall-requirements). |
-| DHCP for the maintenance environment | | The maintenance environment takes a DHCP lease on its ports and reaches Azure through one of them before the claim (`provisioning_network: dhcp`). A reservation isn't needed: without a `maintenance_address`, the Device stage finds each node by its management MAC. With a management `ip_assignment` of `dhcp`, reserve each node's `ip_address` for its management MAC. Learn recommends reservations ([decision 8](https://learn.microsoft.com/azure/azure-local/plan/cloud-deployment-network-considerations#decision-8-determine-management-ips-and-infrastructure-network)). |
+| DHCP for the maintenance environment | | The maintenance environment takes a DHCP lease on its ports and reaches Azure through one of them before the claim (`provisioning_network: dhcp`). A reservation isn't needed: without a `maintenance_address`, the Device stage finds each node by its management MAC. Recommended: Mode A, `ip_assignment: dhcp_reservation` with a reservation of each node's `ip_address` for its management MAC, the only mode where ZTP ends with every management address right ([Management address modes](prerequisites.md#management-address-modes)). Learn recommends reservations ([decision 8](https://learn.microsoft.com/azure/azure-local/plan/cloud-deployment-network-considerations#decision-8-determine-management-ips-and-infrastructure-network)). |
 
 ZTP needs no WinRM to the nodes. It reaches them only through the BMC, the maintenance environment's REST service and Azure.
 
@@ -191,7 +191,7 @@ To change the build of machines that are already provisioned, provision them aga
 | `device` (default) | The Device stage sets the static address on the port with the node's management MAC, in the maintenance environment, before the claim. The site's network setting is **Automatic**, and the claim carries no `Manual` adapter, so that address is the only static the node gets. |
 | `site` | The earlier path, for environments without the Device stage: the site's network setting is `Manual` over `site_ip_range`, and the claim carries a `Manual` adapter by MAC. Microsoft's OS install then puts the address on the first ready port and ignores the MAC (seen live on a Dell AX-760: a ConnectX storage port). |
 
-Either way, the Network stage checks the address after the OS install through Azure, and moves it to the management port if it landed elsewhere.
+Either way, Microsoft's OS install then resets every port to DHCP, so after ZTP the management port has a DHCP address (Mode B) or none (Mode C). The Network stage only verifies, through Azure's per-NIC report, and records the node as left to OS configuration, which sets the static by MAC. Mode A (a DHCP reservation per management MAC) avoids all of this and is the recommended setup; see [Management address modes](prerequisites.md#management-address-modes).
 
 The Device stage reaches the maintenance environment's REST service on TCP 20001. It finds each node like this:
 
@@ -362,7 +362,8 @@ Before it writes the handoff, the run has checked each node:
 | Edge machine lifecycle `Provisioned`; `ProvisionOs` job reports `DeploymentSuccess` | Ready, again after Restore, and Handoff |
 | Arc machine `Connected`, with an `arcMachineResourceId` | Ready, and again after Restore |
 | Arc extensions `AzureEdgeDeviceManagement`, `AzureEdgeLifecycleManager`, `AzureEdgeRemoteSupport` and `AzureEdgeTelemetryAndDiagnostics` all `Succeeded` | Ready and after Restore (`Test-ProvisionedMachines.ps1`) |
-| Static address `ip_address/prefix`, gateway, DNS and VLAN on the adapter with the management MAC, and on no other adapter | Device (in the maintenance environment), Network (as Azure reports the adapter). The handoff records it as `managementAddressVerified`. |
+| Static address `ip_address/prefix`, gateway, DNS and VLAN on the adapter with the management MAC, and on no other adapter | Device (in the maintenance environment, Modes B and C). Network verifies it after the install, as Azure reports the adapter; in Modes B and C the install has reset it, so it is recorded as left to OS configuration. The handoff records it as `managementAddressVerified`, with the mode and every port. |
+| The reserved address on the adapter with the management MAC | Network (Mode A). The handoff records it as `managementAddressVerified`. |
 | The `bios_during_provisioning` values set back | Restore. The handoff records them as `biosRestored`. |
 
 That's ZTP's result. It doesn't check drivers, the SBE, DHCP on the other ports, DNS or time on the host, or the deployment admin; those belong to [OS configuration](#whats-next-os-configuration).
@@ -377,7 +378,7 @@ The handoff is in `<media_path>\ztp-state\`:
 | `<run>.ztp-cluster-inputs.yaml` | `arc_machine_names` (host name to Arc machine name) and `release.azure_local_version` (the build installed), ready to paste into a cluster deployment environment file |
 | `<run>.arc-machine-names.json` | Host name to Arc machine name |
 
-The handoff never repeats a value the infrastructure file already holds:
+The handoff holds what Azure generated during ZTP, and what Azure reports for each port after the install (`networkAdapters[]`, matched by MAC to the file):
 
 ```json
 {
@@ -393,16 +394,37 @@ The handoff never repeats a value the infrastructure file already holds:
     "edgeMachineName": "node-01", "edgeMachineId": "/subscriptions/.../edgeMachines/node-01",
     "arcMachineName": "node-01", "arcMachineResourceId": "/subscriptions/.../Microsoft.HybridCompute/machines/node-01",
     "arcMachineResourceGroup": "rg-example", "ready": true,
-    "managementAddressVerified": true, "managementAddressReason": null,
-    "biosRestored": { "Slot2": "Enabled" }
+    "managementAddressVerified": false,
+    "managementAddressReason": "Mode B (Static with DHCP): the management port Port1 (MAC 00:00:5e:00:53:aa, Example LOM) has DHCP 192.0.2.116 after the install; expected static 192.0.2.11; OS configuration sets it by MAC.",
+    "biosRestored": { "Slot2": "Enabled" },
+    "managementMode": { "mode": "B", "name": "Static with DHCP", "ipAssignment": "static" },
+    "networkAdapters": [
+      { "name": "Port1", "macAddress": "00:00:5e:00:53:aa", "description": "Example LOM", "roles": ["management"], "fileName": "Embedded NIC 1",
+        "isManagement": true, "ipAssignment": "Dhcp", "ipAddress": "192.0.2.116", "prefix": 24, "subnetMask": "255.255.255.0", "gateway": "192.0.2.1",
+        "expected": { "ipAssignment": "static", "ipAddress": "192.0.2.11" } },
+      { "name": "Port3", "macAddress": "00:00:5e:00:53:bb", "description": "Example ConnectX-6 Dx", "roles": ["storage"], "fileName": "Slot 3 Port 2",
+        "isManagement": false, "ipAssignment": "Dhcp", "ipAddress": null, "prefix": null, "subnetMask": null, "gateway": null,
+        "expected": { "ipAssignment": "none", "ipAddress": null } }
+    ]
   } ]
 }
+```
+
+The run also prints a table per node at the end, `>` marking the management port:
+
+```text
+node-01: Mode B (Static with DHCP, static); management address not verified: Mode B (Static with DHCP): the management port Port1 ...
+     port             MAC               roles (name in the file)   now                      expected
+  >  Port1            00:00:5e:00:53:aa management (Embedded NIC 1) Dhcp 192.0.2.116/24 gw 192.0.2.1 static 192.0.2.11
+     Port3            00:00:5e:00:53:bb storage (Slot 3 Port 2)    Dhcp, no address         none
 ```
 
 | Key | Meaning |
 | --- | --- |
 | `solution.vsrVersion` | The build actually installed. The file may say `latest`. |
-| `managementAddressVerified`, `managementAddressReason` | From the Network stage: `true` when the port with the management MAC carries the file's address. Otherwise `false` with a short reason, for example `dhcp: the management port Port0 reports 192.0.2.200, the infrastructure file expects 192.0.2.12`, or `no Network stage result for this node`. The run warns, and OS configuration must fix it before Validate. |
+| `managementAddressVerified`, `managementAddressReason` | From the Network stage: `true` when the management port (the port with the management MAC) carries the file's address. Otherwise `false` with a plain-language reason naming the mode, the port, its MAC, what it has now and what the file expects (see the example above), or `no Network stage result for this node`. In Modes B and C that is the normal result: OS configuration sets the static before Validate. |
+| `managementMode` | `mode` (`A`, `B`, `C`, or `null` for `dhcp` and `preconfigured`), `name` and the management port's `ipAssignment`. `null` when the run had no node list. |
+| `networkAdapters[]` | Every port as Azure reports it after the install (`edgeMachines/<node>/networkAdapters`, `reportedProperties`): `name` (the OS name), `macAddress`, `description`, `roles` and `fileName` (the file's port with that MAC; empty when the file doesn't list it), `isManagement`, `ipAssignment` (`Dhcp`, `Static` or `none`), `ipAddress`, `prefix`, `subnetMask`, `gateway`, and `expected` (`ipAssignment` and `ipAddress` from the file). Additive: schema 2 readers that don't know it ignore it. |
 | `biosRestored` | What Restore set back, attribute to value. `{}` when nothing. |
 
 Schema 2 no longer carries `sbe`, `bootstrap`, `timestamps`, `connectivity` or a top-level `arcMachineResourceGroup`. The maintenance ISO's version, URL and SHA256 are in the Resolve stage's evidence: the state file (`stages.Resolve.data`) and its `StageCompleted` event, for example `maintenance ISO 10.2610.0.3061 (GA), SHA256 ..., from <url>`. The timestamps are the `StageStarted` and `StageCompleted` events, and `stages.<name>.completed` in the state file. `Convert-ZtpHandoffToClusterInputs.ps1` reads schema 2 and schema 1, and no longer writes an `sbe` block or `release.sbe_version`; the SBE values for deployment come from OS configuration.
@@ -428,6 +450,7 @@ ZTP doesn't do any of these. OS configuration does:
 
 | Not done by ZTP | Where |
 | --- | --- |
+| Set the static management address by MAC (Modes B and C) | [Task 03: Static IP](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-03-configure-static-ip-address) |
 | Install the OEM drivers | [Phase 03](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/) |
 | Stage the SBE in `C:\SBE` | [Phase 03](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/) |
 | Turn DHCP off on the other NICs, and disable the unused ones | [Task 04: Disable DHCP on all adapters](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-04-disable-dhcp-on-management-adapter), [Task 09: Disable unused adapters](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-09-disable-unused-network-adapters) |
@@ -435,7 +458,7 @@ ZTP doesn't do any of these. OS configuration does:
 | Set time on the host | [Task 07: NTP](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-07-configure-time-synchronization-ntp) |
 | Create the deployment admin | [Phase 03](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/) |
 
-ZTP already put the static management address on the management NIC. [Task 03: Static IP](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-03-configure-static-ip-address) is where OS configuration checks it; fix it there for any node whose handoff entry reads `managementAddressVerified: false`. [Task 15](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-15-complete-combined-script-all-steps) runs all the steps in one script, and [Task 16](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-16-phase03-verification) verifies the phase.
+**The management address after ZTP.** Mode A: the reserved address, verified. Modes B and C: **not the static address**. Microsoft's OS install resets every port, so the management port has a DHCP address (B) or none (C, with Arc reaching the node over the provisioning port), and Microsoft's post-install per-NIC API didn't run in our tests. OS configuration sets it: the toolkit's `Set-AzureLocalNodeConfiguration.ps1` (Network step) sets the static on the port with the management MAC over Arc Run Command, before it turns DHCP and the gateway off on the ports the file lists as `none`. [Task 03: Static IP](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-03-configure-static-ip-address) covers it; the handoff's `managementAddressVerified: false` and its reason say which nodes need it. [Task 15](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-15-complete-combined-script-all-steps) runs all the steps in one script, and [Task 16](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-16-phase03-verification) verifies the phase.
 
 **Find NICs by MAC.** ZTP-built nodes run Microsoft's provisioned OS, which names the NICs `Port0` to `Port6`. Scripts that look a NIC up by an OEM or manual-install name won't find it, so OS configuration scripts must find each NIC by its MAC.
 
