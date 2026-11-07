@@ -113,6 +113,9 @@ OEM drivers, the SBE and the deployment admin are part of [Phase 03](https://azu
 | [Bootstrap media](docs/bootstrap-media.md) | How the maintenance ISO is found and checked, and why there's no SBE in ZTP |
 | [Redfish virtual USB and vouchers](docs/redfish-virtual-usb-vouchers.md) | The virtual USB boot and voucher read-back, script by script |
 | [Azure provisioning from vouchers](docs/azure-provisioning-vouchers.md) | The Bicep template, the claim and the wait for ready |
+| [Appendices](docs/appendix/index.md) | Reference for the interfaces ZTP uses, with evidence labels |
+| [A. API reference](docs/appendix/api-reference.md) | Every Azure Resource Manager and Redfish call ZTP makes, which stage makes it, and what else is possible |
+| [B. The Configurator app API](docs/appendix/configurator-app-api.md) | The maintenance environment's REST service on TCP 20001: all 45 operations, the three ZTP calls, authentication, and what is not possible |
 
 The docs site is built with VitePress from `docs/`:
 

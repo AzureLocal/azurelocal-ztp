@@ -79,7 +79,7 @@ These keys belong to OS configuration and deployment. ZTP doesn't map them, does
 
 ## What ZTP does with the ports
 
-**The Device stage.** Before the claim, `Set-ZtpDeviceConfiguration.ps1` sets a static management address on the port named by its MAC in the maintenance environment, through the Configurator App's REST service on the maintenance address (TCP 20001). Without a maintenance address it finds the node by scanning `provisioning_dhcp_range` for the service and matching the MAC. See [The Device stage](environment-file.md#the-device-stage).
+**The Device stage.** Before the claim, `Set-ZtpDeviceConfiguration.ps1` sets a static management address on the port named by its MAC in the maintenance environment, through the Configurator App's REST service on the maintenance address (TCP 20001). Without a maintenance address it finds the node by scanning `provisioning_dhcp_range` for the service and matching the MAC. See [The Device stage](environment-file.md#the-device-stage) and [Appendix B](appendix/configurator-app-api.md#how-ztp-uses-this-service).
 
 **The claim.** With `static_method: device` (the default), the edge machine's request carries no `networkAdapters` entry: the site is `Automatic`, and the address the Device stage set is the only static the node gets. With `static_method: site`, a static management port gets one entry, keyed by the port's MAC: `ipAssignmentType: Manual`, the address, mask, gateway, DNS servers and VLAN. The OS install accepts that MAC but doesn't use it: the address goes to the first ready port, which can be a storage port (see [Static IP lands on the wrong NIC](troubleshooting.md#static-ip-lands-on-the-wrong-nic)). For `dhcp`, `dhcp_reservation` and `preconfigured` there's no entry either way.
 

@@ -40,7 +40,7 @@ An older settings file can still carry `SbeModel`, `SbeFamily`, `SbeSolutionVers
 | Boot | `Start-MaintenanceBoot.ps1` (`Set-ZtpBios.ps1`, `Publish-MaintenanceIso.ps1`, `Mount-ZtpVirtualUsb.ps1`) | Every node's BIOS reports the node list's `bios`; every node attached and restarted. Each changed attribute's original value is saved in the state file. |
 | Bootstrap | `Wait-ZtpBootstrapComplete.ps1` | Every node `ReadyForPortal` |
 | Vouchers | `Wait-ZtpVoucher.ps1`, then `Publish-MaintenanceIso.ps1 -Remove` | A valid voucher per node |
-| Device | `Set-ZtpDeviceConfiguration.ps1` | Each static node reports the static address on its management adapter in the maintenance environment. A node without `maintenance_address` is found first by scanning `maintenance_scan_range` (or the management subnet) on TCP 20001 for its management MAC. |
+| Device | `Set-ZtpDeviceConfiguration.ps1` | Each static node reports the static address on its management adapter in the maintenance environment. A node without `maintenance_address` is found first by scanning `maintenance_scan_range` (or the management subnet) on TCP 20001 for its management MAC ([Appendix B](appendix/configurator-app-api.md#how-ztp-uses-this-service)). |
 | Azure | `Invoke-ZtpAzureProvisioning.ps1` stages Prereqs, Validate, Plan, Execute | No voucher problem; deployment accepted |
 | Ready | `Invoke-ZtpAzureProvisioning.ps1 -Stage Watch`, `Test-ProvisionedMachines.ps1` | Every machine ready to cluster and its Arc machine verified |
 | Network | `Set-ZtpManagementAddress.ps1` | Each static node's management adapter (found by MAC) reports the static address, and no other adapter reports it. Each node's result goes to the state file for the handoff. |

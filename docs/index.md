@@ -70,6 +70,10 @@ ZTP ends with the nodes ready for OS configuration, not for Validate. OEM driver
 Microsoft's simplified machine provisioning is in preview, in East US only, and doesn't support Arc gateway. Read the [overview](/overview) for the current status and limits, and the [prerequisites](/prerequisites), before you start.
 :::
 
+## Reference
+
+The [appendices](/appendix/) list every interface ZTP talks to, with what each call does and how we know: [A. API reference](/appendix/api-reference) (Azure Resource Manager and Redfish, by stage) and [B. The Configurator app API](/appendix/configurator-app-api) (the maintenance environment's REST service on TCP 20001).
+
 ## Part of the Azure Local tools
 
 Check the network with [Beacon](https://azurelocal.cloud/azurelocal-beacon/) before you start, watch the run with [Sonar](https://azurelocal.cloud/azurelocal-sonar/) (see [Monitoring a run](/monitoring)), and document the result with [Ranger](https://azurelocal.cloud/azurelocal-ranger/). More at [azurelocal.cloud](https://azurelocal.cloud/).

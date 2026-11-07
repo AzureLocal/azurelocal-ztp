@@ -193,7 +193,7 @@ To change the build of machines that are already provisioned, provision them aga
 
 Either way, Microsoft's OS install then resets every port to DHCP, so after ZTP the management port has a DHCP address (Mode B) or none (Mode C). The Network stage only verifies, through Azure's per-NIC report, and records the node as left to OS configuration, which sets the static by MAC. Mode A (a DHCP reservation per management MAC) avoids all of this and is the recommended setup; see [Management address modes](prerequisites.md#management-address-modes).
 
-The Device stage reaches the maintenance environment's REST service on TCP 20001. It finds each node like this:
+The Device stage reaches the maintenance environment's REST service on TCP 20001. It finds each node like this (the calls are in [Appendix B](appendix/configurator-app-api.md#how-ztp-uses-this-service)):
 
 1. The node's `maintenance_address`, when the file gives one (schema 5 `nodes[].maintenance_address`, else the `ip_address` of the node's port with role `provisioning`).
 2. Otherwise it scans `networking.management.provisioning_dhcp_range` (`start`, `end`; older layout `network_intents.management.provisioning_dhcp_range`; at most 4096 addresses; default: the management subnet). It probes every address on TCP 20001 in parallel, asks each one that answers for its network adapters, and takes the one that lists the node's management MAC. It scans again every 60 seconds until each node answers, for up to 30 minutes, because the node may still be booting.

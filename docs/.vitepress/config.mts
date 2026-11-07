@@ -74,6 +74,14 @@ export default defineConfig({
         ]
       },
       {
+        text: 'Appendix',
+        items: [
+          { text: 'Appendices', link: '/appendix/' },
+          { text: 'A. API reference', link: '/appendix/api-reference' },
+          { text: 'B. Configurator app API', link: '/appendix/configurator-app-api' }
+        ]
+      },
+      {
         text: 'Legacy and other guides',
         collapsed: true,
         items: [

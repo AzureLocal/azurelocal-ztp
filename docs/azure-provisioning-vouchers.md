@@ -135,6 +135,8 @@ Finally, `Test-ProvisionedMachines.ps1 -SubscriptionId ... -ResourceGroupName <m
 
 ## What the template creates
 
+Every Azure call ZTP makes, with request and response shapes, is in [Appendix A: API reference](appendix/api-reference.md#azure-resource-manager).
+
 `bicep/main.bicep` is deployed at resource group scope and creates, per the portal template:
 
 - the `Microsoft.Edge` **site** and **configuration** (with the configuration reference), and the network, time, connectivity and security settings;

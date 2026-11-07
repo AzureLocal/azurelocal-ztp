@@ -87,7 +87,7 @@ The plan prints the setting, for example `Site network: Automatic.` with `device
 
 #### The Device stage
 
-The maintenance environment runs the Configurator App's REST service, and the Device stage (`Set-ZtpDeviceConfiguration.ps1`, between Vouchers and Azure) uses it to put the static address on the port with `mac_address` before the claim, as the Configurator App would. It needs TCP 20001 from this server to the maintenance environment.
+The maintenance environment runs the Configurator App's REST service, and the Device stage (`Set-ZtpDeviceConfiguration.ps1`, between Vouchers and Azure) uses it to put the static address on the port with `mac_address` before the claim, as the Configurator App would. It needs TCP 20001 from this server to the maintenance environment. The operations, how ZTP signs in and what is not possible are in [Appendix B](appendix/configurator-app-api.md#how-ztp-uses-this-service).
 
 | | |
 | --- | --- |

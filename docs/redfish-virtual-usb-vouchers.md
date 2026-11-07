@@ -159,6 +159,8 @@ To read images you already have, use `Read-ZtpVoucherFromImage.ps1` directly (`-
 
 ## Script reference
 
+Every Redfish call these scripts make is in [Appendix A: API reference](appendix/api-reference.md#redfish-on-the-bmc).
+
 | Script | Purpose |
 |--------|---------|
 | `New-ZtpVirtualUsbImage.ps1` | Build the per-node `.img` files. |
