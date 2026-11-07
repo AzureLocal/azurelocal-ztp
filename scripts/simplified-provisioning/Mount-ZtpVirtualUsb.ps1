@@ -150,7 +150,7 @@ foreach ($target in $targets) {
         if ($slots.Count -eq 0) { throw "$($node): the iDRAC has no USB-stick (RemovableDisk) virtual-media slot." }
         $ours = { param($Slot) [bool]$Slot.Inserted -and [string]$Slot.Image -like "*$fileName" }
         $state = {
-            param($Slot, [string]$Did)
+            param($Slot, [string]$Did, $ResetAt = $null)
             $sys = Invoke-ZtpRedfish -Session $session -Path $system.'@odata.id'
             $boot = if ($sys -and $sys.PSObject.Properties['Boot']) { $sys.Boot } else { $null }
             [pscustomobject]@{
@@ -163,6 +163,7 @@ foreach ($target in $targets) {
                 WriteProtected = if ($Slot.PSObject.Properties['WriteProtected']) { $Slot.WriteProtected } else { $null }
                 PowerState     = if ($sys -and $sys.PSObject.Properties['PowerState']) { [string]$sys.PowerState } else { $null }
                 BootOverride   = if ($boot -and $boot.PSObject.Properties['BootSourceOverrideTarget']) { "$($boot.BootSourceOverrideEnabled)/$($boot.BootSourceOverrideTarget)" } else { $null }
+                ResetAt        = $ResetAt
             }
         }
 
@@ -263,6 +264,7 @@ foreach ($target in $targets) {
             $null = Invoke-ZtpRedfish -Session $session -Path $system.'@odata.id' -Method Patch -Body @{ Boot = @{ BootSourceOverrideEnabled = 'Once'; BootSourceOverrideTarget = 'Usb' } }
         }
         $did = 'Mounted'
+        $resetAt = $null
         if ($Restart) {
             $power = Invoke-ZtpRedfish -Session $session -Path $system.'@odata.id'
             $resetType = if ($power -and $power.PSObject.Properties['PowerState'] -and [string]$power.PowerState -eq 'Off') { 'On' } else { 'ForceRestart' }
@@ -283,7 +285,7 @@ foreach ($target in $targets) {
                 }
             }
         }
-        & $state $check $did
+        & $state $check $did $resetAt
     }
     finally {
         Remove-ZtpRedfishSession -Session $session

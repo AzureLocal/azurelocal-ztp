@@ -12,6 +12,8 @@ param()
 BeforeAll {
     $script:repoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
     $script:orchestrator = Join-Path $script:repoRoot 'scripts/simplified-provisioning/Invoke-ZtpProvisioning.ps1'
+    . (Join-Path $script:repoRoot 'scripts/simplified-provisioning/ZtpVirtualUsb.Common.ps1')
+    . (Join-Path $script:repoRoot 'scripts/simplified-provisioning/ZtpEvents.Common.ps1')
     $script:stubRoot = Join-Path $TestDrive 'stubs'
     $null = New-Item -ItemType Directory -Path $script:stubRoot -Force
     $names = 'SourcePath', 'NodeName', 'NodesFile', 'OutputDirectory', 'ImageNamePrefix', 'EdgeUserPassword', 'Force', 'Execute', 'ImageDirectory',
@@ -19,7 +21,7 @@ BeforeAll {
     'TimeoutMinutes', 'Action', 'Remove', 'SharePath', 'Stage', 'SubscriptionId', 'ResourceGroupName', 'ParameterFile', 'VoucherPath', 'OsVersion',
     'SiteMode', 'Node', 'DeploymentName', 'AdminPassword', 'PollIntervalSeconds', 'RetryProvisionOs', 'ArcMachineNameMapPath', 'ExpectedMachineName',
     'Version', 'CacheDirectory', 'IncludePreview', 'MaxTrain', 'Oem', 'EventLogPath', 'VoucherTimeoutMinutes',
-    'SkipAzureCheck', 'Location', 'HandoffPath', 'ManagementAddressCheck', 'OutputPath', 'Format', 'BiosLogPath', 'ChangeLogPath', 'Original', 'RestoredBios'
+    'SkipAzureCheck', 'ImageBuiltAt', 'ResetAt', 'Location', 'HandoffPath', 'ManagementAddressCheck', 'OutputPath', 'Format', 'BiosLogPath', 'ChangeLogPath', 'Original', 'RestoredBios'
     $paramBlock = ($names | ForEach-Object { "[object]`$$_" }) -join ', '
     foreach ($script in 'New-ZtpVirtualUsbImage.ps1', 'Start-MaintenanceBoot.ps1', 'Wait-ZtpVoucher.ps1', 'Mount-ZtpVirtualUsb.ps1', 'Publish-MaintenanceIso.ps1',
         'Invoke-ZtpAzureProvisioning.ps1', 'Test-ProvisionedMachines.ps1', 'Get-ZtpBootstrapIso.ps1', 'Wait-ZtpBootstrapComplete.ps1',
@@ -49,7 +51,7 @@ if (`$global:ztpRunBehavior.ContainsKey('$script')) { & `$global:ztpRunBehavior[
             'Wait-ZtpBootstrapComplete.ps1'   = { param($p) foreach ($n in $p['NodeName']) { [pscustomobject]@{ Node = $n; State = 'ReadyForPortal'; Ready = $true; Evidence = 'ok'; VoucherSha256 = 'AB' } } }
             'New-ZtpHandoff.ps1'              = { param($p) if ($p['Execute']) { Set-Content -LiteralPath $p['HandoffPath'] -Value '{}' } }
             'Convert-ZtpHandoffToClusterInputs.ps1' = { param($p) Set-Content -LiteralPath $p['OutputPath'] -Value 'arc_machine_names: {}' }
-            'Start-MaintenanceBoot.ps1'       = { param($p) if ($p['Execute']) { foreach ($n in $p['NodeName']) { [pscustomobject]@{ Node = $n; Image = "ztp-usb-$n.img"; WriteProtected = $false; Restarted = $true } } } }
+            'Start-MaintenanceBoot.ps1'       = { param($p) if ($p['Execute']) { foreach ($n in $p['NodeName']) { [pscustomobject]@{ Node = $n; Image = "ztp-usb-$n.img"; WriteProtected = $false; Restarted = $true; ResetAt = [datetime]::UtcNow } } } }
             'Set-ZtpDeviceConfiguration.ps1'  = { param($p) if ($p['Execute']) { foreach ($n in $p['Node']) { [pscustomobject]@{ Node = $n; Mode = 'static'; Status = $(if ($n -eq 'node-01') { 'Changed' } else { 'Skipped' }); Adapter = 'eno1'; MacAddress = '00:00:5e:00:53:aa'; Address = $(if ($n -eq 'node-01') { '192.0.2.11' } else { '' }); MaintenanceAddress = $(if ($n -eq 'node-01') { '192.0.2.111' } else { '' }); Released = @() } } } else { 'PLAN: node-01: POST SetArcBootstrapDeviceConfiguration' } }
             'Set-ZtpManagementAddress.ps1'    = { param($p) if ($p['Execute']) { foreach ($n in $p['Node']) { [pscustomobject]@{ Node = $n; Mode = 'static'; Status = $(if ($n -eq 'node-01') { 'Changed' } else { 'AlreadySet' }); Adapter = '00000000-0000-0000-0000-000000000001'; AdapterName = 'Port1'; MacAddress = '00:00:5e:00:53:aa'; Address = "192.0.2.1$($n[-1])"; ExpectedAddress = "192.0.2.1$($n[-1])"; Released = @(if ($n -eq 'node-01') { 'Port3' }); Changes = @() } } } else { 'PLAN: node-01: ApplyConfiguration on Port1' } }
             'Wait-ZtpVoucher.ps1'             = { param($p) foreach ($n in $p['NodeName']) { $serial = if ($n -eq 'node-01') { 'EXAMPLE1' } else { 'EXAMPLE2' }; $f = Join-Path $p['OutputDirectory'] "$serial.pem"; Set-Content -LiteralPath $f -Value 'pem'; [pscustomobject]@{ Node = $n; Serial = $serial; OutputFile = $f; Valid = $true } } }
@@ -123,6 +125,64 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
         $state = Get-Content $script:statePath -Raw | ConvertFrom-Json -AsHashtable
         @($state.stages.Keys).Count | Should -Be 11
         $state.stages.Resolve.evidence | Should -Match 'skipped'
+    }
+
+    It 'records what Media built and when Boot reset each node, and passes both to Bootstrap (lab gap G20)' {
+        $before = [datetime]::UtcNow.AddSeconds(-2)
+        $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false }
+        $after = [datetime]::UtcNow.AddSeconds(2)
+        $state = Get-Content $script:statePath -Raw | ConvertFrom-Json -AsHashtable
+        foreach ($n in 'node-01', 'node-02') {
+            $img = $state.stages.Media.data.images[$n]
+            $img.path | Should -BeLike "*ztp-usb-$n.img"; $img.sha256 | Should -Be 'AB'
+            $built = (ConvertTo-ZtpUtcDateTime $img.builtAt); $reset = (ConvertTo-ZtpUtcDateTime $state.stages.Boot.data.resetAt[$n])
+            $built | Should -BeGreaterOrEqual $before; $reset | Should -BeLessOrEqual $after
+            $reset | Should -BeGreaterOrEqual $built -Because 'Boot resets the node onto an image Media built earlier'
+        }
+        $wait = $global:ztpRunCalls | Where-Object Script -EQ 'Wait-ZtpBootstrapComplete.ps1'
+        @($wait.Params.ImageBuiltAt.Keys | Sort-Object) | Should -Be @('node-01', 'node-02')
+        @($wait.Params.ResetAt.Keys | Sort-Object) | Should -Be @('node-01', 'node-02')
+        (ConvertTo-ZtpUtcDateTime $wait.Params.ImageBuiltAt['node-01']) | Should -Be (ConvertTo-ZtpUtcDateTime $state.stages.Media.data.images['node-01'].builtAt)
+        (ConvertTo-ZtpUtcDateTime $wait.Params.ResetAt['node-02']) | Should -Be (ConvertTo-ZtpUtcDateTime $state.stages.Boot.data.resetAt['node-02'])
+    }
+
+    It 'passes the recorded times to a Bootstrap run later, from the state file' {
+        $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; Stage = 'Media' }
+        $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; Stage = 'Boot' }
+        $global:ztpRunCalls.Clear()
+        $null = & $script:invoke @{ Execute = $true; BmcCredential = $script:bmc; Confirm = $false; Stage = 'Bootstrap' }
+        $wait = $global:ztpRunCalls | Where-Object Script -EQ 'Wait-ZtpBootstrapComplete.ps1'
+        @($wait.Params.ImageBuiltAt.Keys | Sort-Object) | Should -Be @('node-01', 'node-02')
+        @($wait.Params.ResetAt.Keys | Sort-Object) | Should -Be @('node-01', 'node-02')
+        (ConvertTo-ZtpUtcDateTime $wait.Params.ResetAt['node-01']) | Should -BeLessThan ([datetime]::UtcNow.AddSeconds(2))
+    }
+
+    It 'passes nothing to Bootstrap for an image Media did not build, or a node Boot did not reset, in this run' {
+        # Bootstrap on its own: no state, so nothing says this run built the image.
+        $null = & $script:invoke @{ Execute = $true; BmcCredential = $script:bmc; Confirm = $false; Stage = 'Bootstrap' }
+        $wait = $global:ztpRunCalls | Where-Object Script -EQ 'Wait-ZtpBootstrapComplete.ps1'
+        $wait.Params.ContainsKey('ImageBuiltAt') | Should -BeFalse
+        $wait.Params.ContainsKey('ResetAt') | Should -BeFalse
+        # Boot and Bootstrap with the images built by an earlier run (Media not recorded): only the reset is known.
+        $global:ztpRunCalls.Clear()
+        $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; From = 'Boot'; ResetState = $true }
+        $wait = $global:ztpRunCalls | Where-Object Script -EQ 'Wait-ZtpBootstrapComplete.ps1'
+        $wait.Params.ContainsKey('ImageBuiltAt') | Should -BeFalse
+        @($wait.Params.ResetAt.Keys | Sort-Object) | Should -Be @('node-01', 'node-02')
+        # A Boot that reports no reset time (an older script) records none.
+        $global:ztpRunBehavior['Start-MaintenanceBoot.ps1'] = { param($p) foreach ($n in $p['NodeName']) { [pscustomobject]@{ Node = $n; Image = "ztp-usb-$n.img"; WriteProtected = $false; Restarted = $true } } }
+        $global:ztpRunCalls.Clear()
+        $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; From = 'Media'; ResetState = $true }
+        $wait = $global:ztpRunCalls | Where-Object Script -EQ 'Wait-ZtpBootstrapComplete.ps1'
+        @($wait.Params.ImageBuiltAt.Keys | Sort-Object) | Should -Be @('node-01', 'node-02')
+        $wait.Params.ContainsKey('ResetAt') | Should -BeFalse
+    }
+
+    It 'does not pass the times when the vouchers come from the Configurator App folder' {
+        $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; VoucherFolder = 'D:\Downloads\vouchers'; SkipAzureCheck = $true; Stage = 'Media' }
+        $null = & $script:invoke @{ Execute = $true; BmcCredential = $script:bmc; Confirm = $false; VoucherFolder = 'D:\Downloads\vouchers'; SkipAzureCheck = $true; Stage = 'Bootstrap' }
+        $wait = $global:ztpRunCalls | Where-Object Script -EQ 'Wait-ZtpBootstrapComplete.ps1'
+        $wait.Params.ContainsKey('ImageBuiltAt') | Should -BeFalse
     }
 
     It 'Network sets the management addresses after Ready, logs the changes beside the event log and records each node' {

@@ -206,20 +206,73 @@ function Get-ZtpImageVoucherSignal {
     <#
     .SYNOPSIS
     Read-only look into the node's read-write image: is there a complete, valid voucher for the node's serial under
-    \vouchers\<serial>\? Returns { Present, Valid, Sha256, Detail }; the voucher text is never returned or logged.
+    \vouchers\<serial>\? Returns { Present, Valid, Sha256, Detail, ImageLastWriteUtc }; the voucher text is never returned
+    or logged. ImageLastWriteUtc is the image file's last write time (null when the file is missing): the nearest thing to
+    a write time for the voucher that the host can read without trusting the node's clock.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$ImagePath, [Parameter(Mandatory)][string]$Serial)
-    if (-not (Test-Path -LiteralPath $ImagePath)) { return [pscustomobject]@{ Present = $false; Valid = $false; Sha256 = $null; Detail = "image not found: $ImagePath" } }
+    if (-not (Test-Path -LiteralPath $ImagePath)) { return [pscustomobject]@{ Present = $false; Valid = $false; Sha256 = $null; Detail = "image not found: $ImagePath"; ImageLastWriteUtc = $null } }
+    $written = $null
+    try { $written = (Get-Item -LiteralPath $ImagePath).LastWriteTimeUtc } catch { $written = $null }
     try { $probe = Find-ZtpVoucherInImage -ImagePath $ImagePath -AllowOpen }
-    catch { return [pscustomobject]@{ Present = $false; Valid = $false; Sha256 = $null; Detail = "image not readable yet: $($_.Exception.Message)" } }
+    catch { return [pscustomobject]@{ Present = $false; Valid = $false; Sha256 = $null; Detail = "image not readable yet: $($_.Exception.Message)"; ImageLastWriteUtc = $written } }
     $candidates = @($probe.Pem | Where-Object { $_.UnderVouchers -and $_.Folder -ieq $Serial -and $null -ne $_.Bytes })
     if ($candidates.Count -eq 0) {
         $detail = if (@($probe.VoucherFolders).Count -gt 0) { "voucher folder(s) $(@($probe.VoucherFolders) -join ', ') without a complete voucher for $Serial yet" } else { 'no \vouchers\ folder yet' }
-        return [pscustomobject]@{ Present = $false; Valid = $false; Sha256 = $null; Detail = $detail }
+        return [pscustomobject]@{ Present = $false; Valid = $false; Sha256 = $null; Detail = $detail; ImageLastWriteUtc = $written }
     }
     $check = Test-ZtpOwnershipVoucher -Bytes $candidates[0].Bytes -Serial $Serial
-    return [pscustomobject]@{ Present = $true; Valid = [bool]$check.Valid; Sha256 = $check.Sha256; Detail = $(if ($check.Valid) { 'valid' } else { ($check.Problems -join '; ') }) }
+    return [pscustomobject]@{ Present = $true; Valid = [bool]$check.Valid; Sha256 = $check.Sha256; Detail = $(if ($check.Valid) { 'valid' } else { ($check.Problems -join '; ') }); ImageLastWriteUtc = $written }
+}
+
+function ConvertTo-ZtpUtcDateTime {
+    <#
+    .SYNOPSIS
+    A time from the run state or a stage result as a UTC [datetime], or $null when there is none or it does not parse. The
+    state file stores ISO 8601 strings, which ConvertFrom-Json may hand back already as [datetime].
+    #>
+    [CmdletBinding()]
+    [OutputType([object])]
+    param([AllowNull()][object]$Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [datetime]) { return $Value.ToUniversalTime() }
+    $text = [string]$Value
+    if (-not $text.Trim()) { return $null }
+    $parsed = [datetime]::MinValue
+    if ([datetime]::TryParse($text, [cultureinfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) { return $parsed.ToUniversalTime() }
+    return $null
+}
+
+function Get-ZtpVoucherProvenance {
+    <#
+    .SYNOPSIS
+    Does a valid voucher found in a node's image belong to this run? (pure)
+    .DESCRIPTION
+    The Media stage builds the image without a voucher, and the Boot stage resets the node onto it. A valid voucher in that
+    image can therefore only have been written by the node's maintenance environment after the build: a fast node does it
+    while Boot is still watching the BMC, before the Bootstrap stage has started. So the baseline is what this run
+    recorded, not what the image held when the watch started.
+      ImageBuiltAt         when the Media stage built this node's image in this run (state: stages.Media.data.images.<node>.builtAt)
+      ResetAt              when the Boot stage reset this node onto that image (state: stages.Boot.data.resetAt.<node>)
+      ImageLastWriteUtc    the image file's last write time, when known
+    This run's voucher: both times are recorded, the reset is not before the build, and the image was not last written
+    before the build. The voucher's own write time is not needed (the node's clock is not trusted); when the image's last
+    write time is unknown the reset time is enough. Anything else is not provable as this run's: no record that Media built
+    this image and Boot reset the node in this run (an image reused from an earlier run, or Bootstrap run on its own), a
+    reset recorded before the build, or an image file older than the recorded build (replaced since).
+    Returns { ThisRun, Reason }.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][object]$ImageBuiltAt, [AllowNull()][object]$ResetAt, [AllowNull()][object]$ImageLastWriteUtc)
+    $built = ConvertTo-ZtpUtcDateTime $ImageBuiltAt
+    $reset = ConvertTo-ZtpUtcDateTime $ResetAt
+    $written = ConvertTo-ZtpUtcDateTime $ImageLastWriteUtc
+    if ($null -eq $built) { return [pscustomobject]@{ ThisRun = $false; Reason = 'this run has no record that its Media stage built the image' } }
+    if ($null -eq $reset) { return [pscustomobject]@{ ThisRun = $false; Reason = 'this run has no record that its Boot stage reset the node onto the image' } }
+    if ($reset -lt $built) { return [pscustomobject]@{ ThisRun = $false; Reason = "the recorded reset ($($reset.ToString('o'))) is before the recorded image build ($($built.ToString('o')))" } }
+    if ($null -ne $written -and $written -lt $built) { return [pscustomobject]@{ ThisRun = $false; Reason = "the image was last written ($($written.ToString('o'))) before the image build this run recorded ($($built.ToString('o')))" } }
+    return [pscustomobject]@{ ThisRun = $true; Reason = "image built $($built.ToString('o')) and node reset onto it $($reset.ToString('o')) in this run, so a voucher in the image was written by this run's maintenance environment" }
 }
 
 function Get-ZtpAzureReadiness {

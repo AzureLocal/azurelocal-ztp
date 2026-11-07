@@ -114,7 +114,7 @@ One JSON object per line, UTF-8 without a BOM. The writer opens the file with re
 | `StageFailed` | `*` | `Error` | A stage throws. The evidence holds the error. |
 | `BiosChanged` | node | `Info` | Boot: the node's BIOS was changed before the maintenance boot. The evidence lists each attribute. |
 | `NotStarted` | node | `Info` | The bootstrap watch starts. |
-| `NotStarted` | node | `Warning` | A valid voucher is already in the image before the node was seen booting: an image reused from an earlier run. |
+| `NotStarted` | node | `Warning` | A valid voucher is already in the image before the node was seen booting, and this run has no record that it built the image and reset the node onto it (or the image is older than the recorded build): an image reused from an earlier run. The evidence says which. A voucher in an image this run built and reset the node onto is not flagged: the node wrote it during the Boot stage's BMC watch. |
 | `Mounted` | node | `Info` | The node's image is inserted. |
 | `Booting` | node | `Info` | Power on, and the one-time override consumed or a boot log entry seen. |
 | `MaintenanceEnvironmentRunning` | node | `Info` | A reset after the media boot, or the completion message in the BMC log. |
@@ -387,7 +387,7 @@ In the Azure portal, go to **Azure Arc** > **Operations** > **Provisioning (prev
 | Stage | Normal |
 | --- | --- |
 | Boot | Each node: attach proven, override `Once/Floppy`, reset, then 10 minutes without `OSE1002`. All nodes at once. |
-| Bootstrap | Events per node: `NotStarted`, `Mounted`, then often `Booting` and `MaintenanceEnvironmentRunning` (weak signals, which may be skipped), then `VoucherWritten` and `ReadyForPortal`. Learn says the maintenance environment setup usually takes up to 30 minutes, with two reboots ([prepare machines](https://learn.microsoft.com/azure/azure-local/deploy/simplified-machine-provisioning#step-2-prepare-machines)). A 20-minute stall warning in `Mounted` or `Booting` alone isn't a problem: the voucher decides. |
+| Bootstrap | A fast node can already have written its voucher during the Boot stage's BMC watch: `NotStarted`, then `VoucherWritten` and `ReadyForPortal` at the first poll. Otherwise events per node: `NotStarted`, `Mounted`, then often `Booting` and `MaintenanceEnvironmentRunning` (weak signals, which may be skipped), then `VoucherWritten` and `ReadyForPortal`. Learn says the maintenance environment setup usually takes up to 30 minutes, with two reboots ([prepare machines](https://learn.microsoft.com/azure/azure-local/deploy/simplified-machine-provisioning#step-2-prepare-machines)). A 20-minute stall warning in `Mounted` or `Booting` alone isn't a problem: the voucher decides. |
 | Vouchers | Usually done at the first poll: the voucher is already in the image. |
 | Device | Without `maintenance_address`: `MaintenanceEnvironmentFound` first. Then `DeviceConfigurationSubmitted`, `DeviceConfigurationStatus` and `DeviceAddressSet` per static node. |
 | Azure | What-if, then "deployment accepted". The edge machines appear in Azure and in Sonar. |

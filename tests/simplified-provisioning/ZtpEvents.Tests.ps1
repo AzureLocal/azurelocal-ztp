@@ -29,6 +29,39 @@ AfterAll {
     Get-Variable -Scope Global -Name 'ztpE_*' -ErrorAction SilentlyContinue | Remove-Variable -Scope Global -Force -ErrorAction SilentlyContinue
 }
 
+Describe 'Get-ZtpVoucherProvenance' {
+    BeforeAll {
+        $script:built = ([datetime]'2026-11-07T13:08:00Z').ToUniversalTime()
+        $script:reset = ([datetime]'2026-11-07T13:09:51Z').ToUniversalTime()
+    }
+    It 'is this run''s when the image was built and the node reset in this run' {
+        $r = Get-ZtpVoucherProvenance -ImageBuiltAt $script:built -ResetAt $script:reset -ImageLastWriteUtc ([datetime]'2026-11-07T13:13:00Z')
+        $r.ThisRun | Should -BeTrue
+        $r.Reason | Should -Match 'this run'
+    }
+    It 'needs only the reset time when the image''s write time is unknown' {
+        (Get-ZtpVoucherProvenance -ImageBuiltAt $script:built -ResetAt $script:reset -ImageLastWriteUtc $null).ThisRun | Should -BeTrue
+    }
+    It 'is not this run''s without a build record, without a reset record, or with a reset before the build' {
+        (Get-ZtpVoucherProvenance -ImageBuiltAt $null -ResetAt $script:reset -ImageLastWriteUtc $null).Reason | Should -Match 'Media'
+        (Get-ZtpVoucherProvenance -ImageBuiltAt $script:built -ResetAt $null -ImageLastWriteUtc $null).Reason | Should -Match 'Boot'
+        (Get-ZtpVoucherProvenance -ImageBuiltAt $script:reset -ResetAt $script:built -ImageLastWriteUtc $null).ThisRun | Should -BeFalse
+    }
+    It 'is not this run''s when the image file is older than the recorded build' {
+        $r = Get-ZtpVoucherProvenance -ImageBuiltAt $script:built -ResetAt $script:reset -ImageLastWriteUtc ([datetime]'2026-11-06T09:00:00Z')
+        $r.ThisRun | Should -BeFalse
+        $r.Reason | Should -Match 'before the image build'
+    }
+    It 'reads times as UTC from a [datetime] of any kind or an ISO string, and ignores what it cannot read' {
+        (ConvertTo-ZtpUtcDateTime '2026-11-07T13:09:51.0000000Z') | Should -Be $script:reset
+        (ConvertTo-ZtpUtcDateTime ([datetime]::SpecifyKind($script:reset, 'Utc'))) | Should -Be $script:reset
+        (ConvertTo-ZtpUtcDateTime $script:reset.ToLocalTime()) | Should -Be $script:reset
+        ConvertTo-ZtpUtcDateTime $null | Should -BeNullOrEmpty
+        ConvertTo-ZtpUtcDateTime 'not a time' | Should -BeNullOrEmpty
+        ConvertTo-ZtpUtcDateTime '' | Should -BeNullOrEmpty
+    }
+}
+
 Describe 'Get-ZtpBootstrapNextState' {
     It 'walks the states in order as the evidence arrives' {
         (Get-ZtpBootstrapNextState -Current NotStarted -Signals @{}).State | Should -Be 'NotStarted'
@@ -201,6 +234,7 @@ Describe 'Wait-ZtpBootstrapComplete.ps1' {
         $global:ztpE_voucherAt = @{}       # node -> poll number from which the voucher is valid
         $global:ztpE_azure = [pscustomobject]@{ Ready = $true; Problems = @(); Detail = 'ok' }
         $global:ztpE_calls = [System.Collections.Generic.List[string]]::new()
+        $global:ztpE_imageWritten = $null  # last write time of the image file, as Get-ZtpImageVoucherSignal reports it
         Mock Get-ZtpUtcNow { $global:ztpE_now }
         Mock Wait-ZtpInterval { $global:ztpE_sleeps.Add($Seconds); $global:ztpE_now = $global:ztpE_now.AddSeconds($Seconds) }
         Mock New-ZtpRedfishSession { $global:ztpE_calls.Add("session $BmcAddress"); "session-$BmcAddress" }
@@ -213,7 +247,7 @@ Describe 'Wait-ZtpBootstrapComplete.ps1' {
         Mock Get-ZtpImageVoucherSignal {
             $node = if ($Serial -eq 'EXAMPLE1') { 'node-01' } else { 'node-02' }
             $valid = $global:ztpE_voucherAt.ContainsKey($node) -and $global:ztpE_poll[$node] -ge $global:ztpE_voucherAt[$node]
-            [pscustomobject]@{ Present = $valid; Valid = $valid; Sha256 = $(if ($valid) { 'AB' * 32 } else { $null }); Detail = $(if ($valid) { 'valid' } else { 'no \vouchers\ folder yet' }) }
+            [pscustomobject]@{ Present = $valid; Valid = $valid; Sha256 = $(if ($valid) { 'AB' * 32 } else { $null }); Detail = $(if ($valid) { 'valid' } else { 'no \vouchers\ folder yet' }); ImageLastWriteUtc = $global:ztpE_imageWritten }
         }
         Mock Get-ZtpAzureReadiness { $global:ztpE_azure }
         $global:ztpE_happy = {
@@ -337,6 +371,108 @@ Describe 'Wait-ZtpBootstrapComplete.ps1' {
         # VoucherWritten only after Booting
         $order = @($events | ForEach-Object state)
         [array]::IndexOf($order, 'VoucherWritten') | Should -BeGreaterThan ([array]::IndexOf($order, 'Booting'))
+    }
+
+    Context 'a voucher already in the image when the watch starts (a fast node, lab gap G20)' {
+        BeforeEach {
+            # The virtual clock starts at 12:00:00Z. This run built the image at 11:50 and reset the node at 11:55.
+            $global:ztpE_built = @{ 'node-01' = [datetime]'2026-10-15T11:50:00Z' }
+            $global:ztpE_reset = @{ 'node-01' = [datetime]'2026-10-15T11:55:00Z' }
+            $global:ztpE_imageWritten = [datetime]'2026-10-15T11:58:00Z'
+        }
+
+        It 'is this run''s voucher when the image was built and the node reset in this run: VoucherWritten and ReadyForPortal at once, no stale warning' {
+            # The node finished the maintenance environment during the Boot stage's BMC watch: the BMC no longer shows a boot override.
+            $global:ztpE_script['node-01'] = { param($n) New-ZtpTestReading -Enabled Disabled -Target None }
+            $global:ztpE_voucherAt['node-01'] = 1
+            $rows = & $global:ztpE_run @{ ImageBuiltAt = $global:ztpE_built; ResetAt = $global:ztpE_reset }
+            $rows[0].State | Should -Be 'ReadyForPortal'; $rows[0].Ready | Should -BeTrue
+            $rows[0].VoucherSha256 | Should -Be ('AB' * 32)
+            $events = & $global:ztpE_read
+            @($events | ForEach-Object state) | Should -Be @('NotStarted', 'VoucherWritten', 'ReadyForPortal')
+            @($events | Where-Object { $_.level -ne 'Info' }).Count | Should -Be 0
+            ($events | Where-Object state -EQ 'VoucherWritten').evidence | Should -Match 'after this run''s image build and node reset'
+            ($events | Where-Object state -EQ 'ReadyForPortal').evidence | Should -Match 'voucher SHA256'
+            $global:ztpE_sleeps.Count | Should -Be 0 -Because 'the first poll already finishes the node: it must not wait for a change that never comes'
+        }
+
+        It 'still checks Azure before ReadyForPortal' {
+            $global:ztpE_script['node-01'] = { param($n) New-ZtpTestReading -Enabled Disabled -Target None }
+            $global:ztpE_voucherAt['node-01'] = 1
+            $global:ztpE_azure = [pscustomobject]@{ Ready = $false; Problems = @('feature missing'); Detail = 'feature missing' }
+            $rows = & $global:ztpE_run @{ ImageBuiltAt = $global:ztpE_built; ResetAt = $global:ztpE_reset; TimeoutMinutes = 3; VoucherTimeoutMinutes = 2 }
+            $rows[0].Ready | Should -BeFalse
+            $events = & $global:ztpE_read
+            $events | ForEach-Object state | Should -Contain 'VoucherWritten'
+            $events | ForEach-Object state | Should -Not -Contain 'ReadyForPortal'
+            ($events | Where-Object { $_.level -eq 'Warning' }).evidence | Should -Match 'Azure not ready: feature missing'
+            ($events | ForEach-Object evidence) -join ' ' | Should -Not -Match 'already in the image'
+        }
+
+        It 'accepts it when the image''s last write time is unknown: the reset time is enough' {
+            $global:ztpE_imageWritten = $null
+            $global:ztpE_script['node-01'] = { param($n) New-ZtpTestReading -Enabled Disabled -Target None }
+            $global:ztpE_voucherAt['node-01'] = 1
+            (& $global:ztpE_run @{ ImageBuiltAt = $global:ztpE_built; ResetAt = $global:ztpE_reset })[0].Ready | Should -BeTrue
+            @(& $global:ztpE_read | Where-Object level -EQ 'Warning').Count | Should -Be 0
+        }
+
+        It 'accepts times that come back from the state file as ISO strings' {
+            $global:ztpE_script['node-01'] = { param($n) New-ZtpTestReading -Enabled Disabled -Target None }
+            $global:ztpE_voucherAt['node-01'] = 1
+            $rows = & $global:ztpE_run @{ ImageBuiltAt = @{ 'node-01' = '2026-10-15T11:50:00.0000000Z' }; ResetAt = @{ 'node-01' = '2026-10-15T11:55:00.0000000Z' } }
+            $rows[0].Ready | Should -BeTrue
+        }
+
+        It 'does not accept a voucher the image held before this run built it: the stale-image warning stays' {
+            $global:ztpE_imageWritten = [datetime]'2026-10-14T09:00:00Z'
+            $global:ztpE_script['node-01'] = { param($n) New-ZtpTestReading -Enabled Once }
+            $global:ztpE_voucherAt['node-01'] = 1
+            $rows = & $global:ztpE_run @{ ImageBuiltAt = $global:ztpE_built; ResetAt = $global:ztpE_reset; VoucherTimeoutMinutes = 3; TimeoutMinutes = 10 }
+            $rows[0].State | Should -Be 'VoucherMissing'
+            $warn = @(& $global:ztpE_read | Where-Object { $_.level -eq 'Warning' -and $_.evidence -match 'already in the image' })
+            $warn.Count | Should -Be 1
+            $warn[0].evidence | Should -Match 'before the image build this run recorded'
+        }
+
+        It 'does not accept a voucher in an image the Media stage did not build in this run (no build record)' {
+            $global:ztpE_script['node-01'] = { param($n) New-ZtpTestReading -Enabled Once }
+            $global:ztpE_voucherAt['node-01'] = 1
+            $rows = & $global:ztpE_run @{ ResetAt = $global:ztpE_reset; VoucherTimeoutMinutes = 3; TimeoutMinutes = 10 }
+            $rows[0].State | Should -Be 'VoucherMissing'
+            (& $global:ztpE_read | Where-Object { $_.level -eq 'Warning' -and $_.evidence -match 'already in the image' }).evidence | Should -Match 'no record that its Media stage built the image'
+        }
+
+        It 'does not accept a voucher when the node was not reset in this run (no reset record, or a reset before the build)' {
+            $global:ztpE_script['node-01'] = { param($n) New-ZtpTestReading -Enabled Once }
+            $global:ztpE_voucherAt['node-01'] = 1
+            $null = & $global:ztpE_run @{ ImageBuiltAt = $global:ztpE_built; VoucherTimeoutMinutes = 3; TimeoutMinutes = 10 }
+            (& $global:ztpE_read | Where-Object { $_.level -eq 'Warning' -and $_.evidence -match 'already in the image' }).evidence | Should -Match 'no record that its Boot stage reset'
+            $global:ztpE_poll.Clear(); Remove-Item $global:ztpE_events
+            $null = & $global:ztpE_run @{ ImageBuiltAt = $global:ztpE_built; ResetAt = @{ 'node-01' = [datetime]'2026-10-15T11:00:00Z' }; VoucherTimeoutMinutes = 3; TimeoutMinutes = 10 }
+            (& $global:ztpE_read | Where-Object { $_.level -eq 'Warning' -and $_.evidence -match 'already in the image' }).evidence | Should -Match 'reset .* is before the recorded image build'
+        }
+
+        It 'leaves the slow-node path unchanged: the voucher appears later, after the boot signals' {
+            $global:ztpE_script['node-01'] = $global:ztpE_happy
+            $global:ztpE_voucherAt['node-01'] = 5
+            $rows = & $global:ztpE_run @{ ImageBuiltAt = $global:ztpE_built; ResetAt = $global:ztpE_reset }
+            $rows[0].State | Should -Be 'ReadyForPortal'
+            $events = & $global:ztpE_read
+            @($events | ForEach-Object state) | Should -Be @('NotStarted', 'Mounted', 'Booting', 'MaintenanceEnvironmentRunning', 'VoucherWritten', 'ReadyForPortal')
+            @($events | Where-Object { $_.level -ne 'Info' }).Count | Should -Be 0
+            ($events | Where-Object state -EQ 'VoucherWritten').evidence | Should -Not -Match 'found when the watch started'
+        }
+
+        It 'judges each node on its own record: one fast node accepted, one reused image warned' {
+            $global:ztpE_script['node-01'] = { param($n) New-ZtpTestReading -Enabled Disabled -Target None }
+            $global:ztpE_script['node-02'] = { param($n) if ($n -le 2) { New-ZtpTestReading -Enabled Once } else { New-ZtpTestReading -Enabled Disabled -Target None } }
+            $global:ztpE_voucherAt['node-01'] = 1; $global:ztpE_voucherAt['node-02'] = 1
+            $rows = & $global:ztpE_run @{ NodeName = 'node-01', 'node-02'; ImageBuiltAt = $global:ztpE_built; ResetAt = $global:ztpE_reset; VoucherTimeoutMinutes = 60 }
+            @($rows | Where-Object Ready).Count | Should -Be 2
+            $stale = @(& $global:ztpE_read | Where-Object { $_.level -eq 'Warning' -and $_.evidence -match 'already in the image' })
+            $stale.Count | Should -Be 1; $stale[0].node | Should -Be 'node-02'
+        }
     }
 
     It 'never accepts an unchanged pre-boot voucher when the node is never seen booting' {

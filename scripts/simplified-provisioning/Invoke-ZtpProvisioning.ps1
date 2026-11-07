@@ -308,6 +308,30 @@ function Get-ZtpBiosOriginal {
 }
 
 # ------------------------------------------------------------------ stage calls
+function Get-ZtpRecordedStageData {
+    # The data a stage recorded in the state file (stages.<name>.data), or $null.
+    param([Parameter(Mandatory)][string]$Name)
+    if ($state['stages'].Contains($Name) -and $state['stages'][$Name] -is [System.Collections.IDictionary] -and $state['stages'][$Name].Contains('data') -and $state['stages'][$Name]['data'] -is [System.Collections.IDictionary]) { return $state['stages'][$Name]['data'] }
+    return $null
+}
+function Get-ZtpBootstrapBaseline {
+    # What the Bootstrap watch needs to tell this run's voucher from a left-over one: when Media built each node's image
+    # (stages.Media.data.images.<node>.builtAt) and when Boot reset the node onto it (stages.Boot.data.resetAt.<node>). A node
+    # whose image Media did not build in this run, or that Boot did not reset in this run, has no entry.
+    $built = @{}; $reset = @{}
+    $media = Get-ZtpRecordedStageData -Name 'Media'
+    if ($media -and $media.Contains('images') -and $media['images'] -is [System.Collections.IDictionary]) {
+        foreach ($node in $NodeName) {
+            $entry = if ($media['images'].Contains($node)) { $media['images'][$node] } else { $null }
+            if ($entry -is [System.Collections.IDictionary] -and $entry.Contains('builtAt') -and $entry['builtAt']) { $built[$node] = $entry['builtAt'] }
+        }
+    }
+    $boot = Get-ZtpRecordedStageData -Name 'Boot'
+    if ($boot -and $boot.Contains('resetAt') -and $boot['resetAt'] -is [System.Collections.IDictionary]) {
+        foreach ($node in $NodeName) { if ($boot['resetAt'].Contains($node) -and $boot['resetAt'][$node]) { $reset[$node] = $boot['resetAt'][$node] } }
+    }
+    return @{ ImageBuiltAt = $built; ResetAt = $reset }
+}
 function Get-ZtpStageCall {
     param([Parameter(Mandatory)][string]$Name, [switch]$ForExecute)
     $calls = [System.Collections.Generic.List[object]]::new()
@@ -327,6 +351,13 @@ function Get-ZtpStageCall {
             $p = [ordered]@{ NodeName = $NodeName; NodesFile = $NodesFile; Oem = $Oem; EventLogPath = $EventLogPath; TimeoutMinutes = $BootstrapTimeoutMinutes; VoucherTimeoutMinutes = $BootstrapVoucherTimeoutMinutes }
             if ($VoucherFolder) { $p.VoucherFolder = $VoucherFolder } else { $p.ImageDirectory = $ImageDirectory; $p.ImageNamePrefix = $ImageNamePrefix }
             if ($BmcCredential -and -not $VoucherFolder) { $p.Credential = $BmcCredential }
+            if (-not $VoucherFolder) {
+                # A voucher written after this run's image build and node reset belongs to this run, even when the node was fast
+                # enough to write it while the Boot stage was still watching the BMC.
+                $baseline = Get-ZtpBootstrapBaseline
+                if ($baseline.ImageBuiltAt.Count) { $p.ImageBuiltAt = $baseline.ImageBuiltAt }
+                if ($baseline.ResetAt.Count) { $p.ResetAt = $baseline.ResetAt }
+            }
             if ($RfsWriteAttribute) { $p.RfsWriteAttribute = $true }
             if ($SkipCertificateCheck) { $p.SkipCertificateCheck = $true }
             if ($SkipAzureCheck) { $p.SkipAzureCheck = $true } else { $p.SubscriptionId = $SubscriptionId; $p.Location = $Location }
@@ -623,11 +654,20 @@ foreach ($name in $run) {
             $evidence = "handoff $HandoffPath; cluster inputs $ClusterInputsPath"
         }
         'Media' {
+            $mediaStartedAt = [datetime]::UtcNow
             $rows = @(Invoke-ZtpStageScript -Call $calls[0] | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties['ImagePath'] })
             foreach ($node in $NodeName) {
                 $row = @($rows | Where-Object Node -EQ $node)
                 if ($row.Count -ne 1 -or -not (Test-Path -LiteralPath $row[0].ImagePath)) { throw "Media: no image was built for $node." }
             }
+            # The images are built here, without a voucher. The Bootstrap stage uses the build time to tell a voucher this run's
+            # node wrote from one left in a reused image. builtAt is when the build started: the image is never older.
+            $images = [ordered]@{}
+            foreach ($node in $NodeName) {
+                $row = @($rows | Where-Object Node -EQ $node)[0]
+                $images[$node] = [ordered]@{ path = [string]$row.ImagePath; sha256 = $(if ($row.PSObject.Properties['Sha256']) { [string]$row.Sha256 } else { '' }); builtAt = $mediaStartedAt.ToString('o') }
+            }
+            $data = @{ images = $images }
             $evidence = "images $(@($rows | ForEach-Object { Split-Path $_.ImagePath -Leaf }) -join ', ')"
         }
         'Boot' {
@@ -646,6 +686,11 @@ foreach ($name in $run) {
                 if (-not $state['biosOriginal'].Contains($r.Node)) { $state['biosOriginal'][$r.Node] = [ordered]@{} }
                 foreach ($k in @($r.BiosOriginal.Keys)) { if (-not $state['biosOriginal'][$r.Node].Contains($k)) { $state['biosOriginal'][$r.Node][$k] = [string]$r.BiosOriginal[$k] } }
             }
+            # When each node was reset onto its image. The Bootstrap stage starts after the Boot stage has watched the BMC for
+            # up to 10 minutes; a fast node has written its voucher by then, and a voucher written after this reset is this run's.
+            $resetAt = [ordered]@{}
+            foreach ($r in @($rows | Where-Object { $_.PSObject.Properties['ResetAt'] -and $_.ResetAt })) { $resetAt[$r.Node] = ([datetime]$r.ResetAt).ToUniversalTime().ToString('o') }
+            if ($resetAt.Count) { $data = @{ resetAt = $resetAt } }
             Save-ZtpRunState
             foreach ($r in @($rows | Where-Object { $_.PSObject.Properties['Bios'] -and @($_.Bios).Count })) {
                 Write-ZtpEvent -Path $EventLogPath -Node $r.Node -State 'BiosChanged' -Evidence (@($r.Bios) -join '; ') -NextAction '' -Stage 'Boot'

@@ -374,6 +374,18 @@ Describe 'Mount-ZtpVirtualUsb.ps1' {
         ($global:usbCalls | Where-Object { $_ -isnot [string] -and $_.Path -like '*ComputerSystem.Reset' }).Body.ResetType | Should -Be 'On'
     }
 
+    It 'reports the UTC time of the reset, and none when the node is only mounted' {
+        $before = [datetime]::UtcNow
+        $row = @(& $script:mountUsb -Nodes $script:nodes -Credential $script:bmcCredential -NodeName node-01 -ShareHost 192.0.2.10 -Restart -ConfirmNotClustered -Execute -Confirm:$false)[-1]
+        $row.ResetAt | Should -BeOfType [datetime]
+        $row.ResetAt.Kind | Should -Be 'Utc'
+        $row.ResetAt | Should -BeGreaterOrEqual $before.AddSeconds(-1)
+        $row.ResetAt | Should -BeLessOrEqual ([datetime]::UtcNow.AddSeconds(1))
+        $global:usbSlot = $null
+        $mounted = @(& $script:mountUsb -Nodes $script:nodes -Credential $script:bmcCredential -NodeName node-01 -ShareHost 192.0.2.10 -Execute -Confirm:$false)[-1]
+        $mounted.ResetAt | Should -BeNullOrEmpty
+    }
+
     It 'leaves its own image inserted on a rerun and replaces another image' {
         $global:usbSlot = '//192.0.2.10/ztp-virtual-usb/ztp-usb-node-01.img'
         $global:usbProtected = $false
@@ -512,7 +524,7 @@ param([string[]]$IsoPath, $SharePath, $ShareName, $ShareHost, $AllowedBmcAddress
 param($ShareHost, $ShareName, $ImageNamePrefix, $ReadOnly, $RfsWriteAttribute, $Restart, $ConfirmNotClustered, $SkipCertificateCheck, $NodesFile, $Nodes, [string[]]$NodeName, $Credential, $ShareCredential, [switch]$Execute)
 Start-Sleep -Seconds 3
 if ($env:ZTP_TEST_FAIL_NODE -eq $NodeName[0]) { throw "$($NodeName[0]): booted its installed OS" }
-[pscustomobject]@{ Node = $NodeName[0]; Image = "//$ShareHost/$ShareName/ztp-usb-$($NodeName[0]).img"; WriteProtected = $false }
+[pscustomobject]@{ Node = $NodeName[0]; Image = "//$ShareHost/$ShareName/ztp-usb-$($NodeName[0]).img"; WriteProtected = $false; ResetAt = [datetime]::new(2026, 11, 7, 13, 9, 51, [DateTimeKind]::Utc) }
 '@
         $dir = Join-Path $TestDrive 'boot-parallel'
         $null = New-Item -ItemType Directory -Path $dir
@@ -525,6 +537,7 @@ if ($env:ZTP_TEST_FAIL_NODE -eq $NodeName[0]) { throw "$($NodeName[0]): booted i
         $clock.Stop()
         $rows.Node | Should -Be @('node-01', 'node-02')
         $rows | ForEach-Object { $_.Restarted | Should -BeTrue; $_.Image | Should -Match $_.Node }
+        $rows | ForEach-Object { $_.ResetAt | Should -Be ([datetime]::new(2026, 11, 7, 13, 9, 51, [DateTimeKind]::Utc)) -Because 'the Boot stage records the BMC reset time for the Bootstrap stage' }
         $clock.Elapsed.TotalSeconds | Should -BeLessThan 5.5
 
         $env:ZTP_TEST_FAIL_NODE = 'node-02'

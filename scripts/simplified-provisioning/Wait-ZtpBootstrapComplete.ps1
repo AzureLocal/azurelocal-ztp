@@ -42,6 +42,15 @@ Subscription for the Azure prerequisite check.
 Provisioning region for the catalog check (preview: eastus).
 .PARAMETER SkipAzureCheck
 Do not check Azure; a valid voucher alone reaches ReadyForPortal (the event says so).
+.PARAMETER ImageBuiltAt
+Per node (hashtable node -> UTC time): when this run's Media stage built the node's image. Invoke-ZtpProvisioning.ps1 passes
+it from the state file (stages.Media.data.images.<node>.builtAt). With -ResetAt it is the baseline for the voucher: a valid
+voucher already in the image when this watch starts is this run's if the image was built and the node reset in this run
+(a fast node writes it while the Boot stage is still watching the BMC). Without both, a voucher found before the node is
+seen booting is flagged as possibly left by an earlier run and is not accepted until the node is seen booting.
+.PARAMETER ResetAt
+Per node (hashtable node -> UTC time): when this run's Boot stage reset the node onto the image
+(stages.Boot.data.resetAt.<node>).
 .PARAMETER EventLogPath
 JSON-lines event file (default ./ztp-events.jsonl).
 .PARAMETER TimeoutMinutes
@@ -70,6 +79,8 @@ param(
     [string]$Location = 'eastus',
     [switch]$SkipAzureCheck,
     [switch]$SkipCertificateCheck,
+    [hashtable]$ImageBuiltAt,
+    [hashtable]$ResetAt,
     [string]$EventLogPath = (Join-Path (Get-Location) 'ztp-events.jsonl'),
     [ValidateRange(1, 1440)][int]$TimeoutMinutes = 120,
     [ValidateRange(1, 1440)][int]$VoucherTimeoutMinutes = 90,
@@ -120,7 +131,7 @@ $rows = @{}
 foreach ($node in $known) {
     $rows[$node.Name] = [ordered]@{
         Node = $node.Name; Serial = $node.Serial; State = 'NotStarted'; Evidence = ''; Since = $start; Terminal = $false; Warned = $false
-        Tracking = (Initialize-ZtpBmcTracking); StaleWarned = $false; Baseline = $null; Session = $null; VoucherSha256 = $null; Image = $(if ($folderMode) { $null } else { Join-Path $ImageDirectory (Get-ZtpNodeImageName -NodeName $node.Name -Prefix $ImageNamePrefix) })
+        Tracking = (Initialize-ZtpBmcTracking); StaleWarned = $false; Baseline = $null; ThisRun = $false; Session = $null; VoucherSha256 = $null; Image = $(if ($folderMode) { $null } else { Join-Path $ImageDirectory (Get-ZtpNodeImageName -NodeName $node.Name -Prefix $ImageNamePrefix) })
         LastDetail = ''; MediaMissingSince = $null; Bmc = $(if ($folderMode) { $null } else { @($targets | Where-Object Node -EQ $node.Name)[0].Address })
     }
     Write-ZtpEvent -Path $EventLogPath -Node $node.Name -State 'NotStarted' -Evidence 'bootstrap watch started' -NextAction $nextActions['NotStarted']
@@ -179,8 +190,23 @@ try {
                 $detail += "image: $($v.Detail)"
             }
             if ($voucherValid -and $row.State -eq 'NotStarted' -and -not $folderMode -and -not $row.StaleWarned) {
-                $row.StaleWarned = $true; $row.Baseline = $row.VoucherSha256
-                Write-ZtpEvent -Path $EventLogPath -Node $row.Node -State 'NotStarted' -Evidence 'a valid voucher is already in the image before the node was seen booting from it: an image reused from an earlier run?' -NextAction 'Rebuild the image (Invoke-ZtpProvisioning.ps1 -RebuildImages) unless the reuse is intended; a redeployed OS issues a new voucher.' -Level Warning
+                $row.StaleWarned = $true
+                # A voucher found at the first look is this run's when this run built the image and reset the node onto it:
+                # the image was built without a voucher, so the node wrote it after the reset. A fast node finishes the
+                # maintenance environment while the Boot stage is still watching the BMC, so the voucher is there before this
+                # watch starts. Only a voucher this run cannot account for is treated as left over from an earlier run.
+                $built = if ($ImageBuiltAt -and $ImageBuiltAt.ContainsKey($row.Node)) { $ImageBuiltAt[$row.Node] } else { $null }
+                $reset = if ($ResetAt -and $ResetAt.ContainsKey($row.Node)) { $ResetAt[$row.Node] } else { $null }
+                $imageWritten = if ($v.PSObject.Properties['ImageLastWriteUtc']) { $v.ImageLastWriteUtc } else { $null }
+                $provenance = Get-ZtpVoucherProvenance -ImageBuiltAt $built -ResetAt $reset -ImageLastWriteUtc $imageWritten
+                if ($provenance.ThisRun) {
+                    $row.ThisRun = $true
+                    $detail += "voucher already in the image when the watch started: $($provenance.Reason)"
+                }
+                else {
+                    $row.Baseline = $row.VoucherSha256
+                    Write-ZtpEvent -Path $EventLogPath -Node $row.Node -State 'NotStarted' -Evidence "a valid voucher is already in the image before the node was seen booting from it: an image reused from an earlier run? ($($provenance.Reason))" -NextAction 'Rebuild the image (Invoke-ZtpProvisioning.ps1 -RebuildImages) unless the reuse is intended; a redeployed OS issues a new voucher.' -Level Warning
+                }
             }
             # A voucher that was already in the image before the node was seen booting from it is not accepted as new until the node is seen booting (or the voucher changes).
             if ($voucherValid -and -not $folderMode -and $row.State -in 'NotStarted', 'Mounted' -and $row.Baseline -and $row.VoucherSha256 -eq $row.Baseline) { $voucherValid = $false; $detail += 'voucher unchanged since before the boot; waiting for boot evidence' }
@@ -206,8 +232,9 @@ try {
                 $evidence = $next.Evidence
                 if ($next.State -eq 'ReadyForPortal' -and $SkipAzureCheck) { $evidence += ' (Azure check skipped)' }
                 if ($next.State -in 'VoucherWritten', 'ReadyForPortal' -and $row.VoucherSha256) { $evidence += "; voucher SHA256 $($row.VoucherSha256)" }
+                if ($next.State -in 'VoucherWritten', 'ReadyForPortal' -and $row.ThisRun) { $evidence += '; written after this run''s image build and node reset (found when the watch started)' }
                 if ($next.State -eq 'ReadyForPortal' -and $row.State -ne 'VoucherWritten') {
-                    Write-ZtpEvent -Path $EventLogPath -Node $row.Node -State 'VoucherWritten' -Evidence "valid ownership voucher read back from the image; voucher SHA256 $($row.VoucherSha256)" -NextAction $nextActions['VoucherWritten']
+                    Write-ZtpEvent -Path $EventLogPath -Node $row.Node -State 'VoucherWritten' -Evidence "valid ownership voucher read back from the image; voucher SHA256 $($row.VoucherSha256)$(if ($row.ThisRun) { '; written after this run''s image build and node reset (found when the watch started)' })" -NextAction $nextActions['VoucherWritten']
                 }
                 $row.State = $next.State; $row.Evidence = $evidence; $row.Since = $now; $row.Warned = $false
                 Write-ZtpEvent -Path $EventLogPath -Node $row.Node -State $next.State -Evidence $evidence -NextAction $nextActions[$next.State]

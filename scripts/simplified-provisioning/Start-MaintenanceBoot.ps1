@@ -151,5 +151,5 @@ foreach ($node in $NodeName) {
     $done = @($booted | Where-Object Node -EQ $node)[0]
     $row = $done.Row
     $hash = @($share.Images | Where-Object { $_.ImagePath -like "*/$(Get-ZtpNodeImageName -NodeName $node -Prefix $ImageNamePrefix)" })[0].Sha256
-    [pscustomobject]@{ Node = $node; Image = $row.Image; Sha256 = $hash; WriteProtected = $row.WriteProtected; Restarted = [bool]$Restart; Bios = @($done.Bios); BiosOriginal = $done.BiosOriginal }
+    [pscustomobject]@{ Node = $node; Image = $row.Image; Sha256 = $hash; WriteProtected = $row.WriteProtected; Restarted = [bool]$Restart; ResetAt = $(if ($row.PSObject.Properties['ResetAt'] -and $row.ResetAt) { ([datetime]$row.ResetAt).ToUniversalTime() } else { $null }); Bios = @($done.Bios); BiosOriginal = $done.BiosOriginal }
 }
