@@ -14,6 +14,7 @@ Unless a row cites Learn, the behavior below was **proven on Dell AX-760 / iDRAC
 | The Arc machine has a device ID for a name | [Arc machine names](#arc-machine-names) |
 | An unexpected adapter with a `169.254.0.x` address | [The Remote NDIS adapter](#the-remote-ndis-adapter) |
 | The session drops during the Prepare restart | [Restart over WinRM](#restart-over-winrm) |
+| The static management address is on another port than the one with the management MAC | [Static IP lands on the wrong NIC](#static-ip-lands-on-the-wrong-nic) |
 | Validate complains about inbox drivers or several default gateways | [Node state after the OS install](#node-state-after-the-os-install) |
 | Deploy fails with `ParentResourceNotFound` | [Deploy on build 2690](#deploy-fails-with-parentresourcenotfound-on-build-2690) |
 | A job that's running again still carries an error | [Stale error after a resubmit](#stale-error-after-a-resubmit) |
@@ -79,6 +80,40 @@ Learn's portal steps say to "Provide the machine name as the Azure Arc resource 
 **What you see.** Restarting a node inside a remote call kills the WinRM session before the call returns, and that reads as a failure.
 
 **What the run does.** Prepare schedules the restart 10 seconds out (`shutdown /r /t 10`) so the call returns first. Then it waits until WinRM stops answering, waits for the node to come back, and checks that the boot time changed. It restarts at most once.
+
+## Static IP lands on the wrong NIC
+
+**What you see.** With a static management address, the node comes up after the OS install with `ip_address` on a port other than the one whose MAC the environment file names. On a Dell AX-760 it landed on a ConnectX storage port, not the LOM named by MAC. The node doesn't answer on its management address from the management network, and Validate would find the management address on the wrong adapter.
+
+**Cause.** The OS-install request carries the port's MAC in `siteDetails.deviceConfiguration.network.networkAdapters[].macAddress`. Azure accepts it, but the device ignores it. The maintenance environment's provisioning extension (`ProvisioningExtension.dll`) picks the port with `FindReadyPhysicalInterfaceName` and has no `MacAddress` property, so the static address goes to the first ready physical port.
+
+**What the run does.** Two stages, one before the OS install and one after it.
+
+The Device stage, before the claim, sets the address the way the Configurator App does: through the maintenance environment's REST service (`https://<maintenance_address>:20001/BootstrapOobeService`), `SetArcBootstrapDeviceConfiguration` for the adapter with the management MAC. It needs `maintenance_address` for the node; without it the node is skipped. `GetNetworkAdapters` there is verified live; the request body and the status response aren't yet. See [The Device stage](environment-file.md#the-device-stage).
+
+The Network stage, after Ready, checks it and fixes what's still wrong through Azure's per-NIC API (api-version 2026-10-01), with no WinRM and no firewall change:
+
+1. `GET .../edgeMachines/<node>/networkAdapters` lists the adapters. `properties.reportedProperties.macAddress` (12 hex digits, no separators, lower case on the live run) finds the management adapter; separators and case don't matter. No match stops the stage and lists the MACs found.
+2. If another adapter reports `ip_address`, `PUT .../networkAdapters/<name>/jobs/ApplyConfiguration` sets it to `Dhcp` first, and the stage waits until it no longer reports the address.
+3. `PUT .../jobs/ApplyConfiguration` on the management adapter: `ipInterfaceType: Static`, the address, mask, gateway, DNS servers, VLAN and `interfaceState: up`, with the adapter's own `networkConfiguration.adapterName`. The PUT returns 201; `GET` on the same path returns `properties.status` (`DeploymentInProgress`, then success or failure) and the steps under `reportedProperties.deploymentStatus`.
+4. An adapter that already reports the right static configuration isn't touched, so a rerun changes nothing.
+
+Every change is in `<evidence_path>\network-changes.jsonl`. Prepare then checks the address in the OS and leaves it as it is.
+
+The listing, the PUT and the queued job were seen live. The whole stage hasn't yet run end to end on hardware.
+
+**If the stage stops.**
+
+| Message | What to do |
+| --- | --- |
+| Device: "the maintenance environment's REST service at &lt;address&gt;:20001 doesn't answer" | `maintenance_address` is the address on the node's console, TCP 20001 is open from this server, and the password is the one the image was built with (`ztp.maintenance_password_secret`, else `Password1`). A 401 means the password. |
+| Device: "no network adapter in the maintenance environment reports the management MAC" | The message lists the MACs the maintenance environment reports. Correct `mac_address`, then run `-From Device`. |
+| "no network adapter of edge machine &lt;node&gt; reports the management MAC" | The message lists the MACs the machine reports. Correct the management port's `mac_address` in the environment file, then run `-From Network`. |
+| "reports no network adapters" | The OS install hasn't finished. Run the stage after Ready. |
+| A job stays `DeploymentInProgress` with "Job is not yet triggered as other jobs are still running" | Right after the OS install, other jobs on the machine run first. The stage waits up to 60 minutes per job. A rerun (`-From Network`) follows an unfinished job with the same target instead of sending another. |
+| "ApplyConfiguration (apply) failed" | The message has the job's status, its failed step and error. Fix the cause, then run `-From Network`. |
+
+**A risk to know.** If the management port has no address of its own while the static address sits on the wrong port, setting that port to DHCP can cut the node off from Azure until the static address is applied. The stage warns when it sees this. A DHCP server on the management network avoids it: the management port then has a lease while the address moves.
 
 ## Node state after the OS install
 

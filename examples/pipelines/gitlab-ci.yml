@@ -25,7 +25,7 @@ variables:
   ZTP_FROM:
     value: none
     description: Run this stage and every later one (none = continue where the last run stopped)
-    options: [none, Resolve, Media, Boot, Bootstrap, Vouchers, Azure, Ready, Handoff, Prepare]
+    options: [none, Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Handoff, Prepare]
   GIT_CLONE_PATH: $CI_BUILDS_DIR/azurelocal-ztp/repo
 
 stages:

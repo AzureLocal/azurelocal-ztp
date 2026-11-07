@@ -17,9 +17,9 @@ The diagram source is [`diagrams/ztp-flow.drawio`](https://github.com/AzureLocal
 | Layer | Script | Role |
 | --- | --- | --- |
 | Entry point | `Invoke-ZtpEnvironment.ps1` | Reads and checks the environment file. Writes the generated inputs (node list, orchestrator settings, Bicep parameters). Reads the BMC login from Key Vault. Creates the resource group if it's missing. Runs the orchestrator, then Prepare. |
-| Orchestrator | `Invoke-ZtpProvisioning.ps1` | Runs the eight provisioning stages in order. Checks each stage's result. Records completed stages in a state file. |
+| Orchestrator | `Invoke-ZtpProvisioning.ps1` | Runs the ten provisioning stages in order. Checks each stage's result. Records completed stages in a state file. |
 | Node preparation | `Initialize-ZtpNode.ps1` | The Prepare stage. Runs after Ready to cluster. |
-| Stage scripts | `Get-ZtpBootstrapIso.ps1`, `Get-ZtpSbe.ps1`, `New-ZtpVirtualUsbImage.ps1`, `Start-MaintenanceBoot.ps1`, `Mount-ZtpVirtualUsb.ps1`, `Publish-MaintenanceIso.ps1`, `Wait-ZtpBootstrapComplete.ps1`, `Wait-ZtpVoucher.ps1`, `Invoke-ZtpAzureProvisioning.ps1`, `Wait-ZtpMachineReady.ps1`, `New-ZtpHandoff.ps1`, `Convert-ZtpHandoffToClusterInputs.ps1` | Each stage's work. Each script can run alone and is a plan unless you pass `-Execute`. |
+| Stage scripts | `Get-ZtpBootstrapIso.ps1`, `Get-ZtpSbe.ps1`, `New-ZtpVirtualUsbImage.ps1`, `Start-MaintenanceBoot.ps1`, `Mount-ZtpVirtualUsb.ps1`, `Publish-MaintenanceIso.ps1`, `Wait-ZtpBootstrapComplete.ps1`, `Wait-ZtpVoucher.ps1`, `Set-ZtpDeviceConfiguration.ps1`, `Invoke-ZtpAzureProvisioning.ps1`, `Wait-ZtpMachineReady.ps1`, `Set-ZtpManagementAddress.ps1`, `New-ZtpHandoff.ps1`, `Convert-ZtpHandoffToClusterInputs.ps1` | Each stage's work. Each script can run alone and is a plan unless you pass `-Execute`. |
 | Template | `bicep/main.bicep` | Site, site configuration, role assignments and one edge machine per node, claimed with the vouchers. |
 
 All scripts are in `scripts/simplified-provisioning/`. The orchestrator reference is [Orchestrator reference](automated-bootstrap.md).
@@ -36,12 +36,14 @@ A stage starts only when the gate before it passes. A gate that fails, or times 
 | 3 | Boot | Shares the images over SMB, read-write, to the BMC addresses only. Closes stale SMB handles. Inserts each node's image in the BMC's USB-stick slot, sets a one-time boot and resets the node. All nodes in parallel. | On iDRAC 7.30 the boot override must read `Once/Floppy` before the reset (the USB-stick slot boots as virtual floppy there; see [iDRAC quirks](troubleshooting.md#idrac-quirks)). For 10 minutes after the reset, the iDRAC log must not show `OSE1002`, logged on the live runs as "C: boot completed" when the installed OS booted. |
 | 4 | Bootstrap | Watches the BMC and the image until the maintenance environment writes its voucher back. | Every node reaches `ReadyForPortal`: a valid voucher, and the Azure prerequisites checked. |
 | 5 | Vouchers | Reads each voucher from its image, checks the serial, replaces a spent local copy, ejects the media, removes the share. | One valid voucher per serial. |
-| 6 | Azure | Checks prerequisites, builds the Bicep template, runs a what-if, then submits the claim. Refuses to submit when a voucher is missing. | ARM accepted the deployment. |
-| 7 | Ready | Waits for "Ready to cluster" on every node. If a `ProvisionOs` job fails, it re-PUTs `jobs/ProvisionOs` once with the edge machine's existing OS profile and user details. | Each node: lifecycle `Provisioned`, `ProvisionOs` succeeded, Arc `Connected`, mandatory extensions `Succeeded`. |
-| 8 | Handoff | Writes the handoff file and the cluster inputs with each machine's `arcMachineResourceId`. | Both files written. |
-| 9 | Prepare | Installs the OEM's network drivers from the SBE, copies the SBE to `C:\SBE`, creates the deployment admin, sets one static management address. All nodes in parallel. | Each node passes the on-node checks and Azure reports it Ready again. The run prints `<node> is ready for Validate`. |
+| 6 | Device | In the maintenance environment, before the claim: sets each static management address on the port with the node's management MAC, and the host name, through the Configurator App's REST service (`https://<maintenance_address>:20001/BootstrapOobeService`, `SetArcBootstrapDeviceConfiguration`). Nodes without a maintenance address are skipped. See [The Device stage](environment-file.md#the-device-stage). | Each static node with a maintenance address reports the static configuration on its management adapter. |
+| 7 | Azure | Checks prerequisites, builds the Bicep template, runs a what-if, then submits the claim. Refuses to submit when a voucher is missing. | ARM accepted the deployment. |
+| 8 | Ready | Waits for "Ready to cluster" on every node. If a `ProvisionOs` job fails, it re-PUTs `jobs/ProvisionOs` once with the edge machine's existing OS profile and user details. | Each node: lifecycle `Provisioned`, `ProvisionOs` succeeded, Arc `Connected`, mandatory extensions `Succeeded`. |
+| 9 | Network | Puts each static management address on the port with the node's management MAC, through Azure's per-NIC API (`edgeMachines/<node>/networkAdapters`, `jobs/ApplyConfiguration`). A port that holds the address by mistake goes to DHCP first. The OS install ignores the MAC and uses the first ready port; see [Static IP lands on the wrong NIC](troubleshooting.md#static-ip-lands-on-the-wrong-nic). `dhcp` and `preconfigured` nodes are only reported. | Each static node's management adapter reports the address, mask, gateway, DNS and VLAN, and no other adapter reports the address. |
+| 10 | Handoff | Writes the handoff file and the cluster inputs with each machine's `arcMachineResourceId`. | Both files written. |
+| 11 | Prepare | Installs the OEM's network drivers from the SBE, copies the SBE to `C:\SBE`, creates the deployment admin, checks the one static management address in the OS (and sets it only if it's still missing). All nodes in parallel. | Each node passes the on-node checks and Azure reports it Ready again. The run prints `<node> is ready for Validate`. |
 
-Stages 1 to 8 are the orchestrator. Stage 9 is `Initialize-ZtpNode.ps1`, which `Invoke-ZtpEnvironment.ps1` runs after the orchestrator.
+Stages 1 to 10 are the orchestrator. Stage 11 is `Initialize-ZtpNode.ps1`, which `Invoke-ZtpEnvironment.ps1` runs after the orchestrator.
 
 ### The Prepare gates
 
@@ -70,8 +72,9 @@ Prepare exists because a freshly provisioned node isn't ready for cluster valida
 | --- | --- | --- | --- |
 | Management host | Each BMC | TCP 443 (Redfish over HTTPS) | Boot, Bootstrap, Vouchers (eject) |
 | Each BMC | Management host | TCP 445 (SMB) | Boot: the BMC's SMB client connects out from its management IP to the host's share, then reads and writes the image. No inbound SMB port is needed on the BMC. |
+| Management host | Each node's maintenance address | TCP 20001 (HTTPS, self-signed) | Device: the maintenance environment's REST service, before the claim |
 | Management host | Each node's management IP | TCP 5985 (WinRM over HTTP) | Prepare |
-| Management host | Azure, Microsoft download, OEM manifest | TCP 443 | Every stage that reads or changes Azure; Resolve |
+| Management host | Azure, Microsoft download, OEM manifest | TCP 443 | Every stage that reads or changes Azure, Network included (it changes the node's ports through Azure, not WinRM); Resolve |
 | Each node | Azure | TCP 443 (and 80) | Onboarding, OS download, Arc ([firewall requirements](https://learn.microsoft.com/azure/azure-local/concepts/firewall-requirements)) |
 
 The host needs inbound TCP 445 from the BMC addresses only. `Publish-MaintenanceIso.ps1` creates that Windows Firewall rule, scoped to the BMC addresses in the environment file. It also creates a dedicated local account with Change access on the share (Read when it shares an ISO). The Vouchers stage removes the share, the rule and the account.
@@ -84,6 +87,7 @@ The host needs inbound TCP 445 from the BMC addresses only. `Publish-Maintenance
 | Per-node image | Built on the host, shared to the BMC, written back by the machine. | `<media_path>/ztp-virtual-usb/ztp-usb-<node>.img` |
 | Ownership voucher | The machine writes `\vouchers\<serial>\*.pem` into its own image. The host reads it after the eject and writes `<serial>.pem`. At claim time it's base64-encoded into a secure deployment parameter. It's never printed. | `<media_path>/vouchers/<serial>.pem`. Vouchers are one-time use. |
 | BMC login | Key Vault, read into memory. | Never written. |
+| `edgeuser` password | Key Vault (`ztp.maintenance_password_secret`), read into memory. Only its SHA-512 crypt hash goes into the images; the Device stage signs in with it. Without the secret, the published default `Password1`. | Key Vault |
 | SMB share account | Generated with a random password for each publish, held in memory only, removed after the Vouchers stage. | Never written. |
 | Provisioning administrator password | Must already exist as a Key Vault secret. The template passes only the secret's resource ID. Each edge machine's identity gets a constrained right to grant Key Vault Secrets User on the vault, so the OS install can read it. Prepare reads it to sign in. | Key Vault |
 | Deployment admin password | Key Vault (`credentials.local_admin_password_secret`). Prepare reads it and creates the local account. | Key Vault |
@@ -104,9 +108,11 @@ The entry point also writes three generated files inside the clone. They hold en
 
 - **State per set of nodes.** The orchestrator records each completed stage, with its evidence, in `<media_path>/ztp-state/<run>.ztp-provisioning.state.json`. Each set of nodes keeps its own state, so a run for `node-02` alone never disturbs a run for both nodes.
 - **A rerun resumes.** Run the same command again with the same `-Node` list. The orchestrator starts at the first stage that didn't complete. Prepare always runs after it, and it skips steps that are already done.
-- **`-From <Stage>`** runs that stage and every later one, whatever the state file says. `-From Prepare` runs only Prepare. The stages you can name are `Resolve`, `Media`, `Boot`, `Bootstrap`, `Vouchers`, `Azure`, `Ready`, `Handoff` and `Prepare`.
+- **`-From <Stage>`** runs that stage and every later one, whatever the state file says. `-From Prepare` runs only Prepare. The stages you can name are `Resolve`, `Media`, `Boot`, `Bootstrap`, `Vouchers`, `Device`, `Azure`, `Ready`, `Network`, `Handoff` and `Prepare`.
 - **The Azure stage never re-PUTs an existing edge machine.** It claims only the nodes whose edge machine doesn't exist yet. If ARM already has every edge machine, Azure goes straight to Ready.
 - **Images.** A run from the start, or `-From Resolve` or `-From Media`, rebuilds the images. That's a fresh provisioning.
+- **Device** reads the maintenance environment's adapters first and sends nothing when the management adapter is already static and right.
+- **Network** reads each node's adapters first and sends no job to an adapter that already reports the right configuration. A rerun follows an unfinished job with the same target instead of sending another.
 - **Prepare** reads the node's state first. It copies the SBE only if `C:\SBE` doesn't hold it, installs a driver only where the adapter isn't already on that version, and leaves a static address that's already correct.
 
 Running from `Boot` or earlier reinstalls the machines. For a node that's already claimed, delete its edge machine in Azure first. See [Resume a stopped run](operator-guide.md#resume-a-stopped-run).

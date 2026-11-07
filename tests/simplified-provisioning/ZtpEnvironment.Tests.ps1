@@ -495,7 +495,7 @@ Describe 'Invoke-ZtpEnvironment.ps1 plan' {
         $script:envRoot = New-TestRepo -Name 'env-repo' -Copy 'Invoke-ZtpEnvironment.ps1', 'ZtpEnvironment.Common.ps1'
         $script:envScript = Join-Path $script:envRoot 'scripts/simplified-provisioning/Invoke-ZtpEnvironment.ps1'
         $bin = Join-Path $script:envRoot 'scripts/simplified-provisioning'
-        $params = '$ConfigPath, $NodeName, $BmcCredential, $InfrastructureFile, $Node, $DriverStagingPath, $EventLogPath, $From, [switch]$ConfirmNotClustered, [switch]$SkipCertificateCheck, [switch]$RetryProvisionOs, [switch]$RebuildImages, [switch]$Execute'
+        $params = '$ConfigPath, $NodeName, $BmcCredential, $EdgeUserPassword, $InfrastructureFile, $Node, $DriverStagingPath, $EventLogPath, $From, [switch]$ConfirmNotClustered, [switch]$SkipCertificateCheck, [switch]$RetryProvisionOs, [switch]$RebuildImages, [switch]$Execute'
         foreach ($stub in 'Invoke-ZtpProvisioning.ps1', 'Initialize-ZtpNode.ps1') {
             Set-Content -LiteralPath (Join-Path $bin $stub) -Value @"
 [CmdletBinding(SupportsShouldProcess)]
@@ -531,6 +531,7 @@ param($params)
         $cfg.ResourceGroupName | Should -Be 'rg-example'
         $cfg.StatePath | Should -Be (Join-Path $script:media 'ztp-state/node-01+node-02.ztp-provisioning.state.json')
         $cfg.VoucherDirectory | Should -Be (Join-Path $script:media 'vouchers')
+        $cfg.NetworkTimeoutMinutes | Should -Be 60 -Because 'the Network stage waits for each adapter job'
         Test-Path (Join-Path $script:media 'ztp-state') | Should -BeTrue
 
         $bicep = Get-Content -LiteralPath (Join-Path $script:envRoot 'scripts/simplified-provisioning/bicep/main.parameters.json') -Raw | ConvertFrom-Json
@@ -724,6 +725,26 @@ param($params)
         $null = & $script:envScript -InfrastructureFile $infra -MediaPath $script:media -From Azure -Execute *>&1
         $global:ztpE_runs[0].Params['From'] | Should -Be 'Azure'
         $global:ztpE_runs[0].Params.ContainsKey('RebuildImages') | Should -BeFalse
+        $global:ztpE_runs[0].Params.ContainsKey('EdgeUserPassword') | Should -BeFalse -Because 'without ztp.maintenance_password_secret the image keeps its default'
+    }
+
+    It 'reads the edgeuser password from Key Vault for the images and the Device stage, and lists each maintenance address' {
+        $infra = New-TestEnvironment -Name 'env-device' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-device')) -Edit {
+            param($e) $e.ztp['maintenance_password_secret'] = 'keyvault://kv-example/edgeuser-password'; $e.cluster_nodes[0]['maintenance_address'] = '192.0.2.111'
+        }
+        $text = Get-StepText (& $script:envScript -InfrastructureFile $infra -MediaPath $script:media -Execute *>&1)
+        $global:ztpE_calls | Should -Contain 'Get-AzKeyVaultSecret kv-example/edgeuser-password'
+        $global:ztpE_runs[0].Params['EdgeUserPassword'] | Should -BeOfType [securestring]
+        $nodes = Get-Content -LiteralPath (Join-Path $script:envRoot 'config/simplified-provisioning/nodes.json') -Raw | ConvertFrom-Json
+        $nodes.nodes[0].maintenance_address | Should -Be '192.0.2.111'
+        $nodes.nodes[1].PSObject.Properties['maintenance_address'] | Should -BeNullOrEmpty
+        $text | Should -BeLike '*Device stage (static address in the maintenance environment) skips node-02*'
+        $cfg = Get-Content -LiteralPath (Join-Path $script:envRoot 'config/simplified-provisioning/ztp-provisioning.json') -Raw | ConvertFrom-Json
+        $cfg.DeviceTimeoutMinutes | Should -Be 30
+        $bad = New-TestEnvironment -Name 'env-device-bad' -Edit { param($e) $e.ztp['maintenance_password_secret'] = 'Password1'; $e.cluster_nodes[0]['maintenance_address'] = 'console' }
+        $problems = @(Test-ZtpEnvironment -Environment (Read-ZtpEnvironmentFile -Path $bad))
+        $problems | Should -Contain 'ztp.maintenance_password_secret must be keyvault://<vault>/<secret>.'
+        $problems | Should -Contain "cluster_nodes[0] (node-01).maintenance_address must be an IPv4 address, not 'console'."
     }
 }
 
@@ -778,6 +799,7 @@ Describe 'Schema 5 infrastructure.yml' {
         @{ Case = 'a 5.0 node with management only'; Edit = { param($d) foreach ($n in $d.nodes) { $mac = $n.network_adapters[0].mac_address; $ip = $n.network_adapters[0].ip_address; $n.Remove('network_adapters'); $n['management'] = [ordered]@{ ip_address = $ip; mac_address = $mac; adapter_name = 'Port1' } } }; Check = { param($e) $e.cluster_nodes[0].adapter_name | Should -Be 'Port1'; $e.cluster_nodes[0].Contains('network_adapters') | Should -BeFalse; $e.cluster_nodes[0].ip_assignment | Should -Be 'static' } }
         @{ Case = 'a BMC user name that is not a secret, and BIOS settings'; Edit = { param($d) $d.hardware.bmc.username = 'root'; $d.hardware['bios'] = [ordered]@{ Slot2 = 'Disabled' }; $d.nodes[1]['bios'] = [ordered]@{ Slot2 = 'Enabled' } }; Check = { param($e) $e.ztp.bmc_secret.username | Should -Be 'root'; $e.ztp.bmc_secret.Contains('username_name') | Should -BeFalse; (Get-ZtpEnvironmentBios -Environment $e -Node $e.cluster_nodes[1])['Slot2'] | Should -Be 'Enabled'; (Get-ZtpEnvironmentBios -Environment $e -Node $e.cluster_nodes[0])['Slot2'] | Should -Be 'Disabled' } }
         @{ Case = 'the BMC user name secret in its own vault'; Edit = { param($d) $d.key_vaults.Add([ordered]@{ name = 'kv-example-bmc'; subscription_id = '00000000-0000-0000-0000-000000000000'; resource_group = 'rg-example-vault' }); $d.hardware.bmc.username = 'keyvault://kv-example-bmc/bmc-user' }; Check = { param($e) $e.ztp.bmc_secret.username_vault | Should -Be 'kv-example-bmc'; $e.ztp.bmc_secret.username_name | Should -Be 'bmc-user'; @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0 } }
+        @{ Case = 'the maintenance address from the provisioning port, and the edgeuser password secret'; Edit = { param($d) $d.nodes[0].network_adapters.Add([ordered]@{ name = 'Port 3'; mac_address = '02:00:00:00:00:33'; roles = @('provisioning'); ip_assignment = 'dhcp_reservation'; ip_address = '192.0.2.111' }); $d.provisioning.simplified['maintenance_password'] = 'keyvault://kv-example/edgeuser-password' }; Check = { param($e) $e.cluster_nodes[0].maintenance_address | Should -Be '192.0.2.111'; $e.cluster_nodes[1].Contains('maintenance_address') | Should -BeFalse; $e.ztp.maintenance_password_secret | Should -Be 'keyvault://kv-example/edgeuser-password'; @(Test-ZtpEnvironment -Environment $e).Count | Should -Be 0 } }
         @{ Case = 'the site range, the run folders and a provisioning subscription'; Edit = { param($d) $d.networking.management['site_ip_range'] = [ordered]@{ start = '192.0.2.10'; end = '192.0.2.19' }; $d.provisioning.simplified['subscription_id'] = '00000000-0000-0000-0000-000000000002'; $d.provisioning.simplified['resource_group'] = 'rg-example-ztp' }; Check = { param($e) (Get-ZtpSiteNetwork -Environment $e).Range | Should -Be '192.0.2.10-192.0.2.19'; $e.ztp.subscription_id | Should -Be '00000000-0000-0000-0000-000000000002'; $e.ztp.resource_group | Should -Be 'rg-example-ztp' } }
     ) {
         $e = & $script:read (New-TestInfrastructureV5 -Name "v5-case-$([guid]::NewGuid().ToString('N'))" -Edit $Edit)

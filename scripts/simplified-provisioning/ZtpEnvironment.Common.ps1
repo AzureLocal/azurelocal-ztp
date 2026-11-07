@@ -153,6 +153,8 @@ function Test-ZtpEnvironment {
             if ($For -eq 'Provision') {
                 & $check $n 'service_tag' "$label.service_tag" 'text'
                 & $check $n 'idrac_ip' "$label.idrac_ip" 'ip'
+                # Where the Device stage reaches the maintenance environment's REST service (its DHCP lease, best reserved).
+                & $check $n 'maintenance_address' "$label.maintenance_address" 'ip' -Optional
             }
             & $checkBios (Get-ZtpEnvValue -Environment $n -Path 'bios') "$label.bios"
             $nodeMode = Get-ZtpEnvValue -Environment $n -Path 'ip_assignment'
@@ -261,6 +263,9 @@ function Test-ZtpEnvironment {
         if ($null -ne $tags -and $tags -isnot [System.Collections.IDictionary]) { $problems.Add('ztp.tags must be a mapping of tag names to values.') }
         $allow = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.node_preparation.allow_unvalidated_sbe'
         if ($null -ne $allow -and $allow -isnot [bool]) { $problems.Add("ztp.node_preparation.allow_unvalidated_sbe must be true or false, not '$allow'.") }
+        # The maintenance environment's edgeuser password: preset in the image and used by the Device stage. Default Password1.
+        $edge = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.maintenance_password_secret'
+        if ($null -ne $edge -and "$edge" -ne '' -and [string]$edge -notmatch '^keyvault://([^/]+)/(.+)$') { $problems.Add('ztp.maintenance_password_secret must be keyvault://<vault>/<secret>.') }
     }
     return $problems.ToArray()
 }
@@ -630,7 +635,8 @@ function Test-ZtpInfrastructureV5 {
         foreach ($ref in @(
                 @{ Path = 'identity.local_admin.password'; Value = (Get-ZtpEnvValue -Environment $Data -Path 'identity.local_admin.password') }
                 @{ Path = 'hardware.bmc.password'; Value = (Get-ZtpEnvValue -Environment $Data -Path 'hardware.bmc.password') }
-                @{ Path = 'hardware.bmc.username'; Value = (Get-ZtpEnvValue -Environment $Data -Path 'hardware.bmc.username') })) {
+                @{ Path = 'hardware.bmc.username'; Value = (Get-ZtpEnvValue -Environment $Data -Path 'hardware.bmc.username') }
+                @{ Path = 'provisioning.simplified.maintenance_password'; Value = (Get-ZtpEnvValue -Environment $Data -Path 'provisioning.simplified.maintenance_password') })) {
             $r = Split-ZtpKeyVaultReference $ref.Value
             if (-not $r) { continue }
             if (-not $vaults.ContainsKey($r.Vault)) { "$($ref.Path) names vault '$($r.Vault)', which isn't in key_vaults." }
@@ -674,6 +680,10 @@ function ConvertFrom-ZtpInfrastructureV5 {
         & $put $node 'arc_machine_name' $arc
         & $put $node 'service_tag' $n['serial_number']
         if ($n['bmc'] -is [System.Collections.IDictionary]) { & $put $node 'idrac_ip' $n['bmc']['ip_address'] }
+        # The maintenance environment's address (the Device stage): the ip_address of the node's port with role
+        # provisioning that the file gives one (its DHCP reservation), when that port isn't the management port.
+        $provisioning = @(@($n['network_adapters']) | Where-Object { $_ -is [System.Collections.IDictionary] -and 'provisioning' -in @($_['roles']) -and 'management' -notin @($_['roles']) -and $_['ip_address'] })
+        if ($provisioning.Count -ge 1) { & $put $node 'maintenance_address' ([string]$provisioning[0]['ip_address']) }
         if ($n['rack_position']) { $node['rack_position'] = $n['rack_position'] }
         if ($n['bios'] -is [System.Collections.IDictionary]) { $node['bios'] = $n['bios'] }
         if ($n.Contains('network_adapters')) {
@@ -731,6 +741,7 @@ function ConvertFrom-ZtpInfrastructureV5 {
         if ($vaults.ContainsKey($adminRef.Vault)) { & $put $adminSecret 'subscription_id' $vaults[$adminRef.Vault]['subscription_id']; & $put $adminSecret 'resource_group' $vaults[$adminRef.Vault]['resource_group'] }
     }
     $ztp['admin_secret'] = $adminSecret
+    & $put $ztp 'maintenance_password_secret' $simplified['maintenance_password']
     $bmcSecret = [ordered]@{}
     $passwordRef = Split-ZtpKeyVaultReference (& $v 'hardware.bmc.password')
     if ($passwordRef) { $bmcSecret['vault'] = $passwordRef.Vault; $bmcSecret['password_name'] = $passwordRef.Secret }
@@ -757,7 +768,9 @@ function ConvertTo-ZtpSchema5Message {
     $m = $m -replace 'cluster_nodes\[(\d+)\]( \([^)]*\))?\.service_tag', 'nodes[$1]$2.serial_number'
     $m = $m -replace 'cluster_nodes\[(\d+)\]( \([^)]*\))?\.idrac_ip', 'nodes[$1]$2.bmc.ip_address'
     $m = $m -replace 'cluster_nodes\[(\d+)\]( \([^)]*\))?\.ip_assignment', 'nodes[$1]$2 management port ip_assignment'
+    $m = $m -replace 'cluster_nodes\[(\d+)\]( \([^)]*\))?\.maintenance_address', 'nodes[$1]$2 provisioning port ip_address'
     $map = [ordered]@{
+        'ztp.maintenance_password_secret'              = 'provisioning.simplified.maintenance_password'
         'cluster_nodes'                                = 'nodes'
         'azure_identity.azure_tenant_id'               = 'azure.tenant_id'
         'azure_resources.location'                     = 'azure.location'

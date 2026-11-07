@@ -71,6 +71,7 @@ The template gives each edge machine's identity the right to assign **Key Vault 
 | --- | --- | --- |
 | Management host to each BMC | TCP 443 | Redfish |
 | Each BMC to the management host | TCP 445 | SMB, opened by the BMC from its management IP. The host needs it inbound from the BMC addresses only. `Publish-MaintenanceIso.ps1` creates that Windows Firewall rule, scoped to the BMC addresses. Open it on any firewall in between. |
+| Management host to each node's `maintenance_address` | TCP 20001 | HTTPS to the maintenance environment's REST service, for the Device stage (self-signed certificate) |
 | Management host to each node's `ip_address` | TCP 5985 | WinRM over HTTP, for Prepare |
 | Management host to the internet | TCP 443 | Azure Resource Manager, Microsoft Entra ID, Key Vault, the maintenance ISO download (`aka.ms/aep/installeros/<YYMM>`), the OEM's SBE manifest |
 | Nodes to Azure | TCP 443 and 80 | Learn's firewall requirements. No HTTPS inspection. See [Learn: firewall requirements](https://learn.microsoft.com/azure/azure-local/concepts/firewall-requirements). |
@@ -219,7 +220,7 @@ Add `-Node node-01, node-02` to limit the run to some nodes. With `-Execute`, th
 
 1. Reads the BMC login from Key Vault.
 2. Creates the resource group if it's missing.
-3. Runs the eight provisioning stages with `-ConfirmNotClustered`. That flag tells the Boot stage the machines may be reinstalled.
+3. Runs the ten provisioning stages with `-ConfirmNotClustered`: Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network and Handoff. That flag tells the Boot stage the machines may be reinstalled. Device puts each static management address on the port with the node's management MAC in the maintenance environment, before the claim ([The Device stage](environment-file.md#the-device-stage)); Network checks it through Azure after the OS install ([The Network stage](environment-file.md#the-network-stage)).
 4. Runs Prepare on all named nodes in parallel.
 
 It ends with `<node> is ready for Validate` for each node, or throws with the reason. A failure gives a non-zero exit code.
@@ -260,6 +261,8 @@ To run a stage and every later one again, add `-From`:
 | Where it stopped | Command |
 | --- | --- |
 | Ready timed out, or a node failed twice at `ProvisionOs` | `-From Ready`. Ready resubmits a failed job once more per run. |
+| Device (the maintenance environment didn't answer, no adapter with the management MAC, or the status reported a failure) | `-From Device`. A port that's already right is left alone. Before the claim only: once Azure has claimed the node, use `-From Network`. |
+| Network (no adapter with the management MAC, or a network adapter job failed or timed out) | `-From Network`. A port that's already right is left alone. |
 | Handoff | `-From Handoff` |
 | Prepare (a gate failed, or the node didn't come back) | `-From Prepare`. Prepare skips what's done. |
 | Before Azure (Boot, Bootstrap, Vouchers) | Rerun without `-From`, or `-From Boot` to boot again. Boot reinstalls the machine. |
@@ -281,7 +284,7 @@ A node is ready for Validate when every check below passed. The run checks all o
 | Edge machine lifecycle `Provisioned`; `ProvisionOs` job reports `DeploymentSuccess` | Ready, Prepare gates 1 and 4 |
 | Arc machine `Connected`, with an `arcMachineResourceId` | Ready |
 | Arc extensions `AzureEdgeDeviceManagement`, `AzureEdgeLifecycleManager`, `AzureEdgeRemoteSupport` and `AzureEdgeTelemetryAndDiagnostics` all `Succeeded` | Ready (`Test-ProvisionedMachines.ps1`) |
-| Static address `ip_address/prefix` on the adapter with the management MAC | Prepare gate 4 |
+| Static address `ip_address/prefix` on the adapter with the management MAC | Network (as Azure reports the adapter), Prepare gate 4 (in the OS) |
 | Exactly one default gateway, on the management adapter. No DHCP on adapters of the same model. | Prepare gate 4 |
 | Every adapter that has a driver in the SBE runs that driver version | Prepare gate 4 |
 | `C:\SBE` holds the three SBE files, and the zip's hash matches | Prepare gate 4 |

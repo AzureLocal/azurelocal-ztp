@@ -100,7 +100,7 @@ One JSON object per line, UTF-8 without a BOM. The writer opens the file with re
 | `evidence` | What the state is based on. Vouchers appear only as their SHA-256. |
 | `nextAction` | What the run waits for next, or what to do |
 | `level` | `Info`, `Warning` or `Error` |
-| `stage` | `Bootstrap` for node events. For stage events, the stage: `Resolve`, `Media`, `Boot`, `Bootstrap`, `Vouchers`, `Azure`, `Ready` or `Handoff`. |
+| `stage` | `Bootstrap`, `Device`, `Network` or `Prepare` for node events. For stage events, the stage: `Resolve`, `Media`, `Boot`, `Bootstrap`, `Vouchers`, `Device`, `Azure`, `Ready`, `Network` or `Handoff`. |
 
 ### Every state the scripts write
 
@@ -121,6 +121,20 @@ One JSON object per line, UTF-8 without a BOM. The writer opens the file with re
 | `MediaRejected` | node | `Error` | The image isn't inserted after 3 minutes, or it's inserted write-protected. |
 | `VoucherMissing` | node | `Error` | No valid voucher by the voucher deadline (90 minutes). |
 | `Failed` | node | `Error` | The overall bootstrap budget (120 minutes) ran out. |
+| `DeviceConfigurationSubmitted` | node | `Info` | Device: `SetArcBootstrapDeviceConfiguration` was sent to the maintenance environment. |
+| `DeviceConfigurationStatus` | node | `Info` | Device: the status or the management adapter's report changed. |
+| `DeviceAddressSet` | node | `Info` | Device: the management adapter reports the static address in the maintenance environment. |
+| `DeviceAddressAlreadySet` | node | `Info` | Device: it already did; nothing was sent. |
+| `DeviceAddressReported` | node | `Info` | Device: a `dhcp` or `preconfigured` node; the evidence is what its management adapter reports. |
+| `DeviceConfigurationSkipped` | node | `Warning` | Device: the node has no maintenance address; Network sets the address after the OS install. |
+| `DeviceConfigurationFailed` | node | `Error` | Device: the service didn't answer, no adapter has the management MAC, or the status reported a failure or the wait timed out. |
+| `NetworkJobSubmitted` | node | `Info` | Network: an `ApplyConfiguration` job was sent to an adapter (or an unfinished one with the same target is followed). The evidence names the adapter, its MAC and the target. |
+| `NetworkJobStatus` | node | `Info` | Network: the job's status or steps changed, for example `DeploymentInProgress` with "Job is not yet triggered as other jobs are still running". |
+| `ManagementAddressReleased` | node | `Info` | Network: another adapter held the management address and is now on DHCP. |
+| `ManagementAddressSet` | node | `Info` | Network: the management adapter reports the static address. |
+| `ManagementAddressAlreadySet` | node | `Info` | Network: the management adapter already reported it; nothing was sent. |
+| `ManagementAddressReported` | node | `Info` | Network: a `dhcp` or `preconfigured` node; the evidence is what its management adapter reports. |
+| `ManagementAddressFailed` | node | `Error` | Network: no adapter has the management MAC, or a job failed or timed out. The evidence holds the reason. |
 | `PrepareStarted` | node | `Info` | Prepare: Azure reports the node ready to cluster and the run is signing in (gates 1 and 2). A new one starts a new attempt. |
 | `PrepareDriversInstalled` | node | `Info` | Prepare: the task on the node finished. The evidence lists each driver install and network change (gate 3). |
 | `PrepareRestarting` | node | `Info` | Prepare: a driver or Windows asked for a restart, and the run scheduled it. |
@@ -130,7 +144,7 @@ One JSON object per line, UTF-8 without a BOM. The writer opens the file with re
 
 `ZtpEvents.Common.ps1` also declares the failure states `BootStalled` and `EnvironmentStalled`, but no script writes them. A stall is a `Warning` event on the current state.
 
-Node events come from the Bootstrap and Prepare stages (stage `Bootstrap` or `Prepare`). Boot, Vouchers, Azure, Ready and Handoff write only their stage events: follow those on the console, in Azure or in Sonar.
+Node events come from the Bootstrap, Device, Network and Prepare stages (stage `Bootstrap`, `Device`, `Network` or `Prepare`). Boot, Vouchers, Azure, Ready and Handoff write only their stage events: follow those on the console, in Azure or in Sonar.
 
 Example lines:
 

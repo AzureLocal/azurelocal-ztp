@@ -8,7 +8,7 @@ Docs: [Automated bootstrap](../../docs/automated-bootstrap.md) (the whole path, 
 
 | Stage | Script | What it does |
 |-------|--------|--------------|
-| All | `Invoke-ZtpProvisioning.ps1` | Runs the stages below in order (Resolve, Media, Boot, Bootstrap, Vouchers, Azure, Ready, Handoff), checks each result before the next, records completed stages in a state file and resumes there (`-Stage`, `-From`, `-ResetState`). Settings from parameters or a JSON file (`-ConfigPath`). |
+| All | `Invoke-ZtpProvisioning.ps1` | Runs the stages below in order (Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Handoff), checks each result before the next, records completed stages in a state file and resumes there (`-Stage`, `-From`, `-ResetState`). Settings from parameters or a JSON file (`-ConfigPath`). |
 | Resolve | `Get-ZtpBootstrapIso.ps1` | Finds the newest published maintenance ISO (`aka.ms/aep/installeros/<YYMM>`, calendar rule, preview opt-in), downloads it with resume, verifies it (trust on first use) and writes `bootstrap-manifest.json`. |
 | Resolve | `Get-ZtpSbe.ps1` | Newest OEM SBE for a model and solution version from the OEM discovery manifest (`config/oem/<oem>.json`); verifies a package you supply against the published SHA256; stages it for deployment or update (never on the media). |
 | Media | `Invoke-ZtpPrepareMedia.ps1` | Config-file driven: Resolve plus one verified image per node. |
@@ -19,11 +19,13 @@ Docs: [Automated bootstrap](../../docs/automated-bootstrap.md) (the whole path, 
 | Bootstrap | `Wait-ZtpBootstrapComplete.ps1` | One read-only watch: Mounted, Booting, MaintenanceEnvironmentRunning, VoucherWritten, ReadyForPortal, with JSON-lines events (Redfish, voucher read-back, Azure prerequisites). |
 | Vouchers | `Wait-ZtpVoucher.ps1` | Wait for the voucher in each image, eject, extract `<serial>.pem`; `-VoucherFolder` takes Configurator App vouchers. |
 | Vouchers | `Read-ZtpVoucherFromImage.ps1` | Read and validate vouchers from images (read-only). |
+| Device | `Set-ZtpDeviceConfiguration.ps1` | Before the claim: the static management address on the adapter with the management MAC, and the host name, through the maintenance environment's REST service (`https://<maintenance_address>:20001/BootstrapOobeService`, `SetArcBootstrapDeviceConfiguration`); logs to `device-changes.jsonl`. |
 | Azure | `Get-ZtpOsImage.ps1` | List or resolve the OS image versions (read-only). |
 | Azure | `Invoke-ZtpAzureProvisioning.ps1` | Prereqs, Validate, Plan, Execute, Watch: site, configuration and edge machines from `bicep/main.bicep`. |
 | Ready | `Wait-ZtpMachineReady.ps1` | Poll edge machines and `ProvisionOs` jobs until ready to cluster; `-RetryProvisionOs -Execute` resubmits a failed job. |
 | Ready | `Update-ArcMachineNames.ps1` | Node to Arc machine name rows; `-MapPath` JSON map. |
 | Ready | `Test-ProvisionedMachines.ps1` | Read-only check that the Arc machines are connected with the mandatory extensions. |
+| Network | `Set-ZtpManagementAddress.ps1` | Puts each static management address on the adapter with the management MAC through `edgeMachines/<node>/networkAdapters` and `jobs/ApplyConfiguration` (2026-10-01), moving it off any other adapter first; leaves a right adapter alone; logs to `network-changes.jsonl`. |
 | Handoff | `New-ZtpHandoff.ps1` | `ztp-handoff.json`: Arc machine names, site, solution, bootstrap and SBE versions, timestamps. |
 | Handoff | `Convert-ZtpHandoffToClusterInputs.ps1` | The `arc_machine_names` block (and `sbe`, `release`) for the cluster deployment environment file, YAML or JSON. |
 | Monitor | `Start-ZtpMonitor.ps1` | Writes a Sonar config for the event file and the edge machines and starts AzureLocal Sonar. |

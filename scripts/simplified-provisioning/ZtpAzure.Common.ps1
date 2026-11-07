@@ -2,10 +2,11 @@
 <#
 .SYNOPSIS
 Shared helpers of the Azure half of simplified machine provisioning (dot-sourced by Invoke-ZtpAzureProvisioning.ps1,
-Get-ZtpOsImage.ps1, Wait-ZtpMachineReady.ps1 and Update-ArcMachineNames.ps1).
+Get-ZtpOsImage.ps1, Wait-ZtpMachineReady.ps1, Update-ArcMachineNames.ps1 and Set-ZtpManagementAddress.ps1).
 .DESCRIPTION
 ARM transport (Invoke-AzRestMethod under the operator's Az context; no token ever leaves memory), the HCI OS image
-catalog, ownership voucher files, edge machine and ProvisionOs job status, and the Learn ProvisionOs retry body. Response shapes are the ones a live run returned (edgeMachines and
+catalog, ownership voucher files, edge machine and ProvisionOs job status, the Learn ProvisionOs retry body, and the edge
+machine's network adapters and their ApplyConfiguration jobs. Response shapes are the ones a live run returned (edgeMachines and
 edgeMachines/jobs, api-version 2026-10-01; fixtures in tests/simplified-provisioning/fixtures). Nothing here prints a voucher or a secret.
 #>
 Set-StrictMode -Version Latest
@@ -392,6 +393,186 @@ function Get-ZtpArcMachineAddress {
         }
     }
     return @($addresses | Select-Object -Unique)
+}
+
+# ------------------------------------------------------------------ edge machine network adapters (2026-10-01)
+# edgeMachines/{machine}/networkAdapters lists each NIC of a provisioned machine: properties.networkConfiguration is the
+# desired configuration, properties.reportedProperties what the machine reports (the same fields plus macAddress,
+# interfaceDescription and componentId). networkAdapters/{name}/jobs/ApplyConfiguration changes one NIC. Shapes: Microsoft's
+# spec examples EdgeMachineNetworkAdapters_List, EdgeMachineNetworkAdapterJobs_CreateOrUpdate_ApplyConfiguration and
+# EdgeMachineNetworkAdapterJobs_Get, and a live run (Dell AX-760, 2026-11), where macAddress came as 12 lower-case hex digits.
+
+function ConvertTo-ZtpMacKey {
+    <#
+    .SYNOPSIS
+    A MAC address as 12 lower-case hex digits without separators (aa:bb:cc:dd:ee:ff, AA-BB-CC-DD-EE-FF, aabb.ccdd.eeff
+    and aabbccddeeff all give aabbccddeeff). Empty for an empty value; throws for anything that isn't a MAC.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([AllowNull()][AllowEmptyString()][string]$MacAddress)
+    if ([string]::IsNullOrWhiteSpace($MacAddress)) { return '' }
+    $digits = ($MacAddress.Trim() -replace '[:\-\.\s]', '').ToLowerInvariant()
+    if ($digits -notmatch '^[0-9a-f]{12}$') { throw "'$MacAddress' isn't a MAC address." }
+    return $digits
+}
+
+function Format-ZtpMac {
+    # aabbccddeeff -> aa:bb:cc:dd:ee:ff, for messages.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([AllowEmptyString()][string]$Key)
+    if ($Key -notmatch '^[0-9a-f]{12}$') { return $Key }
+    return (($Key -split '(..)' | Where-Object { $_ }) -join ':')
+}
+
+function ConvertTo-ZtpNetworkSetting {
+    # One networkConfiguration / reportedProperties / targetConfiguration object as a flat row (vlanId 0 when absent).
+    [CmdletBinding()]
+    param([AllowNull()][object]$Configuration)
+    $vlan = Get-ZtpPropertyValue $Configuration 'vlanId'
+    $vlanNumber = 0
+    if ($null -ne $vlan -and "$vlan" -ne '') { $vlanNumber = [int]$vlan }
+    return [pscustomobject]@{
+        AdapterName    = [string](Get-ZtpPropertyValue $Configuration 'adapterName' '')
+        Type           = [string](Get-ZtpPropertyValue $Configuration 'ipInterfaceType' '')
+        Ip             = [string](Get-ZtpPropertyValue $Configuration 'ip4Address' '')
+        Mask           = [string](Get-ZtpPropertyValue $Configuration 'subnetMask' '')
+        Gateway        = [string](Get-ZtpPropertyValue $Configuration 'defaultGateway' '')
+        Dns            = @(@(Get-ZtpPropertyValue $Configuration 'dnsServers' @()) | Where-Object { $_ } | ForEach-Object { [string]$_ })
+        Vlan           = $vlanNumber
+        InterfaceState = [string](Get-ZtpPropertyValue $Configuration 'interfaceState' '')
+    }
+}
+
+function Format-ZtpNetworkSetting {
+    # "Static 192.0.2.11 255.255.255.0 gw 192.0.2.1 DNS 192.0.2.53 VLAN 0 up", for messages.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][object]$Setting)
+    $type = if ($Setting.Type) { $Setting.Type } else { 'no type' }
+    $parts = @($type)
+    if ($Setting.Ip) { $parts += $Setting.Ip }
+    if ($Setting.Mask) { $parts += $Setting.Mask }
+    if ($Setting.Gateway) { $parts += "gw $($Setting.Gateway)" }
+    if (@($Setting.Dns).Count) { $parts += "DNS $(@($Setting.Dns) -join ',')" }
+    $parts += "VLAN $($Setting.Vlan)"
+    if ($Setting.InterfaceState) { $parts += $Setting.InterfaceState }
+    return ($parts -join ' ')
+}
+
+function Get-ZtpNetworkAdapterRow {
+    <#
+    .SYNOPSIS
+    The rows of an edgeMachines/{machine}/networkAdapters list: Name (the resource name used in the job path), AdapterName
+    (networkConfiguration.adapterName, else the reported one), Mac (ConvertTo-ZtpMacKey of the reported macAddress),
+    Description, Desired and Reported (ConvertTo-ZtpNetworkSetting).
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][object]$List)
+    $rows = foreach ($item in @(Get-ZtpPropertyValue $List 'value' @())) {
+        if ($null -eq $item) { continue }
+        $p = Get-ZtpPropertyValue $item 'properties'
+        $desired = ConvertTo-ZtpNetworkSetting (Get-ZtpPropertyValue $p 'networkConfiguration')
+        $reportedObject = Get-ZtpPropertyValue $p 'reportedProperties'
+        $reported = ConvertTo-ZtpNetworkSetting $reportedObject
+        $rawMac = [string](Get-ZtpPropertyValue $reportedObject 'macAddress' '')
+        $mac = try { ConvertTo-ZtpMacKey $rawMac } catch { $rawMac.ToLowerInvariant() }
+        [pscustomobject]@{
+            Name        = [string](Get-ZtpPropertyValue $item 'name' '')
+            AdapterName = $(if ($desired.AdapterName) { $desired.AdapterName } else { $reported.AdapterName })
+            Mac         = $mac
+            Description = [string](Get-ZtpPropertyValue $reportedObject 'interfaceDescription' '')
+            Desired     = $desired
+            Reported    = $reported
+        }
+    }
+    return @($rows)
+}
+
+function Test-ZtpNetworkSettingMatch {
+    <#
+    .SYNOPSIS
+    True when -Reported carries -Target: interface type (case-insensitive), and for Static the address, mask, gateway,
+    DNS servers (in order) and VLAN; the interface state when both name one.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([Parameter(Mandatory)][object]$Reported, [Parameter(Mandatory)][object]$Target)
+    if ($Reported.Type -ne $Target.Type) { return $false }
+    if ($Target.InterfaceState -and $Reported.InterfaceState -and $Reported.InterfaceState -ne $Target.InterfaceState) { return $false }
+    if ($Reported.Vlan -ne $Target.Vlan) { return $false }
+    if ($Target.Type -ne 'Static') { return $true }
+    if ($Reported.Ip -ne $Target.Ip -or $Reported.Mask -ne $Target.Mask -or $Reported.Gateway -ne $Target.Gateway) { return $false }
+    return ((@($Reported.Dns) -join ',') -eq (@($Target.Dns) -join ','))
+}
+
+function Get-ZtpNetworkJobState {
+    <#
+    .SYNOPSIS
+    Summarises a networkAdapters/{name}/jobs/ApplyConfiguration resource: Status (properties.status, else provisioningState),
+    the step lines of validationStatus and deploymentStatus (nested steps included, with their description and messages),
+    Succeeded, Failed (with FailureReason: status, provisioningState, deployment status, a failed step or an error), Done and
+    Target (the job's targetConfiguration as ConvertTo-ZtpNetworkSetting, $null when it has none). Statuses seen: Running
+    (spec, at the PUT), DeploymentInProgress (live, while queued or applying), Succeeded (spec); DeploymentSuccess and
+    DeploymentFailed are the ProvisionOs job's words and are read the same way.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][object]$Job)
+    if ($null -eq $Job) {
+        return [pscustomobject]@{ Exists = $false; Status = ''; Steps = @(); Succeeded = $false; Failed = $false; Done = $false; FailureReason = ''; Target = $null; StartTimeUtc = $null; Text = 'no job' }
+    }
+    $p = Get-ZtpPropertyValue $Job 'properties'
+    # ConvertFrom-Json turns an ISO time into a [datetime]; a string is parsed as UTC. 0001-01-01 means not started.
+    $startRaw = Get-ZtpPropertyValue $p 'startTimeUtc'
+    $start = [datetime]::MinValue
+    $startUtc = if ($startRaw -is [datetime]) { if ($startRaw.Kind -eq [DateTimeKind]::Local) { $startRaw.ToUniversalTime() } else { [datetime]::SpecifyKind($startRaw, [DateTimeKind]::Utc) } }
+    elseif ($startRaw -and [datetime]::TryParse([string]$startRaw, [cultureinfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor [System.Globalization.DateTimeStyles]::AssumeUniversal, [ref]$start)) { $start }
+    else { $null }
+    if ($null -ne $startUtc -and $startUtc.Year -le 1) { $startUtc = $null }
+    $status = [string](Get-ZtpPropertyValue $p 'status' '')
+    $provisioning = [string](Get-ZtpPropertyValue $p 'provisioningState' '')
+    $deployment = [string](Get-ZtpPathValue $p 'reportedProperties.deploymentStatus.status' '')
+    $failures = [System.Collections.Generic.List[string]]::new()
+    $steps = [System.Collections.Generic.List[string]]::new()
+    $walk = {
+        param($list, [string]$prefix)
+        foreach ($step in @($list)) {
+            if ($null -eq $step) { continue }
+            $name = [string](Get-ZtpPropertyValue $step 'name' '')
+            $stepStatus = [string](Get-ZtpPropertyValue $step 'status' '')
+            $notes = @([string](Get-ZtpPropertyValue $step 'description' ''), [string](Get-ZtpPropertyValue $step 'message' '')) +
+                @(@(Get-ZtpPropertyValue $step 'exception' @()) | ForEach-Object { [string]$_ }) | Where-Object { $_ } | Select-Object -Unique
+            $steps.Add(("$prefix$name $stepStatus" + $(if ($notes) { ": $($notes -join '; ')" } else { '' })).Trim())
+            if ($stepStatus -match 'Fail|Error') { $failures.Add("step $prefix$name $stepStatus$(if ($notes) { ": $($notes -join '; ')" })") }
+            & $walk (Get-ZtpPropertyValue $step 'steps' @()) "$prefix$name/"
+        }
+    }
+    & $walk (Get-ZtpPathValue $p 'reportedProperties.validationStatus.steps' @()) ''
+    & $walk (Get-ZtpPathValue $p 'reportedProperties.deploymentStatus.steps' @()) ''
+    if ($status -match 'Fail|Error|Cancel') { $failures.Insert(0, "status $status") }
+    if ($provisioning -in 'Failed', 'Canceled') { $failures.Add("provisioningState $provisioning") }
+    if ($deployment -match 'Fail|Error') { $failures.Add("deployment $deployment") }
+    foreach ($jobError in @((Get-ZtpPropertyValue $Job 'error'), (Get-ZtpPropertyValue $p 'error'), (Get-ZtpPathValue $p 'reportedProperties.error'))) {
+        if ($null -eq $jobError) { continue }
+        $code = [string](Get-ZtpPropertyValue $jobError 'code' ''); $message = [string](Get-ZtpPropertyValue $jobError 'message' '')
+        if ($code -or $message) { $failures.Add("error $code $message".Trim()) }
+    }
+    $effective = if ($status) { $status } else { $provisioning }
+    $succeeded = $failures.Count -eq 0 -and ($effective -in 'Succeeded', 'Success', 'DeploymentSuccess', 'Completed' -or (-not $status -and $deployment -eq 'Success'))
+    $targetObject = Get-ZtpPropertyValue $p 'targetConfiguration'
+    return [pscustomobject]@{
+        Exists        = $true
+        Status        = $effective
+        Steps         = @($steps)
+        Succeeded     = $succeeded
+        Failed        = ($failures.Count -gt 0)
+        Done          = ($succeeded -or $failures.Count -gt 0)
+        FailureReason = ($failures -join '; ')
+        Target        = $(if ($null -ne $targetObject) { ConvertTo-ZtpNetworkSetting $targetObject } else { $null })
+        StartTimeUtc  = $startUtc
+        Text          = ("$(if ($effective) { $effective } else { 'no status' })" + $(if ($steps.Count) { " ($($steps -join ' | '))" } else { '' }))
+    }
 }
 
 function Get-ZtpProvisionOsRetryBody {

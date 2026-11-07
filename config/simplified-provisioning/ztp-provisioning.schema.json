@@ -42,7 +42,9 @@
     "DeploymentName": { "type": "string", "default": "ztp-provisioning" },
     "ArcMachineNameMapPath": { "type": "string" },
     "ReadyTimeoutMinutes": { "type": "integer", "minimum": 0, "maximum": 1440, "default": 180 },
-    "PollIntervalSeconds": { "type": "integer", "minimum": 0, "maximum": 3600, "default": 60 },
+    "PollIntervalSeconds": { "type": "integer", "minimum": 0, "maximum": 3600, "default": 60, "description": "Poll interval of the Ready and Network stages." },
+    "DeviceTimeoutMinutes": { "type": "integer", "minimum": 0, "maximum": 1440, "default": 30, "description": "Device stage: how long the maintenance environment may take to report the static management address." },
+    "NetworkTimeoutMinutes": { "type": "integer", "minimum": 0, "maximum": 1440, "default": 60, "description": "Network stage: how long each ApplyConfiguration job on a network adapter may take, and then the adapter to report its result." },
     "HandoffPath": { "type": "string", "default": "./ztp-handoff.json" },
     "ClusterInputsPath": { "type": "string", "default": "./ztp-cluster-inputs.yaml", "description": ".yaml or .json" },
     "StatePath": { "type": "string", "default": "./ztp-provisioning.state.json" }

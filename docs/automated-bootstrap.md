@@ -38,8 +38,10 @@ Set `RfsWriteAttribute` to `true` for iDRAC 7.30 (see [iDRAC quirks](troubleshoo
 | Boot | `Start-MaintenanceBoot.ps1` (`Set-ZtpBios.ps1`, `Publish-MaintenanceIso.ps1`, `Mount-ZtpVirtualUsb.ps1`) | Every node's BIOS reports the file's settings; every node attached and restarted |
 | Bootstrap | `Wait-ZtpBootstrapComplete.ps1` | Every node `ReadyForPortal` |
 | Vouchers | `Wait-ZtpVoucher.ps1`, then `Publish-MaintenanceIso.ps1 -Remove` | A valid voucher per node |
+| Device | `Set-ZtpDeviceConfiguration.ps1` | Each static node with a maintenance address reports the static address on its management adapter in the maintenance environment |
 | Azure | `Invoke-ZtpAzureProvisioning.ps1` stages Prereqs, Validate, Plan, Execute | No voucher problem; deployment accepted |
 | Ready | `Invoke-ZtpAzureProvisioning.ps1 -Stage Watch`, `Test-ProvisionedMachines.ps1` | Every machine ready to cluster and its Arc machine verified |
+| Network | `Set-ZtpManagementAddress.ps1` | Each static node's management adapter (found by MAC) reports the static address, and no other adapter reports it |
 | Handoff | `New-ZtpHandoff.ps1`, `Convert-ZtpHandoffToClusterInputs.ps1` | Both files written |
 
 What each stage does is in [Design and architecture](architecture.md#stages-and-gates).

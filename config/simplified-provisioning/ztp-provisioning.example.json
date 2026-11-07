@@ -29,6 +29,8 @@
   "ArcMachineNameMapPath": "./config/simplified-provisioning/arc-machine-names.json",
   "ReadyTimeoutMinutes": 180,
   "PollIntervalSeconds": 60,
+  "DeviceTimeoutMinutes": 30,
+  "NetworkTimeoutMinutes": 60,
   "HandoffPath": "./ztp-handoff.json",
   "ClusterInputsPath": "./ztp-cluster-inputs.yaml",
   "StatePath": "./ztp-provisioning.state.json"

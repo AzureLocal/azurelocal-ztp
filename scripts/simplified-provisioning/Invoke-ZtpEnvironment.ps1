@@ -6,9 +6,13 @@
 .DESCRIPTION
     Reads infrastructure.yml, writes ZTP's settings, node list and Bicep parameters, creates the cluster resource group,
     reads the iDRAC login from the management vault, finds this server's address as the iDRACs reach it, then runs
-    Invoke-ZtpProvisioning.ps1. A failed OS install is resubmitted once automatically. After Ready to cluster, the
-    Prepare stage (Initialize-ZtpNode.ps1) installs the OEM's network drivers from the SBE, copies the SBE to C:\SBE, creates the
-    deployment admin and leaves one static management address, so the nodes are ready for Validate.
+    Invoke-ZtpProvisioning.ps1. Before the claim, the Device stage (Set-ZtpDeviceConfiguration.ps1) sets each static
+    management address on the port with the node's management MAC in the maintenance environment, through the Configurator
+    App's REST service, for every node with a maintenance address. A failed OS install is resubmitted once automatically. After Ready to cluster, the Network
+    stage (Set-ZtpManagementAddress.ps1) puts each static management address on the port with the node's management MAC
+    through Azure's per-NIC API, because the OS install puts it on the first ready port. Then the Prepare stage
+    (Initialize-ZtpNode.ps1) installs the OEM's network drivers from the SBE, copies the SBE to C:\SBE, creates the
+    deployment admin and checks the one static management address in the OS, so the nodes are ready for Validate.
 
     Without -Execute it writes the generated files and shows ZTP's plan. Nothing changes in Azure or on a node.
     With -Execute it REINSTALLS the named nodes. Run it elevated, because it creates the share, a local account and a
@@ -21,7 +25,8 @@
 .PARAMETER Node
     Nodes to provision. Defaults to every node in the environment file.
 .PARAMETER From
-    Stage to resume from.
+    Stage to resume from: Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Handoff (each runs with every
+    later one, then Prepare), or Prepare alone.
 .PARAMETER MediaPath
     Where the maintenance ISO, node images (about 4 GB each), vouchers, unpacked drivers and run state are kept. Overrides
     ztp.media_path; without either, %ProgramData%\AzureLocalZtp\<ztp.site_name>\media. Refused inside a git working tree;
@@ -47,7 +52,7 @@
 param(
     [Parameter(Mandatory)][string]$InfrastructureFile,
     [string[]]$Node,
-    [ValidateSet('Resolve', 'Media', 'Boot', 'Bootstrap', 'Vouchers', 'Azure', 'Ready', 'Handoff', 'Prepare')][string]$From,
+    [ValidateSet('Resolve', 'Media', 'Boot', 'Bootstrap', 'Vouchers', 'Device', 'Azure', 'Ready', 'Network', 'Handoff', 'Prepare')][string]$From,
     [string]$MediaPath,
     [string]$EvidencePath,
     [string]$ValidatorPath,
@@ -122,6 +127,9 @@ $runName = $Node -join '+'
 # The node list the stages read. bios (hardware.bios merged with the node's own) is applied by the Boot stage.
 @{ nodes = @($nodeList | ForEach-Object {
             $entry = [ordered]@{ name = [string]$_.name; service_tag = [string]$_.service_tag; bmc_address = [string]$_.idrac_ip; management_ip = [string]$_.ip_address }
+            # The Device stage reaches the maintenance environment's REST service on this address.
+            $maintenance = [string](Get-ZtpEnvValue -Environment $_ -Path 'maintenance_address')
+            if ($maintenance) { $entry.maintenance_address = $maintenance }
             $bios = Get-ZtpEnvironmentBios -Environment $env_ -Node $_
             if ($bios.Count) { $entry.bios = $bios }
             $entry
@@ -132,6 +140,9 @@ $biosPlan = @(foreach ($n in $nodeList) {
         if ($b.Count) { "$($n.name) $(@($b.Keys | ForEach-Object { "$_=$($b[$_])" }) -join ', ')" }
     })
 if ($biosPlan) { Write-Output "BIOS set by the Boot stage before the maintenance boot: $($biosPlan -join '; ')." }
+$withoutMaintenance = @($nodeList | Where-Object { $_.name -in $Node -and -not (Get-ZtpEnvValue -Environment $_ -Path 'maintenance_address') } | ForEach-Object { [string]$_.name })
+if ($withoutMaintenance) { Write-Output "Device stage (static address in the maintenance environment) skips $($withoutMaintenance -join ', '): no maintenance address in the environment file. The Network stage sets the address after the OS install." }
+$edgeSecret = Split-ZtpKeyVaultReference (Get-ZtpEnvValue -Environment $env_ -Path 'ztp.maintenance_password_secret')
 
 if ($UseManagedIdentity) {
     Connect-AzAccount -Identity -WarningAction SilentlyContinue | Out-Null
@@ -245,6 +256,8 @@ $bicepParameters | ConvertTo-Json -Depth 10 | Set-Content $parameters
     ArcMachineNameMapPath          = Join-Path $state "$runName.arc-machine-names.json"
     ReadyTimeoutMinutes            = 180
     PollIntervalSeconds            = 60
+    DeviceTimeoutMinutes           = 30
+    NetworkTimeoutMinutes          = 60
     HandoffPath                    = Join-Path $state "$runName.ztp-handoff.json"
     ClusterInputsPath              = Join-Path $state "$runName.ztp-cluster-inputs.yaml"
     StatePath                      = Join-Path $state "$runName.ztp-provisioning.state.json"
@@ -277,6 +290,8 @@ try {
     else { Get-AzKeyVaultSecret -VaultName $(if ($ztp.bmc_secret.Contains('username_vault') -and $ztp.bmc_secret.username_vault) { [string]$ztp.bmc_secret.username_vault } else { [string]$ztp.bmc_secret.vault }) -Name ([string]$ztp.bmc_secret.username_name) -AsPlainText }
     $password = Get-AzKeyVaultSecret -VaultName ([string]$ztp.bmc_secret.vault) -Name ([string]$ztp.bmc_secret.password_name)
     $bmc = [pscredential]::new($user, $password.SecretValue)
+    # The maintenance environment's edgeuser password: the image builder presets it, and the Device stage signs in with it.
+    $edgePassword = if ($edgeSecret) { (Get-AzKeyVaultSecret -VaultName $edgeSecret.Vault -Name $edgeSecret.Secret).SecretValue } else { $null }
 
     Set-AzContext -Tenant $tenant -Subscription $clusterSub -Scope Process -WarningAction SilentlyContinue | Out-Null
     if (-not (Get-AzResourceGroup -Name $rg -ErrorAction SilentlyContinue)) {
@@ -294,6 +309,7 @@ try {
         Execute              = $true
         Confirm              = $false
     }
+    if ($edgePassword) { $run.EdgeUserPassword = $edgePassword }
     if ($From) { $run.From = $From }
     # A run that builds media (from the start, Resolve or Media) is a fresh provisioning, so replace this tool's own images.
     if (-not $From -or $From -in 'Resolve', 'Media') { $run.RebuildImages = $true }

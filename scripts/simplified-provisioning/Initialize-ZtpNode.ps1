@@ -18,6 +18,8 @@
             created. Drivers, a static address on the adapter with the node's management MAC, DHCP off and the gateway
             removed on every other adapter holding a routable address, DNS and time run on the node as SYSTEM in a
             scheduled task, so the session dropping doesn't stop them. If the static address fails, DHCP comes back on.
+            The Network stage (Set-ZtpManagementAddress.ps1) normally set that address through Azure already; here it is
+            the in-OS backstop: an address, prefix, gateway and DNS that are already right are left as they are.
     Gate 3  The node answers again and reports success. If a driver asked for a restart or Windows has one pending, the
             node is restarted once, and the run waits for it to come back with a new boot time.
     With -Execute and more than one node, the nodes are prepared at the same time, one worker process each.
@@ -322,9 +324,16 @@ try {
         $route | Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
         $log.Add("$($o.Name): DHCP off, address and gateway removed")
     }
-    $static = Get-NetIPAddress -InterfaceIndex $nic.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -eq $p.Ip -and $_.PrefixOrigin -eq 'Manual' }
+    # The Network stage normally set this address through Azure already: an address, prefix and gateway that are right
+    # are left alone, and a missing gateway is added without touching the address.
+    $static = Get-NetIPAddress -InterfaceIndex $nic.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -eq $p.Ip -and $_.PrefixOrigin -eq 'Manual' -and $_.PrefixLength -eq $p.Prefix }
+    $gatewayRoute = Get-NetRoute -InterfaceIndex $nic.ifIndex -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Where-Object { $_.NextHop -eq $p.Gateway }
     if ($p.Mode -ne 'static') { $log.Add("$($nic.Name): management address left as it is ($($p.Mode))") }
-    elseif ($static) { $log.Add("$($nic.Name): already static $($p.Ip)") }
+    elseif ($static -and $gatewayRoute) { $log.Add("$($nic.Name): already static $($p.Ip)/$($p.Prefix) gateway $($p.Gateway); left as it is") }
+    elseif ($static) {
+        New-NetRoute -InterfaceIndex $nic.ifIndex -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -NextHop $p.Gateway | Out-Null
+        $log.Add("$($nic.Name): already static $($p.Ip)/$($p.Prefix); gateway $($p.Gateway) added")
+    }
     else {
         try {
             Set-NetIPInterface -InterfaceIndex $nic.ifIndex -AddressFamily IPv4 -Dhcp Disabled
@@ -339,8 +348,12 @@ try {
         }
     }
     if ($p.Mode -eq 'static') {
-        Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses $p.Dns
-        $log.Add("$($nic.Name): DNS $($p.Dns -join ',')")
+        $haveDns = @((Get-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses)
+        if (($haveDns -join ',') -eq (@($p.Dns) -join ',')) { $log.Add("$($nic.Name): DNS already $($p.Dns -join ',')") }
+        else {
+            Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses $p.Dns
+            $log.Add("$($nic.Name): DNS $($p.Dns -join ',')")
+        }
     }
     if ($p.Ntp) {
         & w32tm.exe /config /manualpeerlist:"$($p.Ntp -join ' ')" /syncfromflags:manual /update | Out-Null
@@ -390,7 +403,9 @@ foreach ($n in $Node) {
         $extra = Get-ExtraGateway $before $keep
         $kept = @($before.Adapters | Where-Object { $_.Mac -in $keep } | ForEach-Object Name)
         if (-not $Execute) {
-            $addressPlan = if ($nodeMode -eq 'static') { "static $ip/$prefix gw $gateway on $($before.Mgmt.Name)" } else { "$($before.Mgmt.Name) left as it is ($nodeMode; expect $ip)" }
+            $addressPlan = if ($nodeMode -ne 'static') { "$($before.Mgmt.Name) left as it is ($nodeMode; expect $ip)" }
+            elseif (@($before.Mgmt.Addresses) -contains "$ip/$prefix Manual" -and $before.Mgmt.Gateway) { "static $ip/$prefix already on $($before.Mgmt.Name) (the Network stage), left as it is" }
+            else { "static $ip/$prefix gw $gateway on $($before.Mgmt.Name)" }
             Write-Step "  PLAN: drivers $(($drivers | ForEach-Object { "$($_.Inf) $($_.Version)" }) -join ', ') (signatures valid); SBE to C:\SBE; create $deployAdmin; $addressPlan; DHCP and gateway off on $(if ($extra) { $extra -join ', ' } else { 'none' })$(if ($kept) { "; DHCP kept on $($kept -join ', ') (dhcp in the file)" }); DNS $($dns -join ','); time $($ntp -join ',')."
             continue
         }

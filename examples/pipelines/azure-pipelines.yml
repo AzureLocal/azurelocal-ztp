@@ -26,7 +26,7 @@ parameters:
     displayName: Run this stage and every later one (none = continue where the last run stopped)
     type: string
     default: none
-    values: [none, Resolve, Media, Boot, Bootstrap, Vouchers, Azure, Ready, Handoff, Prepare]
+    values: [none, Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Handoff, Prepare]
 
 pool:
   name: ztp-management

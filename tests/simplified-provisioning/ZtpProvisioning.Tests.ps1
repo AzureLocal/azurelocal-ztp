@@ -19,11 +19,11 @@ BeforeAll {
     'TimeoutMinutes', 'Action', 'Remove', 'SharePath', 'Stage', 'SubscriptionId', 'ResourceGroupName', 'ParameterFile', 'VoucherPath', 'OsVersion',
     'SiteMode', 'Node', 'DeploymentName', 'AdminPassword', 'PollIntervalSeconds', 'RetryProvisionOs', 'ArcMachineNameMapPath', 'ExpectedMachineName',
     'Version', 'CacheDirectory', 'IncludePreview', 'MaxTrain', 'Oem', 'SolutionVersion', 'Model', 'Family', 'PackagePath', 'EventLogPath', 'VoucherTimeoutMinutes',
-    'SkipAzureCheck', 'Location', 'HandoffPath', 'SbeManifestPath', 'BootstrapManifestPath', 'OutputPath', 'Format', 'BiosLogPath'
+    'SkipAzureCheck', 'Location', 'HandoffPath', 'SbeManifestPath', 'BootstrapManifestPath', 'OutputPath', 'Format', 'BiosLogPath', 'ChangeLogPath'
     $paramBlock = ($names | ForEach-Object { "[object]`$$_" }) -join ', '
     foreach ($script in 'New-ZtpVirtualUsbImage.ps1', 'Start-MaintenanceBoot.ps1', 'Wait-ZtpVoucher.ps1', 'Mount-ZtpVirtualUsb.ps1', 'Publish-MaintenanceIso.ps1',
         'Invoke-ZtpAzureProvisioning.ps1', 'Test-ProvisionedMachines.ps1', 'Get-ZtpBootstrapIso.ps1', 'Get-ZtpSbe.ps1', 'Wait-ZtpBootstrapComplete.ps1',
-        'New-ZtpHandoff.ps1', 'Convert-ZtpHandoffToClusterInputs.ps1') {
+        'Set-ZtpDeviceConfiguration.ps1', 'Set-ZtpManagementAddress.ps1', 'New-ZtpHandoff.ps1', 'Convert-ZtpHandoffToClusterInputs.ps1') {
         $body = @"
 [CmdletBinding(SupportsShouldProcess)]
 param($paramBlock)
@@ -51,6 +51,8 @@ if (`$global:ztpRunBehavior.ContainsKey('$script')) { & `$global:ztpRunBehavior[
             'New-ZtpHandoff.ps1'              = { param($p) if ($p['Execute']) { Set-Content -LiteralPath $p['HandoffPath'] -Value '{}' } }
             'Convert-ZtpHandoffToClusterInputs.ps1' = { param($p) Set-Content -LiteralPath $p['OutputPath'] -Value 'arc_machine_names: {}' }
             'Start-MaintenanceBoot.ps1'       = { param($p) if ($p['Execute']) { foreach ($n in $p['NodeName']) { [pscustomobject]@{ Node = $n; Image = "ztp-usb-$n.img"; WriteProtected = $false; Restarted = $true } } } }
+            'Set-ZtpDeviceConfiguration.ps1'  = { param($p) if ($p['Execute']) { foreach ($n in $p['Node']) { [pscustomobject]@{ Node = $n; Mode = 'static'; Status = $(if ($n -eq 'node-01') { 'Changed' } else { 'Skipped' }); Adapter = 'eno1'; MacAddress = '00:00:5e:00:53:aa'; Address = $(if ($n -eq 'node-01') { '192.0.2.11' } else { '' }); MaintenanceAddress = $(if ($n -eq 'node-01') { '192.0.2.111' } else { '' }); Released = @() } } } else { 'PLAN: node-01: POST SetArcBootstrapDeviceConfiguration' } }
+            'Set-ZtpManagementAddress.ps1'    = { param($p) if ($p['Execute']) { foreach ($n in $p['Node']) { [pscustomobject]@{ Node = $n; Mode = 'static'; Status = $(if ($n -eq 'node-01') { 'Changed' } else { 'AlreadySet' }); Adapter = '00000000-0000-0000-0000-000000000001'; AdapterName = 'Port1'; MacAddress = '00:00:5e:00:53:aa'; Address = "192.0.2.1$($n[-1])"; Released = @(if ($n -eq 'node-01') { 'Port3' }); Changes = @() } } } else { 'PLAN: node-01: ApplyConfiguration on Port1' } }
             'Wait-ZtpVoucher.ps1'             = { param($p) foreach ($n in $p['NodeName']) { $serial = if ($n -eq 'node-01') { 'EXAMPLE1' } else { 'EXAMPLE2' }; $f = Join-Path $p['OutputDirectory'] "$serial.pem"; Set-Content -LiteralPath $f -Value 'pem'; [pscustomobject]@{ Node = $n; Serial = $serial; OutputFile = $f; Valid = $true } } }
             'Invoke-ZtpAzureProvisioning.ps1' = { param($p)
                 switch ($p['Stage']) {
@@ -106,12 +108,12 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
         { & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; Confirm = $false } } | Should -Throw '*Boot*BmcCredential*'
     }
 
-    It 'runs Resolve (skipped) -> Media -> Boot -> Bootstrap -> Vouchers -> Azure -> Ready -> Handoff in order and records every stage' {
+    It 'runs Resolve (skipped) -> Media -> Boot -> Bootstrap -> Vouchers -> Device -> Azure -> Ready -> Network -> Handoff in order and records every stage' {
         $rows = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false }
         & $script:called | Should -Be @('New-ZtpVirtualUsbImage.ps1', 'Start-MaintenanceBoot.ps1', 'Wait-ZtpBootstrapComplete.ps1', 'Wait-ZtpVoucher.ps1', 'Publish-MaintenanceIso.ps1',
-            'Invoke-ZtpAzureProvisioning.ps1', 'Invoke-ZtpAzureProvisioning.ps1', 'Invoke-ZtpAzureProvisioning.ps1', 'Invoke-ZtpAzureProvisioning.ps1',
-            'Invoke-ZtpAzureProvisioning.ps1', 'Test-ProvisionedMachines.ps1', 'New-ZtpHandoff.ps1', 'Convert-ZtpHandoffToClusterInputs.ps1')
-        @($rows | ForEach-Object Stage) | Should -Be @('Resolve', 'Media', 'Boot', 'Bootstrap', 'Vouchers', 'Azure', 'Ready', 'Handoff')
+            'Set-ZtpDeviceConfiguration.ps1', 'Invoke-ZtpAzureProvisioning.ps1', 'Invoke-ZtpAzureProvisioning.ps1', 'Invoke-ZtpAzureProvisioning.ps1', 'Invoke-ZtpAzureProvisioning.ps1',
+            'Invoke-ZtpAzureProvisioning.ps1', 'Test-ProvisionedMachines.ps1', 'Set-ZtpManagementAddress.ps1', 'New-ZtpHandoff.ps1', 'Convert-ZtpHandoffToClusterInputs.ps1')
+        @($rows | ForEach-Object Stage) | Should -Be @('Resolve', 'Media', 'Boot', 'Bootstrap', 'Vouchers', 'Device', 'Azure', 'Ready', 'Network', 'Handoff')
         @($global:ztpRunCalls | Where-Object Script -EQ 'Invoke-ZtpAzureProvisioning.ps1' | ForEach-Object { $_.Params.Stage }) | Should -Be @('Prereqs', 'Validate', 'Plan', 'Execute', 'Watch')
         $boot = $global:ztpRunCalls | Where-Object Script -EQ 'Start-MaintenanceBoot.ps1'
         $boot.Params.Restart | Should -BeTrue
@@ -120,8 +122,57 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
         $test.Params.ResourceGroupName | Should -Be 'rg-example'
         $test.Params.ExpectedMachineName | Should -Be @('00000000-0000-0000-0000-000000000000-1', '00000000-0000-0000-0000-000000000000-2')
         $state = Get-Content $script:statePath -Raw | ConvertFrom-Json -AsHashtable
-        @($state.stages.Keys).Count | Should -Be 8
+        @($state.stages.Keys).Count | Should -Be 10
         $state.stages.Resolve.evidence | Should -Match 'skipped'
+    }
+
+    It 'Network sets the management addresses after Ready, logs the changes beside the event log and records each node' {
+        $null = & $script:invoke @{ Execute = $true; Stage = 'Network'; Confirm = $false; NetworkTimeoutMinutes = 15; PollIntervalSeconds = 5 }
+        $net = $global:ztpRunCalls | Where-Object Script -EQ 'Set-ZtpManagementAddress.ps1'
+        $net.Params.Execute | Should -BeTrue
+        $net.Params.Node | Should -Be @('node-01', 'node-02')
+        $net.Params.ParameterFile | Should -Be 'main.parameters.json'
+        $net.Params.SubscriptionId | Should -Be '00000000-0000-0000-0000-000000000000'
+        $net.Params.ResourceGroupName | Should -Be 'rg-example'
+        $net.Params.TimeoutMinutes | Should -Be 15
+        $net.Params.PollIntervalSeconds | Should -Be 5
+        $net.Params.ChangeLogPath | Should -Be (Join-Path $TestDrive 'network-changes.jsonl')
+        $net.Params.EventLogPath | Should -Be (Join-Path $TestDrive 'events.jsonl')
+        $state = Get-Content $script:statePath -Raw | ConvertFrom-Json -AsHashtable
+        $state.stages.Network.evidence | Should -Be 'node-01 Port1 00:00:5e:00:53:aa static 192.0.2.11 (Changed; released from Port3); node-02 Port1 00:00:5e:00:53:aa static 192.0.2.12 (AlreadySet)'
+    }
+
+    It 'Network fails when a static node''s address is not set, and the plan shows the stage''s own plan when it is next' {
+        $global:ztpRunBehavior['Set-ZtpManagementAddress.ps1'] = { param($p) foreach ($n in $p['Node']) { [pscustomobject]@{ Node = $n; Mode = 'static'; Status = 'Planned'; AdapterName = 'Port1'; MacAddress = ''; Address = ''; Released = @() } } }
+        { & $script:invoke @{ Execute = $true; Stage = 'Network'; Confirm = $false } } | Should -Throw '*Network: the static management address of node-01 is Planned, not set*'
+        $global:ztpRunCalls.Clear(); $global:ztpRunBehavior = & $script:healthy
+        $out = & $script:invoke @{ Stage = 'Network' }
+        $plan = @($global:ztpRunCalls | Where-Object Script -EQ 'Set-ZtpManagementAddress.ps1')
+        $plan.Count | Should -Be 1
+        $plan[0].Params.ContainsKey('Execute') | Should -BeFalse
+        $out | Should -Contain 'PLAN: node-01: ApplyConfiguration on Port1'
+    }
+
+    It 'Device sets the address in the maintenance environment before the claim, with the edgeuser password, and lets a node without a maintenance address through' {
+        $edge = ConvertTo-SecureString 'Example-Not-A-Secret-2' -AsPlainText -Force
+        $null = & $script:invoke @{ Execute = $true; Stage = 'Device'; Confirm = $false; EdgeUserPassword = $edge; DeviceTimeoutMinutes = 12 }
+        $device = $global:ztpRunCalls | Where-Object Script -EQ 'Set-ZtpDeviceConfiguration.ps1'
+        $device.Params.Execute | Should -BeTrue
+        $device.Params.Node | Should -Be @('node-01', 'node-02')
+        $device.Params.NodesFile | Should -Be $script:nodesFile
+        $device.Params.ParameterFile | Should -Be 'main.parameters.json'
+        $device.Params.EdgeUserPassword | Should -Be $edge
+        $device.Params.TimeoutMinutes | Should -Be 12
+        $device.Params.ChangeLogPath | Should -Be (Join-Path $TestDrive 'device-changes.jsonl')
+        $state = Get-Content $script:statePath -Raw | ConvertFrom-Json -AsHashtable
+        $state.stages.Device.evidence | Should -Be 'node-01 eno1 00:00:5e:00:53:aa static 192.0.2.11 (Changed); node-02 no maintenance_address, left to Network (Skipped)'
+        $global:ztpRunBehavior['Set-ZtpDeviceConfiguration.ps1'] = { param($p) foreach ($n in $p['Node']) { [pscustomobject]@{ Node = $n; Mode = 'static'; Status = 'Planned'; MaintenanceAddress = '192.0.2.111' } } }
+        { & $script:invoke @{ Execute = $true; Stage = 'Device'; Confirm = $false } } | Should -Throw '*Device: the static management address of node-01 is Planned, not set*'
+    }
+
+    It 'runs -From Network: Network then Handoff' {
+        $null = & $script:invoke @{ Execute = $true; From = 'Network'; Confirm = $false }
+        & $script:called | Should -Be @('Set-ZtpManagementAddress.ps1', 'New-ZtpHandoff.ps1', 'Convert-ZtpHandoffToClusterInputs.ps1')
     }
 
     It 'writes StageStarted and StageCompleted events for every stage and StageFailed with the reason when a stage throws' {
@@ -205,7 +256,7 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
         $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; NodeName = 'node-01' }
         $global:ztpRunCalls.Clear()
         $null = & $script:invoke @{ Execute = $true; From = 'Azure'; Confirm = $false; NodeName = 'node-01' }
-        (& $script:called | Select-Object -Unique) | Should -Be @('Invoke-ZtpAzureProvisioning.ps1', 'Test-ProvisionedMachines.ps1', 'New-ZtpHandoff.ps1', 'Convert-ZtpHandoffToClusterInputs.ps1')
+        (& $script:called | Select-Object -Unique) | Should -Be @('Invoke-ZtpAzureProvisioning.ps1', 'Test-ProvisionedMachines.ps1', 'Set-ZtpManagementAddress.ps1', 'New-ZtpHandoff.ps1', 'Convert-ZtpHandoffToClusterInputs.ps1')
         { & $script:invoke @{ Execute = $true; From = 'Ready'; Confirm = $false } } | Should -Throw '*records nodes node-01*'
     }
 

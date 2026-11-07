@@ -1,7 +1,7 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-Zero-touch provisioning of Azure Local machines, end to end: Resolve -> Media -> Boot -> Bootstrap -> Vouchers -> Azure -> Ready -> Handoff.
+Zero-touch provisioning of Azure Local machines, end to end: Resolve -> Media -> Boot -> Bootstrap -> Vouchers -> Device -> Azure -> Ready -> Network -> Handoff.
 .DESCRIPTION
 One orchestrator over the stage scripts in this folder. Every input is a parameter, or a key of the same name in a JSON
 settings file (-ConfigPath; see config/simplified-provisioning/ztp-provisioning.example.json). A parameter wins over the
@@ -25,15 +25,25 @@ file; nothing is hardcoded.
             ejects the media, writes <serial>.pem into -VoucherDirectory. -VoucherFolder takes vouchers downloaded with
             the Configurator App instead (it only works if the USB export did not happen). Then the share, its firewall
             rule and account are removed (-KeepShare keeps them).
+  Device    Set-ZtpDeviceConfiguration.ps1: in the maintenance environment, before the claim, sets each static management
+            address on the port with the node's management MAC, and the host name, through the Configurator App's REST
+            service (https://<maintenance_address>:20001/BootstrapOobeService, edgeuser and -EdgeUserPassword, default
+            Password1). Nodes without a maintenance_address in the node list are skipped; Network covers them later.
+            Changes are logged to device-changes.jsonl beside -EventLogPath.
   Azure     Invoke-ZtpAzureProvisioning.ps1 stages Prereqs, Validate, Plan, Execute: site, site configuration and edge
             machines claimed with the vouchers. Refuses to submit when a voucher is missing.
   Ready     Invoke-ZtpAzureProvisioning.ps1 -Stage Watch: waits until every machine is ready to cluster and returns (or,
             with -ArcMachineNameMapPath, writes) each node's Arc machine name; then Test-ProvisionedMachines.ps1.
+  Network   Set-ZtpManagementAddress.ps1: puts each static management address on the adapter with the node's management MAC
+            through the edge machine's networkAdapters API (jobs/ApplyConfiguration), first moving any other adapter that
+            holds the address to Dhcp. An adapter already right is left alone; dhcp and preconfigured nodes are only
+            reported. Needed because the OS install ignores the MAC in the edge machine request and puts the address on the
+            first ready port. Changes are logged to network-changes.jsonl beside -EventLogPath.
   Handoff   New-ZtpHandoff.ps1 writes -HandoffPath (ztp-handoff.json: Arc machine names, site, solution, bootstrap and SBE versions,
             timestamps); Convert-ZtpHandoffToClusterInputs.ps1 writes -ClusterInputsPath (the arc_machine_names block for the cluster
             deployment environment file). Nothing is clustered here.
 Plan by default: without -Execute the stage table and the command of every stage are printed, and the next stage shows its
-own plan (Media, Boot and Azure have a plan mode; Vouchers and Ready are waits). Nothing changes.
+own plan (Media, Boot, Device, Azure and Network have a plan mode; Vouchers and Ready are waits). Nothing changes.
 With -Execute each stage runs, its result is checked (an image per node, every node booted read-write, a valid voucher per
 node, deployment accepted, every node ready and its Arc machine verified) and recorded in the state file; the next stage
 starts only after that. A rerun resumes at the first stage that did not complete. -Stage runs one stage again; -From runs
@@ -99,7 +109,8 @@ Vouchers wait budget.
 .PARAMETER BmcCredential
 BMC account (Boot, Vouchers eject).
 .PARAMETER EdgeUserPassword
-Optional password of the maintenance environment's edgeuser account (only its SHA-512 crypt hash enters the image).
+Optional password of the maintenance environment's edgeuser account (only its SHA-512 crypt hash enters the image). The
+Device stage signs in with it; without it, with the maintenance environment's default Password1.
 .PARAMETER RfsWriteAttribute
 Also set the iDRAC RFS WriteProtected attributes to Read Write before the insert.
 .PARAMETER ConfirmNotClustered
@@ -131,7 +142,11 @@ Ready: JSON file that receives node -> Arc machine name (with -Execute).
 .PARAMETER ReadyTimeoutMinutes
 Ready: polling budget.
 .PARAMETER PollIntervalSeconds
-Ready: poll interval.
+Ready and Network: poll interval.
+.PARAMETER DeviceTimeoutMinutes
+Device: how long the maintenance environment may take to report the static address.
+.PARAMETER NetworkTimeoutMinutes
+Network: how long each ApplyConfiguration job may take, and then the adapter to report its result.
 .PARAMETER StatePath
 Run state file (default ./ztp-provisioning.state.json).
 .PARAMETER ResetState
@@ -149,8 +164,8 @@ Change the machines, this host's share and Azure. Without it only the plan is sh
 #>
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(
-    [ValidateSet('Resolve', 'Media', 'Boot', 'Bootstrap', 'Vouchers', 'Azure', 'Ready', 'Handoff', 'All')][string]$Stage = 'All',
-    [ValidateSet('Resolve', 'Media', 'Boot', 'Bootstrap', 'Vouchers', 'Azure', 'Ready', 'Handoff')][string]$From,
+    [ValidateSet('Resolve', 'Media', 'Boot', 'Bootstrap', 'Vouchers', 'Device', 'Azure', 'Ready', 'Network', 'Handoff', 'All')][string]$Stage = 'All',
+    [ValidateSet('Resolve', 'Media', 'Boot', 'Bootstrap', 'Vouchers', 'Device', 'Azure', 'Ready', 'Network', 'Handoff')][string]$From,
     [string]$ConfigPath,
     [string]$NodesFile,
     [string[]]$NodeName,
@@ -196,6 +211,8 @@ param(
     [string]$ArcMachineNameMapPath,
     [ValidateRange(0, 1440)][int]$ReadyTimeoutMinutes = 180,
     [ValidateRange(0, 3600)][int]$PollIntervalSeconds = 60,
+    [ValidateRange(0, 1440)][int]$DeviceTimeoutMinutes = 30,
+    [ValidateRange(0, 1440)][int]$NetworkTimeoutMinutes = 60,
     [string]$StatePath = (Join-Path (Get-Location) 'ztp-provisioning.state.json'),
     [switch]$ResetState,
     [string]$StageScriptRoot = $PSScriptRoot,
@@ -207,7 +224,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'ZtpVirtualUsb.Common.ps1')
 . (Join-Path $PSScriptRoot 'ZtpEvents.Common.ps1')
 
-$order = @('Resolve', 'Media', 'Boot', 'Bootstrap', 'Vouchers', 'Azure', 'Ready', 'Handoff')
+$order = @('Resolve', 'Media', 'Boot', 'Bootstrap', 'Vouchers', 'Device', 'Azure', 'Ready', 'Network', 'Handoff')
 function Write-ZtpRunLog {
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Message, [ValidateSet('Info', 'Warning')][string]$Level = 'Info')
     $line = "[$([datetime]::UtcNow.ToString('HH:mm:ss'))Z] [ztp] $Message"
@@ -219,7 +236,7 @@ $settable = @('BootstrapCacheDirectory', 'BootstrapVersion', 'IncludePreview', '
     'EventLogPath', 'BootstrapTimeoutMinutes', 'BootstrapVoucherTimeoutMinutes', 'SkipAzureCheck', 'Location', 'HandoffPath', 'ClusterInputsPath',
     'NodesFile', 'NodeName', 'SourcePath', 'ImageDirectory', 'ImageNamePrefix', 'ShareHost', 'ShareName', 'VoucherDirectory',
     'VoucherFolder', 'VoucherWaitMinutes', 'RfsWriteAttribute', 'SkipCertificateCheck', 'KeepShare', 'SubscriptionId', 'ResourceGroupName',
-    'ParameterFile', 'OsVersion', 'SiteMode', 'DeploymentName', 'ArcMachineNameMapPath', 'ReadyTimeoutMinutes', 'PollIntervalSeconds', 'StatePath')
+    'ParameterFile', 'OsVersion', 'SiteMode', 'DeploymentName', 'ArcMachineNameMapPath', 'ReadyTimeoutMinutes', 'PollIntervalSeconds', 'DeviceTimeoutMinutes', 'NetworkTimeoutMinutes', 'StatePath')
 if ($ConfigPath) {
     $settings = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json -AsHashtable
     foreach ($key in $settings.Keys) {
@@ -299,6 +316,21 @@ function Get-ZtpStageCall {
             if ($SkipAzureCheck) { $p.SkipAzureCheck = $true } else { $p.SubscriptionId = $SubscriptionId; $p.Location = $Location }
             & $actPlain $p
             $calls.Add([pscustomobject]@{ Script = 'Wait-ZtpBootstrapComplete.ps1'; Parameters = $p })
+        }
+        'Device' {
+            $p = [ordered]@{ ParameterFile = $ParameterFile; NodesFile = $NodesFile; Node = $NodeName; TimeoutMinutes = $DeviceTimeoutMinutes; PollIntervalSeconds = $PollIntervalSeconds; EventLogPath = $EventLogPath }
+            if ($EdgeUserPassword) { $p.EdgeUserPassword = $EdgeUserPassword }
+            # Device changes are evidence: they go beside the event log, as the BIOS and adapter changes do.
+            if ($EventLogPath) { $p.ChangeLogPath = Join-Path (Split-Path -Parent ([IO.Path]::GetFullPath($EventLogPath))) 'device-changes.jsonl' }
+            & $act $p
+            $calls.Add([pscustomobject]@{ Script = 'Set-ZtpDeviceConfiguration.ps1'; Parameters = $p })
+        }
+        'Network' {
+            $p = [ordered]@{ SubscriptionId = $SubscriptionId; ResourceGroupName = $ResourceGroupName; ParameterFile = $ParameterFile; Node = $NodeName; TimeoutMinutes = $NetworkTimeoutMinutes; PollIntervalSeconds = $PollIntervalSeconds; EventLogPath = $EventLogPath }
+            # Adapter changes are evidence: they go beside the event log, as the BIOS changes do.
+            if ($EventLogPath) { $p.ChangeLogPath = Join-Path (Split-Path -Parent ([IO.Path]::GetFullPath($EventLogPath))) 'network-changes.jsonl' }
+            & $act $p
+            $calls.Add([pscustomobject]@{ Script = 'Set-ZtpManagementAddress.ps1'; Parameters = $p })
         }
         'Handoff' {
             $resolved = if ($state['stages'].Contains('Resolve') -and $state['stages']['Resolve'].Contains('data')) { $state['stages']['Resolve']['data'] } else { @{} }
@@ -403,6 +435,8 @@ function Assert-ZtpStageInput {
     switch ($Name) {
         'Resolve' { if ($BootstrapCacheDirectory) { $need.BootstrapCacheDirectory = $BootstrapCacheDirectory } }
         'Bootstrap' { if ($VoucherFolder) { $need.VoucherFolder = $VoucherFolder } else { $need.ImageDirectory = $ImageDirectory; if ($ForExecute) { $need.BmcCredential = $BmcCredential } }; if (-not $SkipAzureCheck -and $ForExecute) { $need.SubscriptionId = $SubscriptionId } }
+        'Device' { $need.ParameterFile = $ParameterFile }
+        'Network' { $need.SubscriptionId = $SubscriptionId; $need.ResourceGroupName = $ResourceGroupName; $need.ParameterFile = $ParameterFile }
         'Handoff' { $need.SubscriptionId = $SubscriptionId; $need.ResourceGroupName = $ResourceGroupName }
         'Media' { if (-not $BootstrapCacheDirectory) { $need.SourcePath = $SourcePath }; $need.ImageDirectory = $ImageDirectory }
         'Boot' { $need.ImageDirectory = $ImageDirectory; $need.ShareHost = $ShareHost; if ($ForExecute) { $need.BmcCredential = $BmcCredential } }
@@ -431,7 +465,7 @@ if (-not $Execute) {
     $SourcePath = $planSourcePath
     $next = @($run | Where-Object { $_ -ne 'Resolve' -or $BootstrapCacheDirectory })[0]
     if ($run[0] -eq 'Resolve' -and -not $BootstrapCacheDirectory) { Write-ZtpRunLog "Resolve is skipped: no BootstrapCacheDirectory, so -SourcePath ($SourcePath) is used as it is." }
-    if ($next -in 'Resolve', 'Media', 'Boot', 'Azure') {
+    if ($next -in 'Resolve', 'Media', 'Boot', 'Device', 'Azure', 'Network') {
         Write-ZtpRunLog "Plan of the next stage ($next), from its own script:"
         try { foreach ($call in (Get-ZtpStageCall -Name $next)) { Invoke-ZtpStageScript -Call $call | Where-Object { $_ -is [string] } } }
         catch { Write-ZtpRunLog "The $next stage would fail now: $($_.Exception.Message)" -Level Warning }
@@ -482,6 +516,31 @@ foreach ($name in $run) {
                 if (-not [bool]$row[0].Ready) { throw "Bootstrap: $node is in state $($row[0].State): $($row[0].Evidence). Events: $EventLogPath." }
             }
             $evidence = "ReadyForPortal: $(@($rows | ForEach-Object { "$($_.Node) (voucher SHA256 $($_.VoucherSha256))" }) -join ', ')"
+        }
+        'Device' {
+            $rows = @(Invoke-ZtpStageScript -Call $calls[0] | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties['Mode'] -and $_.PSObject.Properties['MaintenanceAddress'] })
+            foreach ($node in $NodeName) {
+                $row = @($rows | Where-Object Node -EQ $node)
+                if ($row.Count -ne 1) { throw "Device: no result for $node." }
+                if ($row[0].Mode -eq 'static' -and $row[0].Status -notin 'AlreadySet', 'Changed', 'Skipped') { throw "Device: the static management address of $node is $($row[0].Status), not set." }
+            }
+            $evidence = @($rows | ForEach-Object {
+                    $r = $_
+                    $what = switch ($r.Status) { 'NotConfigured' { 'no management settings' } 'Skipped' { 'no maintenance_address, left to Network' } default { "$($r.Adapter) $($r.MacAddress) $($r.Mode) $($r.Address)".Trim() } }
+                    "$($r.Node) $what ($($r.Status))"
+                }) -join '; '
+        }
+        'Network' {
+            $rows = @(Invoke-ZtpStageScript -Call $calls[0] | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties['Mode'] -and $_.PSObject.Properties['Status'] })
+            foreach ($node in $NodeName) {
+                $row = @($rows | Where-Object Node -EQ $node)
+                if ($row.Count -ne 1) { throw "Network: no result for $node." }
+                if ($row[0].Mode -eq 'static' -and $row[0].Status -notin 'AlreadySet', 'Changed') { throw "Network: the static management address of $node is $($row[0].Status), not set." }
+            }
+            $evidence = @($rows | ForEach-Object {
+                    $what = if ($_.Status -eq 'NotConfigured') { 'no management settings' } else { "$($_.AdapterName) $($_.MacAddress) $($_.Mode) $($_.Address)".Trim() }
+                    "$($_.Node) $what ($($_.Status)$(if (@($_.Released).Count) { "; released from $(@($_.Released) -join ', ')" }))"
+                }) -join '; '
         }
         'Handoff' {
             $null = Invoke-ZtpStageScript -Call $calls[0]
