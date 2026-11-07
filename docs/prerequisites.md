@@ -60,6 +60,8 @@ The Azure CLI equivalent of the feature registration is `az feature register --s
 
 ### Roles
 
+The full cross-tool matrix is in the toolkit's [access-and-connectivity page](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/docs/access-and-connectivity.md).
+
 The account that runs ZTP (you, a service principal, or a pipeline's managed identity) needs these. ZTP doesn't check roles up front: a missing role fails the ARM template validation or the call that needs it, with Azure's message.
 
 | Scope | Role | Why | Source |
@@ -187,6 +189,8 @@ How the management port gets its address is one of three modes. Set it with the 
 **Where you see it.** The Network stage names the mode in each node's reason, for example `Mode B (Static with DHCP): the management port Port1 (MAC 00:00:5e:00:53:aa) has DHCP 192.0.2.116 after the install; expected static 192.0.2.11; OS configuration sets it by MAC.` The handoff carries it per node (`managementMode`, `managementAddressVerified`, `managementAddressReason`) with every port as Azure reports it (`networkAdapters[]`), and the run prints a table per node at the end.
 
 ### Ports
+
+The full cross-tool matrix is in the toolkit's [access-and-connectivity page](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/docs/access-and-connectivity.md).
 
 | From | To | Port | Why | Stages |
 | --- | --- | --- | --- | --- |
