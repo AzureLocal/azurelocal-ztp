@@ -4,7 +4,7 @@ layout: home
 hero:
   name: Azure Local ZTP
   text: Zero-touch provisioning for Azure Local
-  tagline: From bare machines to nodes that are ready for cluster Validate, with one command, an environment file and the OEM's SBE. No USB stick, no one in the rack.
+  tagline: From bare machines to provisioned, Arc-connected nodes, with one command and an environment file. No USB stick, no one in the rack.
   image:
     src: /assets/images/azurelocal-ztp-icon.svg
     alt: Azure Local ZTP
@@ -21,10 +21,10 @@ hero:
 
 features:
   - icon: 🧾
-    title: Two inputs
-    details: Fill in the environment file and point it at the OEM's Solution Builder Extension. Everything else is automated, behind gates that check each step is ready.
-    link: /environment-file
-    linkText: Environment file reference
+    title: One input
+    details: Fill in the environment file, started from the toolkit's template. Everything else is automated, behind gates that check each step is ready.
+    link: /infrastructure-schema-5
+    linkText: Master infrastructure.yml
   - icon: 🔌
     title: Boot over the BMC
     details: Builds one virtual USB image per machine and boots every machine from it at once over Redfish. The ownership voucher is read back from the image.
@@ -36,10 +36,10 @@ features:
     link: /azure-provisioning-vouchers
     linkText: Azure provisioning
   - icon: 🧰
-    title: Ready for Validate
-    details: Installs the OEM network drivers from the SBE, puts the SBE in C:\SBE, sets one static management address and one gateway, and checks every machine.
-    link: /architecture#the-prepare-gates
-    linkText: The Prepare gates
+    title: Management address by MAC
+    details: Sets each static management address on the port with the management MAC in the maintenance environment, before the claim, and checks it through Azure after the install. Sets back BIOS values changed for the install only.
+    link: /operator-guide#how-the-management-address-gets-set
+    linkText: How the address gets set
   - icon: 🚦
     title: Management host or pipeline
     details: Runs from a Windows management host, or from a self-hosted Windows runner with an approval before the destructive Boot stage. Resume with -From.
@@ -58,11 +58,16 @@ features:
 
 | You supply | You get |
 | --- | --- |
-| The environment file: machines, BMC addresses, network, Azure subscription, resource group, site, OS build, and Key Vault references | Every machine provisioned on the pinned Azure Local build, Arc connected, and ready for cluster Validate |
-| The folder with the OEM's SBE files | The OEM network drivers installed, the SBE in `C:\SBE`, and a handoff with each machine's `arcMachineResourceId` |
+| The environment file: machines, BMC addresses, network, Azure subscription, resource group, site, OS build, and Key Vault references | Every machine Provisioned on the pinned Azure Local build and Arc-connected, with its management IP on the management NIC (found by MAC), and a handoff with each machine's Arc machine name and `arcMachineResourceId` |
+
+The stages are Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Restore and Handoff.
+
+::: tip What's next: OS configuration
+ZTP ends with the nodes ready for OS configuration, not for Validate. OEM drivers, the SBE, DHCP off on the other NICs, DNS and time on the host, and the deployment admin come next, in [azurelocal-toolkit Phase 03: OS Configuration](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/). ZTP-built nodes name their NICs `Port0` to `Port6`, so OS configuration scripts must find NICs by MAC. See [What's next](/operator-guide#whats-next-os-configuration).
+:::
 
 ::: warning Preview
-Microsoft's simplified machine provisioning is in preview, in East US only, and doesn't support Arc gateway. Read the [overview](/overview) for the current status and limits before you start.
+Microsoft's simplified machine provisioning is in preview, in East US only, and doesn't support Arc gateway. Read the [overview](/overview) for the current status and limits, and the [prerequisites](/prerequisites), before you start.
 :::
 
 ## Part of the Azure Local tools

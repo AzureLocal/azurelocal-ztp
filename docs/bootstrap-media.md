@@ -1,8 +1,8 @@
-# Bootstrap media and the OEM SBE
+# Bootstrap media
 
-> How the newest maintenance (bootstrap) ISO and the OEM's newest Solution Builder Extension (SBE) are found, downloaded and verified, what goes on the media and what does not, and exactly which statements were checked live.
+> How the newest maintenance (bootstrap) ISO is found, downloaded and verified, what goes on the media and what does not, and exactly which statements were checked live.
 
-Scripts: `Get-ZtpBootstrapIso.ps1`, `Get-ZtpSbe.ps1`, `Invoke-ZtpPrepareMedia.ps1` in `scripts/simplified-provisioning/`. Every script is a plan by default and writes nothing until `-Execute`. Facts below were probed on **15 Oct 2026**; Microsoft can change any of them, so the scripts re-probe on every run.
+Scripts: `Get-ZtpBootstrapIso.ps1` and `Invoke-ZtpPrepareMedia.ps1` in `scripts/simplified-provisioning/`. `Invoke-ZtpPrepareMedia.ps1` resolves the ISO and builds and checks the images, nothing else. Every script is a plan by default and writes nothing until `-Execute`. Facts below were probed on **15 Oct 2026**; Microsoft can change any of them, so the scripts re-probe on every run.
 
 ## Which maintenance ISO is the newest
 
@@ -64,52 +64,27 @@ Microsoft publishes **no hash** for this download (the response carries `ETag`, 
 
 This detects truncation, corruption and a changed publication. It does **not** detect a poisoned first download, a Microsoft-signed-but-bad build, or a swap that preserves the ETag. There is no Authenticode signature on the ISO to check; `usb_prep.exe` is not used by this repo.
 
+The Resolve stage records the ISO's version, URL and SHA256 as its evidence: in the state file (`stages.Resolve.data`) and in its `StageCompleted` event, for example `maintenance ISO 10.2610.0.3061 (GA), SHA256 ..., from <url>`. The handoff doesn't carry them.
+
 ## The OEM layer: `config/oem/<oem>.json`
 
-Adding an OEM is adding a file, not code. Dell is complete; Lenovo, HPE and Supermicro carry only the SBE manifest address (verified for the first three) and empty BMC signal patterns, marked unverified.
+Adding an OEM is adding a file, not code. The file holds the BMC layer only, for the Bootstrap watch: the BMC kind, its log services and the log patterns that signal a boot from the media, completion and a reset. `ZtpOem.Common.ps1` loads it. Dell is complete; Lenovo, HPE and Supermicro carry the layout with empty signal patterns, marked unverified.
 
 ```json
 { "oem": "Dell", "publisher": "Dell",
-  "sbe": { "discoveryManifestUrl": "https://aka.ms/AzureStackSBEUpdate/DellEMC", "downloadMethod": "vendor-connector", ... },
   "bmc": { "kind": "idrac", "logServices": [ { "id": "Lclog", "path": "/redfish/v1/Managers/iDRAC.Embedded.1/LogServices/Lclog/Entries" }, ... ],
-           "signals": { "bootedFromMedia": [...], "completion": [...], "reset": [...] }, "signalsStatus": "unverified" } }
+           "signals": { "bootedFromMedia": [...], "completion": [...], "reset": [...] }, "signalsStatus": "unverified: ..." } }
 ```
 
-## The Solution Builder Extension (SBE)
+## No SBE in ZTP
 
-Microsoft's update service discovers an SBE through a **discovery manifest** per OEM (`SBE_Discovery_<oem>.xml`). The short links resolve (HTTP results of 15 Oct 2026):
+ZTP doesn't find, download, check or stage an OEM Solution Builder Extension (SBE).
 
-| OEM | Short link | Redirects to | Size | Entries |
-|-----|-----------|--------------|------|---------|
-| Dell | `https://aka.ms/AzureStackSBEUpdate/DellEMC` (also `/Dell`) | `downloads.dell.com/folderdatastore/apex-cp-azure/prod01/SBE_Discovery_Dell.xml` | 134 KB, modified 25 Jun 2026 | 49 |
-| Lenovo | `.../Lenovo` | `thinkagile.lenovo.com/MX/SBE/SBE_Discovery_Lenovo.xml` | 69 KB | |
-| HPE | `.../HPE` | `h41380.www4.hpe.com/hpe/microsoft/SBE_Discovery_HPE.xml` | 54 KB | |
-| DataON | `.../DataON` | `dataonsbe.blob.core.windows.net/sbe-manifest/SBE_Discovery_DataON.xml` | 80 KB | |
+- **The OS install discovers its own.** Microsoft's provisioned OS install runs SBE discovery itself: the `ProvisionOs` job has an `SBEDiscoveryDownload` step.
+- **The maintenance ISO has no SBE slot.** No Microsoft source says the maintenance environment reads one (`prov_config/download` is staged onto the maintenance OS only), so nothing SBE-related goes on the media.
+- **Staging the SBE is OS configuration.** Learn says to install the OEM's drivers and firmware, and to place the SBE in `C:\SBE` on each machine before deployment ([install drivers and firmware](https://learn.microsoft.com/azure/azure-local/deploy/deployment-install-os#install-drivers-and-firmware)). That happens after ZTP, in [azurelocal-toolkit Phase 03: OS Configuration](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/), before Validate and Deploy.
 
-Each entry names the SBE version and family, the supported models, the solution versions it was validated with (`12.*.1003.*`, some with `MinVersionRequired`), the SHA256 and size of the package, and how it is delivered. Newest Dell SBEs in the manifest of 24 Jun 2026:
-
-| Family | Newest SBE | Models |
-|--------|-----------|--------|
-| `17G-Intel` | `5.0.2606.1713` | AX670, AX770, PowerEdgeR670, PowerEdgeR770 |
-| `16G-45n0c-Intel` | `5.0.2606.1616` | AX660, AX760, AX4510c, AX4520c, PowerEdgeR660, PowerEdgeR760 |
-| `AX-15G` | `5.0.2606.1510` | AX650, AX750, AX7525, AX6515 |
-| `AX-14G` | `5.0.2606.1407` | AX640, AX740xd |
-
-All of them validated with `12.*.1003.*` and, where listed, `12.*.1002.*` from `12.2603.1002.502`, so they fit **12.2609 (latest)**.
-
-**The manifest carries no download address.** `File Uri` is empty for Dell, Lenovo and HPE; the type is `DownloadConnector` (Azure Local's SBE download connector fetches the package with the OEM's credentials, kept in Key Vault) or `Notify` (a link to the OEM's release notes). So the package is not downloadable from the manifest. `Get-ZtpSbe.ps1` therefore:
-
-- picks the newest SBE for `-Model` (or `-Family`) validated with `-SolutionVersion` (`latest` skips the test and says so);
-- returns its identity, SHA256, size, release-notes link and the **deployment parameters** the portal and the ARM template take: `sbeVersion`, `sbeFamily`, `sbePublisher`, `sbeManifestSource`, `sbeManifestCreationDate`;
-- with `-Execute` stages `<cache>/sbe/<oem>/<version>/` (`sbe-manifest.json`, the discovery manifest and, when you pass `-PackagePath`, the package after its SHA256 equals the published one). If an OEM ever publishes a URI it downloads and verifies the same hash and deletes a mismatching file.
-
-### Where the SBE belongs
-
-**Not on the bootstrap media.** The maintenance ISO has no SBE slot, and no Microsoft source says the maintenance environment reads one (`prov_config/download` is staged onto the maintenance OS only). The SBE is used here and by the Azure Local lifecycle:
-
-1. **Node preparation, before Validate and Deploy.** Learn says to install the OEM's drivers and firmware, and to place the SBE in `C:\SBE` on each machine so deployment detects it ([install drivers and firmware](https://learn.microsoft.com/azure/azure-local/deploy/deployment-install-os#install-drivers-and-firmware)). The Prepare stage (`Initialize-ZtpNode.ps1`) does that from the folder in `ztp.node_preparation.sbe_bundle`. It checks the zip's SHA-256 against the OEM's discovery manifest, extracts the network drivers from the folders listed in `sbe.driverPaths` of `config/oem/<oem>.json`, picks them by each adapter's PCI hardware ID, checks their catalog signatures, installs them with `pnputil`, and copies the three SBE files to `C:\SBE`. It doesn't install firmware. Only `config/oem/dell.json` has `driverPaths` today.
-2. **Cluster deployment.** The portal or the deployment ARM template takes `sbeVersion`, `sbeFamily`, `sbePublisher`, `sbeManifestSource` and `sbeManifestCreationDate`; the download connector fetches the package with the OEM credentials (`Set-SolutionExtensionSecretLocation` can add them in Key Vault later). `Convert-ZtpHandoffToClusterInputs.ps1` emits these as the `sbe` block.
-3. **Update.** A package the connector cannot fetch makes the update `AdditionalContentRequired`; import `SBE_Discovery_<oem>.xml`, `SBE_<oem>_<family>_<version>.xml` and `.zip` from a share (Learn: Update via PowerShell, step 3). The staging folder holds that set.
+A file that still carries SBE settings works. The run ignores them and prints a note: `Note: hardware.sbe ignored: SBE belongs to OS configuration.` (schema 5), `Note: ztp.node_preparation ignored: SBE belongs to OS configuration.` (older layout), or `<key> in <file> ignored: SBE belongs to OS configuration.` for `SbeModel`, `SbeFamily`, `SbeSolutionVersion` or `SbePackagePath` in an orchestrator settings file.
 
 ## What is proven and what is not
 
@@ -119,13 +94,10 @@ All of them validated with `12.*.1003.*` and, where listed, `12.*.1002.*` from `
 | `Get-ZtpBootstrapIso.ps1 -Execute` downloads 1.3 GB, extracts, hashes, writes the manifest and reuses it on the next run (builds `3061` and `3062`) | **Verified live** |
 | `Invoke-ZtpPrepareMedia.ps1 -Execute` builds a 4 GiB GPT/FAT32 `CDROM` image from the downloaded `10.2610` ISO and the read-back check passes (boot loader, `grub.cfg`, `rootfs.img`) | **Verified live** (no hardware) |
 | Booting that image from the iDRAC USB-stick slot | **Proven on Dell AX-760 / iDRAC 7.30** with maintenance image `10.2610.0.3063` |
-| Discovery manifests resolve; Dell manifest parses; newest SBE per model | **Verified live** |
-| Downloading an SBE package from the manifest | **Not possible**: no URI is published; connector or OEM support site only |
 | Hash of the maintenance ISO from Microsoft | **None published**; trust on first use |
-| A supplied SBE package checked against the OEM's published SHA-256, its network drivers installed, and the SBE copied to `C:\SBE` (Prepare) | **Proven on Dell AX-760 / iDRAC 7.30** |
-| The whole flow, from the ISO to "ready for Validate" | **Proven on Dell AX-760 / iDRAC 7.30**; see [Design and architecture](architecture.md) |
+| The whole flow, from the ISO to provisioned, Arc-connected nodes | **Proven on Dell AX-760 / iDRAC 7.30**; see [Design and architecture](architecture.md) |
 
 ## Sources
 
-- Microsoft Learn: *Install the operating system and register Azure Local machines by using simplified machine provisioning (preview)*, *Install the maintenance environment ... small form factor*, *Solution Builder Extension updates for your Azure Local*, *Update Azure Local by using PowerShell* (step 3, import), *Deploy Azure Local via ARM template* (`sbe*` parameters).
+- Microsoft Learn: *Install the operating system and register Azure Local machines by using simplified machine provisioning (preview)*, *Install the maintenance environment ... small form factor*, *Install drivers and firmware* (Azure Local deployment, install the OS).
 - `HEAD` and `Range` requests against the short links above, 15 Oct 2026. Anything not in these sources is labelled unverified.

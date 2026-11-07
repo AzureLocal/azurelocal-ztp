@@ -9,17 +9,20 @@ Unless a row cites Learn, the behavior below was **proven on Dell AX-760 / iDRAC
 | Symptom | Section |
 | --- | --- |
 | `ProvisionOs` fails at `SetupHybridComputeRP` with 5901 | [5901 and the automatic resubmit](#_5901-at-setuphybridcomputerp-and-the-automatic-resubmit) |
+| A 409 on `jobs/ProvisionOs` right after the claim | [409 on ProvisionOs](#_409-on-provisionos-before-the-job-exists) |
 | A node sits at `AwaitingConnection` after the claim | [Registration delay](#registration-delay-after-the-claim) |
 | Insert fails with `IDRAC.2.9.SYS458`, `WriteProtected=True` is reported, the node boots its disk, or eject returns HTTP 500 | [iDRAC quirks](#idrac-quirks) |
+| The Device stage scans and doesn't find a node | [The Device scan finds no node](#the-device-scan-finds-no-node) |
+| The static management address is on another port than the one with the management MAC | [Static IP lands on the wrong NIC](#static-ip-lands-on-the-wrong-nic) |
+| `BiosRestoreFailed`, or the Restore stage stops | [Restore fails](#restore-fails) |
+| The handoff says `managementAddressVerified: false` | [The management address is not verified in the handoff](#the-management-address-is-not-verified-in-the-handoff) |
 | The Arc machine has a device ID for a name | [Arc machine names](#arc-machine-names) |
 | An unexpected adapter with a `169.254.0.x` address | [The Remote NDIS adapter](#the-remote-ndis-adapter) |
-| The session drops during the Prepare restart | [Restart over WinRM](#restart-over-winrm) |
-| The static management address is on another port than the one with the management MAC | [Static IP lands on the wrong NIC](#static-ip-lands-on-the-wrong-nic) |
-| Validate complains about inbox drivers or several default gateways | [Node state after the OS install](#node-state-after-the-os-install) |
+| Validate complains about inbox drivers, several default gateways or an empty `C:\SBE` | [Node state after the OS install](#node-state-after-the-os-install) |
+| `Note: ztp.node_preparation ignored: SBE belongs to OS configuration.` | [SBE settings are ignored](#sbe-settings-are-ignored) |
 | Deploy fails with `ParentResourceNotFound` | [Deploy on build 2690](#deploy-fails-with-parentresourcenotfound-on-build-2690) |
 | A job that's running again still carries an error | [Stale error after a resubmit](#stale-error-after-a-resubmit) |
 | The machine keeps reinstalling the maintenance environment | [USB boot loop](#usb-boot-loop) |
-| Prepare can't sign in to a node | [Prepare fails to sign in](#prepare-fails-to-sign-in) |
 
 ## 5901 at `SetupHybridComputeRP` and the automatic resubmit
 
@@ -37,6 +40,12 @@ Unless a row cites Learn, the behavior below was **proven on Dell AX-760 / iDRAC
 ./scripts/simplified-provisioning/Wait-ZtpMachineReady.ps1 -SubscriptionId <subscription-id> -ResourceGroupName <resource-group> `
     -EdgeMachineName node-02 -RetryProvisionOs -Execute
 ```
+
+## 409 on ProvisionOs before the job exists
+
+**What you see.** Right after the claim, `GET .../edgeMachines/<node>/jobs/ProvisionOs` answers HTTP 409 instead of 404 (seen live, 2026-11).
+
+**What the run does.** Nothing for you to do. The Ready stage and `New-ZtpHandoff.ps1` read a 404 or a 409 on that job as "not there yet" and keep waiting, with the edge machine's `operationDetails` standing in for the job's status.
 
 ## Registration delay after the claim
 
@@ -61,6 +70,91 @@ These are iDRAC 7.30 behaviors, not generic Redfish. `Mount-ZtpVirtualUsb.ps1` h
 
 If a run fails during Boot, check each node before you retry: the virtual media is ejected and the one-time boot override is cleared. Use `Mount-ZtpVirtualUsb.ps1 -Action Status` to read them and `-Action Eject` to eject.
 
+## The Device scan finds no node
+
+**What you see.** For a static node without `maintenance_address`, the Device stage fails with `DeviceConfigurationFailed` and a message like:
+
+```text
+node-01: no maintenance environment with the management MAC 00:00:5e:00:53:11 answers on TCP 20001 in 192.0.2.1-192.0.2.254 within 30 minutes (30 scan(s)). Check that the node booted the maintenance environment, that this host reaches that network on TCP 20001, and the MAC; or set maintenance_address (or network_intents.management.provisioning_dhcp_range).
+```
+
+**How the scan works.** It probes every address of `network_intents.management.provisioning_dhcp_range` (schema 5: `networking.management.provisioning_dhcp_range`; without it, the management subnet) on TCP 20001, all at once. Each address that answers is asked `GET GetNetworkAdapters`, and the node is the one that lists its management MAC. It scans again every poll interval (60 seconds from the entry point) until the stage's 30 minutes pass. Each port of the maintenance environment takes a DHCP lease, so a node can answer on several addresses. The scan was verified live on a Dell AX-760 with DHCP from a firewall and no reservation.
+
+**What to check.**
+
+| Check | How |
+| --- | --- |
+| The node is still booting | Look at the node's virtual console in the BMC. The maintenance environment shows its address there once it's up. A node that's still restarting answers on a later scan; run `-From Device` if the stage timed out first. |
+| This host reaches TCP 20001 in the range | `Test-NetConnection -ComputerName 192.0.2.140 -Port 20001` from the management host, to the address on the console. A firewall or a route between the host and the provisioning network blocks the scan. |
+| `provisioning_dhcp_range` covers the pool | The range must hold the addresses the DHCP server leases to the maintenance environment. Without it the stage scans the management subnet, which misses a lease from another subnet. At most 4096 addresses. |
+| The MAC | `cluster_nodes[].mac_address` (schema 5: the node's management port MAC) must be the management port's MAC. If an address answers but lists other MACs, the MAC in the file is wrong. |
+| The password | A responder that answers 401 isn't matched. The `edgeuser` password is `ztp.maintenance_password_secret`, else `Password1`, and must be the one the images were built with. |
+
+If you know the address, set `cluster_nodes[].maintenance_address` and the stage goes there directly, with no scan. Then run `-From Device`.
+
+## Static IP lands on the wrong NIC
+
+**What you see.** With a static management address, the node comes up after the OS install with `ip_address` on a port other than the one whose MAC the environment file names. On a Dell AX-760 it landed on a ConnectX storage port, not the LOM named by MAC. The node doesn't answer on its management address from the management network, and Validate would find the management address on the wrong adapter.
+
+**Cause.** With a `Manual` site setting and a `Manual` adapter in the claim, the OS-install request carries the port's MAC in `siteDetails.deviceConfiguration.network.networkAdapters[].macAddress`. Azure accepts it, but the device ignores it. The maintenance environment's provisioning extension (`ProvisioningExtension.dll`) picks the port with `FindReadyPhysicalInterfaceName` and has no `MacAddress` property, so the static address goes to the first ready physical port.
+
+**What the run does.** Two stages, one before the OS install and one after it.
+
+The Device stage, before the claim, sets the address the way the Configurator App does: through the maintenance environment's REST service (`https://<maintenance_address>:20001/BootstrapOobeService`), `SetArcBootstrapDeviceConfiguration` for the adapter with the management MAC. A node without `maintenance_address` is found by the scan above. With `static_method: device` (the default), the site's network setting is `Automatic` and the claim carries no `Manual` adapter, so the OS install has no static address to misplace. The request and the status response were verified live. See [The Device stage](environment-file.md#the-device-stage).
+
+`static_method: site` is the old path, for environments without the Device stage: the site is `Manual` and the claim carries a `Manual` adapter by MAC, so the install puts the address on the first ready port and the Network stage has to move it.
+
+The Network stage, after Ready, is the backstop either way. It checks the address and fixes what's still wrong through Azure's per-NIC API (api-version 2026-10-01), with no WinRM and no firewall change:
+
+1. `GET .../edgeMachines/<node>/networkAdapters` lists the adapters. `properties.reportedProperties.macAddress` (12 hex digits, no separators, lower case on the live run) finds the management adapter; separators and case don't matter. No match stops the stage and lists the MACs found.
+2. If another adapter reports `ip_address`, `PUT .../networkAdapters/<name>/jobs/ApplyConfiguration` sets it to `Dhcp` first, and the stage waits until it no longer reports the address.
+3. `PUT .../jobs/ApplyConfiguration` on the management adapter: `ipInterfaceType: Static`, the address, mask, gateway, DNS servers, VLAN and `interfaceState: up`, with the adapter's own `networkConfiguration.adapterName`. The PUT returns 201; `GET` on the same path returns `properties.status` (`DeploymentInProgress`, then success or failure) and the steps under `reportedProperties.deploymentStatus`.
+4. An adapter that already reports the right static configuration isn't touched, so a rerun changes nothing.
+
+Every change is in `<evidence_path>\network-changes.jsonl`. Each node's result goes to the handoff as `managementAddressVerified`.
+
+The listing, the PUT and the queued job were seen live. The whole stage hasn't yet run end to end on hardware.
+
+**If the stage stops.**
+
+| Message | What to do |
+| --- | --- |
+| Device: "the maintenance environment's REST service at &lt;address&gt;:20001 doesn't answer" | `maintenance_address` is the address on the node's console, TCP 20001 is open from this server, and the password is the one the image was built with (`ztp.maintenance_password_secret`, else `Password1`). A 401 means the password. |
+| Device: "no maintenance environment with the management MAC ... answers on TCP 20001" | See [The Device scan finds no node](#the-device-scan-finds-no-node). |
+| Device: "no network adapter in the maintenance environment reports the management MAC" | The message lists the MACs the maintenance environment reports. Correct `mac_address`, then run `-From Device`. |
+| "no network adapter of edge machine &lt;node&gt; reports the management MAC" | The message lists the MACs the machine reports. Correct the management port's `mac_address` in the environment file, then run `-From Network`. |
+| "reports no network adapters" | The OS install hasn't finished. Run the stage after Ready. |
+| A job stays `DeploymentInProgress` with "Job is not yet triggered as other jobs are still running" | Right after the OS install, other jobs on the machine run first. The stage waits up to 60 minutes per job. A rerun (`-From Network`) follows an unfinished job with the same target instead of sending another. |
+| "ApplyConfiguration (apply) failed" | The message has the job's status, its failed step and error. Fix the cause, then run `-From Network`. |
+
+**A risk to know.** If the management port has no address of its own while the static address sits on the wrong port, setting that port to DHCP can cut the node off from Azure until the static address is applied. The stage warns when it sees this. A DHCP server on the management network avoids it: the management port then has a lease while the address moves.
+
+## Restore fails
+
+The Restore stage sets each `bios_during_provisioning` attribute back, restarts the node through Redfish, waits for the BIOS to report the values, then waits for Azure to report the machine `Connected` and ready to cluster again. Each change is in `<evidence_path>\bios-changes.jsonl`.
+
+| Message | Cause | What to do |
+| --- | --- | --- |
+| `BiosRestoreFailed`: "&lt;node&gt;: no value saved for &lt;attribute&gt; before Boot changed it (the run state lost it). Set hardware.bios.&lt;attribute&gt; to the final value." | The environment file gives no final value in `hardware.bios`, and the state file has no `biosOriginal` for that attribute: the state was reset (`-ResetState`, another `-StatePath`) or deleted after Boot. | Add the attribute to `hardware.bios` with its final value, then run `-From Restore`. `bios-changes.jsonl` has the original value in its `original` line. |
+| "&lt;node&gt; BIOS still reports &lt;attribute&gt;=&lt;value&gt; 30 minutes after the restart. Check the BIOS job in the BMC's job queue." | The BIOS didn't apply the change, or doesn't report it. | Look at the BMC's job queue and the node's console. Fix the job, then run `-From Restore`; values already right are left alone. |
+| "The BIOS has no attribute &lt;attribute&gt;." | The attribute name is wrong. Names are case-sensitive. | Read the names from `/redfish/v1/Systems/<id>/Bios`, correct the environment file, run `-From Restore`. |
+| "Restore: -Credential (the BMC account) is required with -Execute." or "applying the BIOS restarts the nodes. Pass -ConfirmNotClustered." | Only when you run the orchestrator directly. | Pass `-BmcCredential` and `-ConfirmNotClustered`. The entry point passes both. |
+| "Restore: &lt;node&gt; isn't ready to cluster after the BIOS restart." | The machine didn't come back `Connected` and ready to cluster within the Ready budget. | Check the node's console and its outbound access. Once the machine reads `Connected` again (portal or Sonar), run `-From Ready`. Ready checks it, and Network and Restore find everything already right, so nothing is changed or restarted. A rerun `-From Restore` alone doesn't wait for Azure again: with the BIOS already right, the node isn't restarted. |
+
+## The management address is not verified in the handoff
+
+**What you see.** `New-ZtpHandoff.ps1` warns `Management address not verified on: <node> (<reason>). OS configuration must fix it before Validate.` The node's `managementAddressVerified` is `false` and `managementAddressReason` says why. The handoff is still written.
+
+| Reason | Meaning | What to do |
+| --- | --- | --- |
+| `dhcp: the management port Port0 reports 192.0.2.200, the infrastructure file expects 192.0.2.12` | A `dhcp` or `preconfigured` node: ZTP only reports its address and doesn't change it. | Fix the DHCP reservation for the management MAC, or set the address in OS configuration ([Task 03 Static IP](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-03-configure-static-ip-address)). |
+| `...: the management port Port0 reports no address` | The management port has no address. | Check the port's link and the DHCP server, then OS configuration. |
+| `...: no management MAC in the infrastructure file, so the port wasn't checked` | The environment file names no `mac_address` for the node. | Add it. OS configuration finds NICs by MAC. |
+| `no Network stage result for this node` | The state file has no Network result for the node, for example after `-Stage Handoff` with a reset state. | Run `-From Network`. |
+| `no management settings in the infrastructure file` | The node has no management block. | Add the management settings, or set the address in OS configuration. |
+
+In a full run a static node isn't unverified: the Network stage fails first if its address isn't on the management port.
+
 ## Arc machine names
 
 **What you see.** The provisioned machine (`edgeMachines`) has the host name, and sits in the Arc site. The Arc for Servers machine, though, is named by the service `<device-id>-1`. The `arcMachineResourceId` set at claim time is replaced. The Arc machines are in the site configuration's managed resource group, not in your resource group.
@@ -73,57 +167,21 @@ Learn's portal steps say to "Provide the machine name as the Azure Arc resource 
 
 **What you see.** The iDRAC's USB link to the OS (Remote NDIS) shows up on the node as a network adapter with a `169.254.0.x` address.
 
-**What to do.** Nothing in Prepare: it has no gateway and Prepare leaves link-local addresses alone. In the cluster deployment, keep this adapter **out of every network intent**. It isn't a cluster port.
-
-## Restart over WinRM
-
-**What you see.** Restarting a node inside a remote call kills the WinRM session before the call returns, and that reads as a failure.
-
-**What the run does.** Prepare schedules the restart 10 seconds out (`shutdown /r /t 10`) so the call returns first. Then it waits until WinRM stops answering, waits for the node to come back, and checks that the boot time changed. It restarts at most once.
-
-## Static IP lands on the wrong NIC
-
-**What you see.** With a static management address, the node comes up after the OS install with `ip_address` on a port other than the one whose MAC the environment file names. On a Dell AX-760 it landed on a ConnectX storage port, not the LOM named by MAC. The node doesn't answer on its management address from the management network, and Validate would find the management address on the wrong adapter.
-
-**Cause.** The OS-install request carries the port's MAC in `siteDetails.deviceConfiguration.network.networkAdapters[].macAddress`. Azure accepts it, but the device ignores it. The maintenance environment's provisioning extension (`ProvisioningExtension.dll`) picks the port with `FindReadyPhysicalInterfaceName` and has no `MacAddress` property, so the static address goes to the first ready physical port.
-
-**What the run does.** Two stages, one before the OS install and one after it.
-
-The Device stage, before the claim, sets the address the way the Configurator App does: through the maintenance environment's REST service (`https://<maintenance_address>:20001/BootstrapOobeService`), `SetArcBootstrapDeviceConfiguration` for the adapter with the management MAC. It needs `maintenance_address` for the node; without it the node is skipped. `GetNetworkAdapters` there is verified live; the request body and the status response aren't yet. See [The Device stage](environment-file.md#the-device-stage).
-
-The Network stage, after Ready, checks it and fixes what's still wrong through Azure's per-NIC API (api-version 2026-10-01), with no WinRM and no firewall change:
-
-1. `GET .../edgeMachines/<node>/networkAdapters` lists the adapters. `properties.reportedProperties.macAddress` (12 hex digits, no separators, lower case on the live run) finds the management adapter; separators and case don't matter. No match stops the stage and lists the MACs found.
-2. If another adapter reports `ip_address`, `PUT .../networkAdapters/<name>/jobs/ApplyConfiguration` sets it to `Dhcp` first, and the stage waits until it no longer reports the address.
-3. `PUT .../jobs/ApplyConfiguration` on the management adapter: `ipInterfaceType: Static`, the address, mask, gateway, DNS servers, VLAN and `interfaceState: up`, with the adapter's own `networkConfiguration.adapterName`. The PUT returns 201; `GET` on the same path returns `properties.status` (`DeploymentInProgress`, then success or failure) and the steps under `reportedProperties.deploymentStatus`.
-4. An adapter that already reports the right static configuration isn't touched, so a rerun changes nothing.
-
-Every change is in `<evidence_path>\network-changes.jsonl`. Prepare then checks the address in the OS and leaves it as it is.
-
-The listing, the PUT and the queued job were seen live. The whole stage hasn't yet run end to end on hardware.
-
-**If the stage stops.**
-
-| Message | What to do |
-| --- | --- |
-| Device: "the maintenance environment's REST service at &lt;address&gt;:20001 doesn't answer" | `maintenance_address` is the address on the node's console, TCP 20001 is open from this server, and the password is the one the image was built with (`ztp.maintenance_password_secret`, else `Password1`). A 401 means the password. |
-| Device: "no network adapter in the maintenance environment reports the management MAC" | The message lists the MACs the maintenance environment reports. Correct `mac_address`, then run `-From Device`. |
-| "no network adapter of edge machine &lt;node&gt; reports the management MAC" | The message lists the MACs the machine reports. Correct the management port's `mac_address` in the environment file, then run `-From Network`. |
-| "reports no network adapters" | The OS install hasn't finished. Run the stage after Ready. |
-| A job stays `DeploymentInProgress` with "Job is not yet triggered as other jobs are still running" | Right after the OS install, other jobs on the machine run first. The stage waits up to 60 minutes per job. A rerun (`-From Network`) follows an unfinished job with the same target instead of sending another. |
-| "ApplyConfiguration (apply) failed" | The message has the job's status, its failed step and error. Fix the cause, then run `-From Network`. |
-
-**A risk to know.** If the management port has no address of its own while the static address sits on the wrong port, setting that port to DHCP can cut the node off from Azure until the static address is applied. The stage warns when it sees this. A DHCP server on the management network avoids it: the management port then has a lease while the address moves.
+**What to do.** Nothing in ZTP: it has no gateway and ZTP doesn't touch it. In the cluster deployment, keep this adapter **out of every network intent**. It isn't a cluster port.
 
 ## Node state after the OS install
 
-**What you see.** After the OS install, a node has Microsoft inbox network drivers, DHCP and a default gateway on more than one port, and an empty `C:\SBE`.
+**What you see.** After ZTP, a node has Microsoft inbox network drivers, DHCP and a default gateway on more than one port, and an empty `C:\SBE`. The ports are named `Port0` to `Port6`.
 
 **Why it matters.** Learn: "Inbox drivers are not supported for use with Azure Local" ([host network requirements](https://learn.microsoft.com/azure/azure-local/concepts/host-network-requirements#driver-requirements)). Cloud deployment validation fails if it finds more than one physical adapter with a default gateway ([decision 8](https://learn.microsoft.com/azure/azure-local/plan/cloud-deployment-network-considerations#decision-8-determine-management-ips-and-infrastructure-network)). Learn says to install the OEM's drivers and put the SBE in `C:\SBE` before deployment ([install drivers and firmware](https://learn.microsoft.com/azure/azure-local/deploy/deployment-install-os#install-drivers-and-firmware)). Dell says its SBE can't install drivers or firmware during deployment, so they're installed before it.
 
-**What the run does.** Prepare fixes all of it before Validate. See [the Prepare gates](architecture.md#the-prepare-gates). If Prepare warns "No SBE driver for &lt;adapter&gt;", that adapter stays on its current driver and Validate may reject it. Check that you downloaded the right SBE family for the model.
+**What to do.** This is expected: ZTP ends at the Handoff and doesn't install OEM drivers, stage the SBE, turn DHCP off on the other NICs, set DNS and time, or create the deployment admin. Do those in OS configuration, before Validate: [Phase 03 OS Configuration](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/). The tasks that cover the network are [Task 04 Disable DHCP on all adapters](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-04-disable-dhcp-on-management-adapter), [Task 05 DNS](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-05-configure-dns-servers), [Task 07 NTP](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-07-configure-time-synchronization-ntp), [Task 09 Disable unused adapters](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-09-disable-unused-network-adapters), the [Task 15 combined script](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-15-complete-combined-script-all-steps) and [Task 16 Verification](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-16-phase03-verification). Find the NICs by MAC: the port names don't match the hardware.
 
-If gate 4 fails with "default gateway on ..." or "DHCP still on ...", run `-From Prepare` again. If it fails again, look at the adapters on the node from the BMC console.
+## SBE settings are ignored
+
+**What you see.** The entry point prints `Note: ztp.node_preparation ignored: SBE belongs to OS configuration.` (schema 5: `Note: hardware.sbe ignored: SBE belongs to OS configuration.`). The orchestrator prints `<key> in <file> ignored: SBE belongs to OS configuration.` for an older settings file with `SbeModel`, `SbeFamily`, `SbeSolutionVersion` or `SbePackagePath`.
+
+**What to do.** Nothing. ZTP no longer reads these keys; the run goes on. Remove them from the file when you like. Stage the SBE in OS configuration.
 
 ## Deploy fails with `ParentResourceNotFound` on build 2690
 
@@ -140,14 +198,6 @@ The run doesn't read `properties.error`: the Ready stage decides on the job's st
 ## USB boot loop
 
 **Learn:** when the BIOS setting **Boot USB Devices First** is on, the machine boots from the USB device on every restart, reinstalls the maintenance environment, and loops about every 10 minutes. Boot from USB once, then from the internal disk ([Learn: USB boot loop](https://learn.microsoft.com/azure/azure-local/deploy/troubleshoot-simplified-machine-provisioning#usb-boot-loop-issue-with-maintenance-environment)). The run uses a one-time boot, but turn that BIOS setting off anyway.
-
-## Prepare fails to sign in
-
-| Message | Check |
-| --- | --- |
-| "No sign-in to &lt;ip&gt; with the ZTP administrator secret" | The node answers on `cluster_nodes[].ip_address` (DHCP reservation for the management MAC). TCP 5985 is open from the host. The node addresses are in the host's WinRM TrustedHosts list ([Learn](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_remote_troubleshooting#how-to-use-an-ip-address-in-a-remote-command)). The secret in `ztp.admin_secret` is the one the claim used. |
-| "No adapter on &lt;node&gt; has the environment file's MAC" | `cluster_nodes[].mac_address` is the management adapter's MAC. |
-| "&lt;node&gt; reported no result within 30 minutes" | Look at the node from the BMC console. The task's result is in `C:\ProgramData\AzureLocalZtp\result.json`. |
 
 ## Other Learn troubleshooting
 

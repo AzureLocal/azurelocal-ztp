@@ -23,7 +23,7 @@ scripts/
 
 ## Simplified provisioning (virtual USB, vouchers, Azure)
 
-`scripts/simplified-provisioning/` holds the stage scripts for Microsoft's Simplified machine provisioning without a physical USB stick: per-node virtual USB images, Redfish boot, voucher read-back, the Bicep-based Azure deployment and the wait-for-ready poller. Every script is a plan by default and changes hardware or Azure only with `-Execute`. See [simplified-provisioning/README.md](simplified-provisioning/README.md).
+`scripts/simplified-provisioning/` holds the stage scripts for Microsoft's Simplified machine provisioning without a physical USB stick: per-node virtual USB images, Redfish boot, voucher read-back, the static management address in the maintenance environment (Device), the Bicep-based Azure deployment, the wait-for-ready poller, the management address check (Network), the BIOS restore (Restore) and the handoff. The stages are Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Restore and Handoff. ZTP ends at the Handoff; OEM drivers, the SBE and the deployment admin are OS configuration, which comes next. Every script is a plan by default and changes hardware or Azure only with `-Execute`. See [simplified-provisioning/README.md](simplified-provisioning/README.md).
 
 ## Key Scripts
 

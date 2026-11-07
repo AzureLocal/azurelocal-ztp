@@ -3,7 +3,7 @@
 #
 # Before you use it:
 # - A self-hosted Windows agent on the management network, running as a service under a local administrator account,
-#   with the prerequisites in docs/operator-guide.md. Give it the user capability "ztp" so every job lands on it.
+#   with the prerequisites in docs/prerequisites.md. Give it the user capability "ztp" so every job lands on it.
 # - The agent host has a managed identity (Azure VM or Azure Arc-enabled server) with the roles in
 #   docs/automation-pipelines.md. No secret is stored in the pipeline: the environment file references Key Vault.
 # - An environment named azurelocal-ztp-execute with an Approvals check, and an Exclusive lock check so that
@@ -26,7 +26,7 @@ parameters:
     displayName: Run this stage and every later one (none = continue where the last run stopped)
     type: string
     default: none
-    values: [none, Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Handoff, Prepare]
+    values: [none, Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Restore, Handoff]
 
 pool:
   name: ztp-management

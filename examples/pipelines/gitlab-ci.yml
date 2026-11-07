@@ -4,7 +4,7 @@
 #
 # Before you use it:
 # - A self-hosted Windows runner on the management network with shell = "pwsh", running as a service under a local
-#   administrator account, with the prerequisites in docs/operator-guide.md. Give it the tags "windows" and "ztp".
+#   administrator account, with the prerequisites in docs/prerequisites.md. Give it the tags "windows" and "ztp".
 # - In the runner's config.toml, [runners.custom_build_dir] enabled = true, so GIT_CLONE_PATH below is allowed. The run's
 #   state is in ztp.media_path of the environment file, outside the clone, on every job and every run.
 # - The runner host has a managed identity (Azure VM or Azure Arc-enabled server) with the roles in
@@ -25,7 +25,7 @@ variables:
   ZTP_FROM:
     value: none
     description: Run this stage and every later one (none = continue where the last run stopped)
-    options: [none, Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Handoff, Prepare]
+    options: [none, Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Restore, Handoff]
   GIT_CLONE_PATH: $CI_BUILDS_DIR/azurelocal-ztp/repo
 
 stages:

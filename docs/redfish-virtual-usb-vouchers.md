@@ -58,7 +58,7 @@ The same shape works as `-Nodes @([pscustomobject]@{ name = 'node-01'; service_t
 
 ## All stages with one command
 
-The orchestrator runs these steps as its Boot, Bootstrap and Vouchers stages, together with the Azure stages, and checks each result before the next. Use the [Operator guide](operator-guide.md) for the whole flow from an environment file, or the [Orchestrator reference](automated-bootstrap.md) to drive the orchestrator directly. For the Configurator App fallback, rerun the Vouchers stage with `-VoucherFolder`.
+The orchestrator runs these steps as its Boot, Bootstrap and Vouchers stages, together with the Device, Azure, Ready, Network, Restore and Handoff stages, and checks each result before the next. Use the [Operator guide](operator-guide.md) for the whole flow from an environment file, or the [Orchestrator reference](automated-bootstrap.md) to drive the orchestrator directly. For the Configurator App fallback, rerun the Vouchers stage with `-VoucherFolder`.
 
 ## Step by step
 
@@ -173,4 +173,4 @@ Use `Get-Help ./scripts/simplified-provisioning/<script>.ps1 -Full` for every pa
 
 ## Next steps
 
-Continue with [Azure provisioning from vouchers](azure-provisioning-vouchers.md). After the machines are ready to cluster, the Prepare stage installs the SBE's network drivers and readies each node for Validate; see [Design and architecture](architecture.md#the-prepare-gates). Cluster deployment is outside this repository.
+Continue with [Azure provisioning from vouchers](azure-provisioning-vouchers.md). After the machines are ready to cluster, the Network, Restore and Handoff stages finish ZTP; see [Design and architecture](architecture.md#stages-and-gates). OS configuration comes next, before Validate and Deploy; see [Where ZTP ends](architecture.md#where-ztp-ends). Cluster deployment is outside this repository.

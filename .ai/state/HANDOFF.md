@@ -6,7 +6,27 @@
   (possibly a different tool) starts by reading it.
 -->
 
-## Last session (2026-11-07, priority push for the tplabs rerun)
+## Last session (2026-11-07, refactor: ZTP ends after Network and Restore, at the Handoff)
+
+- **What changed and why (owner decisions 2026-11-07):**
+  - **Prepare removed.** `Initialize-ZtpNode.ps1` and its tests are gone, and so is `-From Prepare`. OEM drivers, `C:\SBE`, DHCP off on the other NICs, DNS/time and the deployment admin are OS configuration (azurelocal-toolkit Phase 03; https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/).
+  - **No SBE in ZTP.** Removed `Get-ZtpSbe.ps1`, the parser and selector in `ZtpSbe.Common.ps1`, `fixtures/sbe-discovery-dell.xml` and the `sbe` blocks of `config/oem/*.json`. The BMC part of the OEM loader moved to `ZtpOem.Common.ps1`. Retired settings keys (`SbeModel`, `SbeFamily`, `SbeSolutionVersion`, `SbePackagePath`) and `ztp.node_preparation` / `hardware.sbe` are ignored with a one-line note.
+  - **Keys no longer read:** `credentials.local_admin_*`, `onprem.ntp_servers`, `hardware.model`, and the mapped `cluster_nodes[].network_adapters` (the other ports). The `-For Prepare` mode of the key check is gone.
+  - **Handoff schema 2:** only what Azure generated (Arc and edge names and IDs, site, installed vsrVersion), plus per-node `managementAddressVerified`/`managementAddressReason` (from the Network stage, kept in the state file) and `biosRestored`. Removed: `sbe`, `bootstrap`, `timestamps`, `connectivity`.
+    - The bootstrap ISO version, URL and SHA256 are in the Resolve evidence and state data; timestamps are in the event log and state file.
+    - `Convert-ZtpHandoffToClusterInputs.ps1` reads schema 2 and 1 and emits `arc_machine_names` and `release.azure_local_version` only.
+  - `docs/bootstrap-media-and-sbe.md` was renamed to `docs/bootstrap-media.md`.
+  - New page `docs/prerequisites.md`, with a values table in schema 5 paths.
+  - Rewritten docs: README, operator guide, architecture, monitoring, environment-file, infrastructure-schema-5, automated-bootstrap, troubleshooting, the scripts READMEs and the pipeline examples.
+  - Two test races fixed: parallel runspaces appending to one file, in `ZtpRestore.Tests.ps1` and in the Boot BIOS test.
+- **Tests:** Pester 5.9.1, 394 passed, 0 failed (main before this refactor: 419). The removed groups: 18 SBE, 21 Prepare/SBE environment, and a few replaced. PSScriptAnalyzer (Error, Warning): 2 findings, both pre-existing.
+- **Branch:** main (pushed).
+- **Open:**
+  1. The toolkit's ZTP-only template (`config/infrastructure/infrastructure.ztp.example.yml`) isn't published yet, so the docs link 404s until it is. Its local copy still carries `hardware.sbe`, `identity.local_admin` and `networking.ntp_servers`, and says "Prepare".
+  2. The flow diagram (`docs/diagrams/ztp-flow.drawio` and its PNG) is being redrawn by the coordinator.
+  3. No live timing yet for the run up to the Handoff after Restore.
+
+## Previous session (2026-11-07, priority push for the tplabs rerun)
 
 - **What changed and why (owner decisions 2026-11-07):**
   - **static_method** (`network_intents.management.static_method`, schema 5 `networking.management.static_method`): `device` is the default. With it the site network is Automatic and the claim carries no Manual adapter, because a Manual site makes the OS install put the static address on the first ready port. `site` keeps the old Manual path.

@@ -4,7 +4,7 @@
 #
 # Before you use it:
 # - A self-hosted Windows runner on the management network, running as a service under a local administrator account,
-#   with the prerequisites in docs/operator-guide.md. Give it the label "ztp".
+#   with the prerequisites in docs/prerequisites.md. Give it the label "ztp".
 # - The runner host has a managed identity (Azure VM or Azure Arc-enabled server) with the roles in
 #   docs/automation-pipelines.md. No secret is stored in GitHub: the environment file references Key Vault.
 # - An environment named azurelocal-ztp-execute with required reviewers.
@@ -27,7 +27,7 @@ on:
         required: true
         default: none
         type: choice
-        options: [none, Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Handoff, Prepare]
+        options: [none, Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Restore, Handoff]
 
 # One run per environment file at a time: the share, the BMCs and the state file serve one run.
 concurrency:

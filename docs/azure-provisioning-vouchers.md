@@ -104,7 +104,7 @@ The lifecycle on a live run was `Creating`, `AwaitingConnection`, `Provisioning`
 - the edge machine is `Connected` and has an `arcMachineResourceId`,
 - the mandatory Arc extensions `AzureEdgeDeviceManagement`, `AzureEdgeLifecycleManager`, `AzureEdgeRemoteSupport` and `AzureEdgeTelemetryAndDiagnostics` are `Succeeded`.
 
-A failed lifecycle, stage, job or step is terminal: the script throws (non-zero exit) and names the failing step. On timeout it names the pending node, its stage and its missing extensions. Allow about an hour per node from claim to `Provisioned`.
+Until the service creates the `ProvisionOs` job, a GET on it answers 404 or 409; both mean "not there yet", and the watch keeps waiting. A failed lifecycle, stage, job or step is terminal: the script throws (non-zero exit) and names the failing step. On timeout it names the pending node, its stage and its missing extensions. Allow about an hour per node from claim to `Provisioned`.
 
 ### Retry a failed OS install
 
@@ -153,4 +153,4 @@ The role definition IDs in the template are Azure built-in roles, the only liter
 
 ## Next steps
 
-Provisioning leaves you with Arc-connected machines with the mandatory extensions. Next, the Prepare stage (`Initialize-ZtpNode.ps1`) installs the SBE's network drivers, copies the SBE to `C:\SBE`, creates the deployment admin and sets one static management address; see the [Operator guide](operator-guide.md). Cluster Validate and Deploy, with each edge machine's `arcMachineResourceId`, are outside this repository.
+Provisioning leaves you with Arc-connected machines with the mandatory extensions. In a full run the orchestrator then runs Network (the management address on the port with the management MAC), Restore (the BIOS values changed for the install only) and Handoff; see the [Operator guide](operator-guide.md). ZTP ends there. OEM drivers, the SBE in `C:\SBE`, DHCP off on the other NICs, DNS and time, and the deployment admin are OS configuration, which comes next: [Phase 03 OS Configuration](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/). Cluster Validate and Deploy, with each edge machine's `arcMachineResourceId`, are outside this repository.

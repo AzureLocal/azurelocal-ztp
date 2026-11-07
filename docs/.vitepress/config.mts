@@ -32,7 +32,7 @@ export default defineConfig({
   ignoreDeadLinks: false,
   base: '/azurelocal-ztp/',
   title: 'Azure Local ZTP',
-  description: 'Zero-touch provisioning for Azure Local: from bare machines to nodes ready for cluster Validate.',
+  description: 'Zero-touch provisioning for Azure Local: from bare machines to provisioned, Arc-connected nodes.',
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/azurelocal-ztp/assets/images/azurelocal-ztp-icon.svg' }]
   ],
@@ -48,6 +48,7 @@ export default defineConfig({
         text: 'Get started',
         items: [
           { text: 'Overview', link: '/overview' },
+          { text: 'Prerequisites', link: '/prerequisites' },
           { text: 'Operator guide', link: '/operator-guide' },
           { text: 'Monitoring a run', link: '/monitoring' },
           { text: 'Master infrastructure.yml (schema 5)', link: '/infrastructure-schema-5' },
@@ -66,7 +67,7 @@ export default defineConfig({
         text: 'How it works',
         items: [
           { text: 'Orchestrator reference', link: '/automated-bootstrap' },
-          { text: 'Bootstrap media and the OEM SBE', link: '/bootstrap-media-and-sbe' },
+          { text: 'Bootstrap media', link: '/bootstrap-media' },
           { text: 'Redfish virtual USB and vouchers', link: '/redfish-virtual-usb-vouchers' },
           { text: 'Azure provisioning from vouchers', link: '/azure-provisioning-vouchers' }
         ]
