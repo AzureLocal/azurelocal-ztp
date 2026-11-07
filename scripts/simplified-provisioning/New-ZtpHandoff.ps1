@@ -157,14 +157,25 @@ foreach ($name in $NodeName) {
     $adapters = @(Get-HandoffAdapter -Machine $name -FileNode $fileNode)
     $unseen = $null -ne $check -and -not [bool](Get-ZtpPropertyValue $check 'adaptersReported' $true)
     if ($unseen -and -not $verified) {
-        $m = @($adapters | Where-Object { $_.isManagement }) | Select-Object -First 1
-        if ($m) {
-            $modeName = [string](Get-ZtpPropertyValue $fileNode 'management_ip_assignment' '')
-            $want = [string]$m.expected.ipAddress
-            $has = if ($m.ipAddress) { "$($m.ipAssignment) $($m.ipAddress)" } else { "$($m.ipAssignment), no address" }
-            if ($modeName -eq 'static' -and $m.ipAssignment -eq 'Static' -and $want -and $m.ipAddress -eq $want) { $verified = $true; $reason = $null }
-            elseif ($modeName -eq 'dhcp_reservation' -and $m.ipAddress -and (-not $want -or $m.ipAddress -eq $want)) { $verified = $true; $reason = $null }
-            else { $reason = "read again at the Handoff: the management port $($m.name) (MAC $($m.macAddress)) has $has$(if ($want) { "; the file expects $want" }); $reason" }
+        # Judged like the Network stage does (Get-ManagementVerdict), per mode, and only on the port with the management MAC.
+        # Fail closed: a mode this does not know, no management port in the read, or another port holding the same address
+        # leaves the node not verified, and the Network stage's reason stands unless a mode was actually judged.
+        $port = @($adapters | Where-Object { $_.isManagement }) | Select-Object -First 1
+        if ($port) {
+            $modeName = ([string](Get-ZtpPropertyValue $fileNode 'management_ip_assignment' '')).ToLowerInvariant()
+            $want = [string](Get-ZtpPropertyValue $port.expected 'ipAddress' '')
+            if (-not $want) { $want = [string](Get-ZtpPropertyValue $fileNode 'management_ip' '') }
+            $has = if ($port.ipAddress) { "$($port.ipAssignment) $($port.ipAddress)" } else { "$($port.ipAssignment), no address" }
+            $holders = @($adapters | Where-Object { $want -and -not $_.isManagement -and $_.ipAddress -eq $want } | ForEach-Object { "$($_.name) (MAC $($_.macAddress))" })
+            $judged = $true
+            $portOk = if ($modeName -eq 'static') { [bool]($port.ipAssignment -eq 'Static' -and $want -and $port.ipAddress -eq $want) }
+            elseif ($modeName -eq 'dhcp_reservation') { [bool]($port.ipAddress -and (-not $want -or $port.ipAddress -eq $want)) }
+            elseif ($modeName -in 'dhcp', 'preconfigured') { [bool]($want -and $port.ipAddress -eq $want) }
+            else { $judged = $false; $false }
+            if ($judged -and $portOk -and $holders.Count -eq 0) { $verified = $true; $reason = $null }
+            elseif ($judged) {
+                $reason = "read again at the Handoff: the management port $($port.name) (MAC $($port.macAddress)) has $has$(if ($want) { "; the file expects $want" })$(if ($holders.Count) { "; $($holders -join ', ') also has $want" }); $reason"
+            }
         }
     }
     $mode = if ($fileNode -and (Get-ZtpPropertyValue $fileNode 'management_ip_assignment' '')) {

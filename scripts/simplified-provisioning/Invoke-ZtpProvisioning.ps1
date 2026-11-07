@@ -168,7 +168,8 @@ LastStatusChange after the restart (Test-ProvisionedMachines.ps1 -ConnectedSince
 .PARAMETER BiosTimeoutMinutes
 Boot and Restore: how long to wait for a node's BIOS to report the new values after the restart.
 .PARAMETER AdaptersTimeoutMinutes
-Network: how long to wait for each edge machine to report its network adapters (0 = the stage script's 10).
+Network: how long to wait for each edge machine to report its network adapters, 0 to 240 minutes. 0 reads once and does not wait;
+leaving it unset keeps the stage script's 10. Invoke-ZtpEnvironment.ps1 always writes it (ztp.timeouts.adapters_minutes, default 10).
 .PARAMETER BootstrapStallMinutes
 Bootstrap: how long the BMC may show no change before the watch reports a stall (default: the stage script's 20).
 .PARAMETER ImageSizeGB
@@ -245,7 +246,7 @@ param(
     [ValidateRange(0, 120)][int]$RestoreSettleMinutes = 5,
     [ValidateRange(1, 240)][int]$BiosTimeoutMinutes = 30,
     [ValidateRange(0, 240)][int]$BootstrapStallMinutes = 0,
-    [ValidateRange(0, 240)][int]$AdaptersTimeoutMinutes = 0,
+    [ValidateRange(0, 240)][Nullable[int]]$AdaptersTimeoutMinutes,
     [ValidateRange(0, 128)][int]$ImageSizeGB = 0,
     [ValidatePattern('^$|^[A-Za-z0-9][A-Za-z0-9_-]{0,19}$')][string]$ShareAccountName,
     [ValidateRange(0, 65535)][int]$MaintenancePort = 0,
@@ -410,7 +411,8 @@ function Get-ZtpStageCall {
             $p = [ordered]@{ SubscriptionId = $SubscriptionId; ResourceGroupName = $ResourceGroupName; ParameterFile = $ParameterFile; Node = $NodeName; TimeoutMinutes = $NetworkTimeoutMinutes; PollIntervalSeconds = $PollIntervalSeconds; EventLogPath = $EventLogPath }
             # Verify-only unless -ApplyThroughAzure. Adapter changes (only with it) are evidence: they go beside the event
             # log, as the BIOS changes do.
-            if ($AdaptersTimeoutMinutes) { $p.AdaptersTimeoutMinutes = $AdaptersTimeoutMinutes }
+            # Unset (parameter or -ConfigPath) leaves the stage script's 10; an explicit 0 is passed (read once, no wait).
+            if ($null -ne $AdaptersTimeoutMinutes) { $p.AdaptersTimeoutMinutes = [int]$AdaptersTimeoutMinutes }
             if ($ApplyThroughAzure) { $p.ApplyThroughAzure = $true }
             if ($EventLogPath) { $p.ChangeLogPath = Join-Path (Split-Path -Parent ([IO.Path]::GetFullPath($EventLogPath))) 'network-changes.jsonl' }
             & $act $p

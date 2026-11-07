@@ -1117,6 +1117,12 @@ Describe 'Invoke-ZtpEnvironment.ps1 settings (schema 5.4)' {
         "$($b.configuration_name.value) $($b.apply_site_settings.value) $($b.use_key_vault_configuration.value) $($b.assign_provisioning_roles.value) $($b.assign_hci_rp_role.value) '$($b.managed_resource_group_name.value)' $($b.network_kind.value) $($b.ntp_configuration_choice.value) '$($b.ntp_server.value)' '$($b.alternate_ntp_server.value)' $($b.connectivity_type.value)" | Should -Be "default True True True True '' LAN Automatic '' '' Public"
     }
 
+    It 'writes an explicit adapters_minutes of 0 (read once, no wait) as 0, not as the default' {
+        $r = Invoke-Settings -Name 'adapters0' -Edit { param($d) $d.provisioning.simplified['timeouts'] = [ordered]@{ adapters_minutes = 0 } }
+        $r.Config.PSObject.Properties.Name | Should -Contain 'AdaptersTimeoutMinutes'
+        $r.Config.AdaptersTimeoutMinutes | Should -Be 0
+    }
+
     It 'carries every new setting from the file to the settings file and the Bicep parameters' {
         $r = Invoke-Settings -Name 'custom' -Edit { param($d)
             $s = $d.provisioning.simplified

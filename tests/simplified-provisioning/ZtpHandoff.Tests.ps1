@@ -376,4 +376,66 @@ Describe 'New-ZtpHandoff.ps1 reads the adapters again when the Network stage saw
         $n['managementAddressReason'] | Should -BeLike '*adapters never reported within 10 minutes*'
         @($n['networkAdapters']).Count | Should -Be 0
     }
+
+    Context 'the verdict per mode, fail closed' {
+        BeforeEach {
+            # The node list with node-01 in another mode (and the file's address on its management port).
+            $script:setMode = {
+                param([string]$Mode)
+                $doc = Get-Content -LiteralPath $script:nodesNic -Raw | ConvertFrom-Json -AsHashtable
+                $doc.nodes[0].management_ip_assignment = $Mode
+                $doc | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $script:nodesNic
+            }
+            # The management port plus a second port with its own MAC and address.
+            $script:twoPorts = {
+                param([string]$Type, [string]$Ip, [string]$OtherIp)
+                $one = & $script:portsNow $Type $Ip
+                $other = @{ name = '00000000-0000-0000-0000-000000000002'; properties = @{ networkConfiguration = @{ adapterName = 'Port2' }; reportedProperties = @{ adapterName = 'Port2'; macAddress = '00-00-5E-00-53-BB'; interfaceDescription = 'Example NIC 2'; ipInterfaceType = 'Static'; ip4Address = $OtherIp; subnetMask = '255.255.255.0'; defaultGateway = '192.0.2.1' } } }
+                @{ value = @($one.value[0], $other) }
+            }
+        }
+
+        It 'does not verify a static address that another port also holds' {
+            $n = & $script:handoff (& $script:twoPorts 'Static' '192.0.2.11' '192.0.2.11') @($script:unseen)
+            $n['managementAddressVerified'] | Should -BeFalse
+            $n['managementAddressReason'] | Should -BeLike 'read again at the Handoff:*Port2 (MAC 00:00:5e:00:53:bb) also has 192.0.2.11*'
+        }
+
+        It 'does not verify a static node whose port reports DHCP with the right address' {
+            $n = & $script:handoff (& $script:portsNow 'Dhcp' '192.0.2.11') @($script:unseen)
+            $n['managementAddressVerified'] | Should -BeFalse
+        }
+
+        It 'judges dhcp and preconfigured like the Network stage: verified only on the address the file gives' {
+            foreach ($mode in 'dhcp', 'preconfigured') {
+                & $script:setMode $mode
+                $ok = & $script:handoff (& $script:portsNow 'Dhcp' '192.0.2.11') @($script:unseen)
+                $ok['managementAddressVerified'] | Should -BeTrue -Because $mode
+                $no = & $script:handoff (& $script:portsNow 'Dhcp' '192.0.2.116') @($script:unseen)
+                $no['managementAddressVerified'] | Should -BeFalse -Because $mode
+                $no['managementAddressReason'] | Should -BeLike 'read again at the Handoff:*has Dhcp 192.0.2.116; the file expects 192.0.2.11*'
+            }
+        }
+
+        It 'does not verify a reserved DHCP port with no address' {
+            & $script:setMode 'dhcp_reservation'
+            $n = & $script:handoff (& $script:portsNow 'Dhcp' '') @($script:unseen)
+            $n['managementAddressVerified'] | Should -BeFalse
+            $n['managementAddressReason'] | Should -BeLike 'read again at the Handoff:*no address*'
+        }
+
+        It 'keeps the Network stage''s reason, and verifies nothing, for a mode it does not know' {
+            & $script:setMode ''
+            $n = & $script:handoff (& $script:portsNow 'Static' '192.0.2.11') @($script:unseen)
+            $n['managementAddressVerified'] | Should -BeFalse
+            $n['managementAddressReason'] | Should -Be $script:unseen.reason -Because 'nothing was re-judged, so no "read again" text'
+            @($n['networkAdapters']).Count | Should -Be 1
+        }
+
+        It 'never verifies a node the Network stage has no result for, even with a matching port' {
+            $n = & $script:handoff (& $script:portsNow 'Static' '192.0.2.11') @()
+            $n['managementAddressVerified'] | Should -BeFalse
+            $n['managementAddressReason'] | Should -Be 'no Network stage result for this node'
+        }
+    }
 }

@@ -598,8 +598,22 @@ Describe 'Invoke-ZtpProvisioning.ps1 and the adapter wait (Network to Handoff)' 
         ($global:ztpRunCalls | Where-Object Script -EQ 'Set-ZtpManagementAddress.ps1').Params.AdaptersTimeoutMinutes | Should -Be 15
     }
 
+    It 'passes an explicit 0 (read once, no wait) to the Network stage, from the parameter and from the settings file' {
+        $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; AdaptersTimeoutMinutes = 0 }
+        $p = ($global:ztpRunCalls | Where-Object Script -EQ 'Set-ZtpManagementAddress.ps1').Params
+        $p.ContainsKey('AdaptersTimeoutMinutes') | Should -BeTrue
+        $p.AdaptersTimeoutMinutes | Should -Be 0
+        $global:ztpRunCalls.Clear(); Remove-Item -LiteralPath $script:statePath -Force
+        $cfg = Join-Path $TestDrive 'settings-adapters0.json'
+        Set-Content -LiteralPath $cfg -Value '{ "AdaptersTimeoutMinutes": 0 }'
+        $null = & $script:invoke @{ ConfigPath = $cfg; Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false }
+        $p = ($global:ztpRunCalls | Where-Object Script -EQ 'Set-ZtpManagementAddress.ps1').Params
+        $p.ContainsKey('AdaptersTimeoutMinutes') | Should -BeTrue
+        $p.AdaptersTimeoutMinutes | Should -Be 0
+    }
+
     It 'tells the Handoff stage which nodes the Network stage never saw adapters for' {
-        $global:ztpRunBehavior['Set-ZtpManagementAddress.ps1'] = { param($p) if ($p['Execute']) { foreach ($n in $p['Node']) { [pscustomobject]@{ Node = $n; Mode = 'static'; Status = 'Deferred'; Adapter = ''; AdapterName = ''; MacAddress = ''; Address = ''; ExpectedAddress = ''; Released = @(); Changes = @(); Verified = $false; Reason = 'adapters never reported within 10 minutes'; AdaptersReported = ($n -ne 'node-01') } } } }
+        $global:ztpRunBehavior['Set-ZtpManagementAddress.ps1'] = { param($p) if ($p['Execute']) { foreach ($n in $p['Node']) { [pscustomobject]@{ Node = $n; Mode = 'static'; Status = 'NeverReported'; Adapter = ''; AdapterName = ''; MacAddress = ''; Address = ''; ExpectedAddress = ''; Released = @(); Changes = @(); Verified = $false; Reason = 'adapters never reported within 10 minutes'; AdaptersReported = ($n -ne 'node-01') } } } }
         $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false }
         $checks = @(($global:ztpRunCalls | Where-Object Script -EQ 'New-ZtpHandoff.ps1').Params.ManagementAddressCheck)
         ($checks | Where-Object { $_.node -eq 'node-01' }).adaptersReported | Should -BeFalse

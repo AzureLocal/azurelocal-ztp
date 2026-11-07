@@ -535,7 +535,7 @@ Describe 'Set-ZtpManagementAddress.ps1 waits for the machine to report its netwo
         $global:netT_noAdapters = $true
         $row = & $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false; AdaptersTimeoutMinutes = 0.02 }
         $row.Verified | Should -BeFalse
-        $row.Status | Should -Be 'Deferred'
+        $row.Status | Should -Be 'NeverReported' -Because 'a static node whose port was never seen is not the Deferred success (Sonar counts ManagementAddressDeferredToOsConfiguration as success)'
         $row.AdaptersReported | Should -BeFalse
         $row.Reason | Should -BeLike '*adapters never reported within 0.02 minutes*the management port (MAC 00:00:5e:00:53:aa) wasn''t checked*'
         (& $script:reads) | Should -BeGreaterThan 1
@@ -544,6 +544,53 @@ Describe 'Set-ZtpManagementAddress.ps1 waits for the machine to report its netwo
         $never = @($events | Where-Object state -EQ 'ManagementAdaptersNeverReported')
         $never.Count | Should -Be 1
         $never[0].level | Should -Be 'Warning'
+        @($events | Where-Object state -EQ 'ManagementAddressDeferredToOsConfiguration').Count | Should -Be 0
+        $never[0].nextAction | Should -Not -BeLike '*OS configuration*sets the static address*'
+    }
+
+    It 'after the budget, other adapters listed but not the management MAC: the same Warning, not verified, no throw' {
+        $global:netT_adapters = [ordered]@{
+            $script:storage = New-NetTAdapter -AdapterName 'Port2' -Mac '00005e0053bb' -Description 'Example storage' -Type 'Dhcp'
+        }
+        $row = & $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false; AdaptersTimeoutMinutes = 0.02 }
+        $row.Verified | Should -BeFalse
+        $row.Status | Should -Be 'NeverReported'
+        $row.AdaptersReported | Should -BeFalse
+        $row.Reason | Should -BeLike '*adapters never reported within 0.02 minutes*Port2 00:00:5e:00:53:bb*'
+        $never = @(& $script:eventsNow | Where-Object state -EQ 'ManagementAdaptersNeverReported')
+        $never.Count | Should -Be 1
+        $never[0].level | Should -Be 'Warning'
+    }
+
+    It 'with no wait budget, other adapters but not the management MAC still stops the stage with the list it found' {
+        $global:netT_adapters = [ordered]@{ $script:storage = New-NetTAdapter -AdapterName 'Port2' -Mac '00005e0053bb' -Description 'Example storage' -Type 'Dhcp' }
+        { & $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false; AdaptersTimeoutMinutes = 0 } } | Should -Throw '*reports the management MAC*'
+    }
+
+    It 'static with -ApplyThroughAzure: the budget spent with no adapters writes the Warning event and refuses to change anything' {
+        $global:netT_noAdapters = $true
+        { & $script:run @{ ApplyThroughAzure = $true; ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false; AdaptersTimeoutMinutes = 0.02 } } | Should -Throw '*reports no network adapters within 0.02 minutes*'
+        $events = & $script:eventsNow
+        $never = @($events | Where-Object state -EQ 'ManagementAdaptersNeverReported')
+        $never.Count | Should -Be 1
+        $never[0].level | Should -Be 'Warning'
+        $never[0].evidence | Should -BeLike '*adapters never reported within 0.02 minutes*no address was set*'
+        @($events | Where-Object state -EQ 'ManagementAddressFailed').Count | Should -Be 1
+        @(& $script:puts).Count | Should -Be 0
+    }
+
+    It 'sleeps at the poll interval but never past the time left, and never faster than every 5 seconds' {
+        $global:netT_noAdapters = $true
+        $global:netT_sleeps = [System.Collections.Generic.List[int]]::new()
+        Mock Start-Sleep { $global:netT_sleeps.Add($Milliseconds) }
+        $null = & $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false; AdaptersTimeoutMinutes = 0.05; PollIntervalSeconds = 0 }
+        $global:netT_sleeps.Count | Should -BeGreaterThan 0
+        $global:netT_sleeps[0] | Should -BeGreaterThan 2000 -Because 'a poll interval of 0 is raised to 5 seconds, then cut to the 3 seconds of budget'
+        ($global:netT_sleeps | Measure-Object -Maximum).Maximum | Should -BeLessOrEqual 3000 -Because 'no sleep runs past the budget'
+        $global:netT_sleeps.Clear()
+        $null = & $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false; AdaptersTimeoutMinutes = 0.05; PollIntervalSeconds = 3600 }
+        ($global:netT_sleeps | Measure-Object -Maximum).Maximum | Should -BeLessOrEqual 3000 -Because 'a long poll interval is cut to the time left'
+        Remove-Variable -Scope Global -Name netT_sleeps -ErrorAction SilentlyContinue
     }
 
     It 'says the same for a DHCP-reservation port, and reads once when the budget is 0' {
