@@ -229,19 +229,30 @@ function Get-ZtpImageVoucherSignal {
 function ConvertTo-ZtpUtcDateTime {
     <#
     .SYNOPSIS
-    A time from the run state or a stage result as a UTC [datetime], or $null when there is none or it does not parse. The
-    state file stores ISO 8601 strings, which ConvertFrom-Json may hand back already as [datetime].
+    A time from the run state or a stage result as a UTC [datetime] (Kind Utc), or $null when there is none or it does not parse.
+    .DESCRIPTION
+    The state file stores ISO 8601 strings, which ConvertFrom-Json may hand back already as [datetime]. Kind decides the
+    conversion: Utc is kept, Local is converted, and Unspecified is taken as UTC. ToUniversalTime() would read Unspecified as
+    local time and shift it by the host's UTC offset; every time this tool writes is UTC (it writes 'o' strings of UTC values,
+    and a string without a zone designator is one it wrote or a file timestamp already in UTC), so Unspecified means UTC here.
+    A string with an offset (+02:00) or Z is converted exactly. Compare the results with each other only: all are Kind Utc.
     #>
     [CmdletBinding()]
     [OutputType([object])]
     param([AllowNull()][object]$Value)
     if ($null -eq $Value) { return $null }
-    if ($Value -is [datetime]) { return $Value.ToUniversalTime() }
-    $text = [string]$Value
-    if (-not $text.Trim()) { return $null }
     $parsed = [datetime]::MinValue
-    if ([datetime]::TryParse($text, [cultureinfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) { return $parsed.ToUniversalTime() }
-    return $null
+    if ($Value -is [datetime]) { $parsed = $Value }
+    else {
+        $text = [string]$Value
+        if (-not $text.Trim()) { return $null }
+        if (-not [datetime]::TryParse($text, [cultureinfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) { return $null }
+    }
+    switch ($parsed.Kind) {
+        'Utc' { return $parsed }
+        'Local' { return $parsed.ToUniversalTime() }
+        default { return [datetime]::SpecifyKind($parsed, [DateTimeKind]::Utc) }
+    }
 }
 
 function Get-ZtpVoucherProvenance {
@@ -255,26 +266,40 @@ function Get-ZtpVoucherProvenance {
     recorded, not what the image held when the watch started.
       ImageBuiltAt         when the Media stage built this node's image in this run (state: stages.Media.data.images.<node>.builtAt)
       ResetAt              when the Boot stage reset this node onto that image (state: stages.Boot.data.resetAt.<node>)
+      ImageEmptyAtBuild    $true when the Media stage read the image right after building it and its voucher slot was empty
+                           (state: stages.Media.data.images.<node>.voucherEmptyAtBuild), $false when it already held a voucher,
+                           $null when nothing was recorded (a state file from before this field)
       ImageLastWriteUtc    the image file's last write time, when known
-    This run's voucher: both times are recorded, the reset is not before the build, and the image was not last written
-    before the build. The voucher's own write time is not needed (the node's clock is not trusted); when the image's last
-    write time is unknown the reset time is enough. Anything else is not provable as this run's: no record that Media built
-    this image and Boot reset the node in this run (an image reused from an earlier run, or Bootstrap run on its own), a
-    reset recorded before the build, or an image file older than the recorded build (replaced since).
-    Returns { ThisRun, Reason }.
+    This run's voucher: both times are recorded, the reset is not before the build, and the image was recorded empty at the
+    build. That is the strong baseline: the voucher can only have come from the maintenance environment this run started, so it
+    also holds for a rerun of the Boot stage on an image that already carries this run's earlier voucher. An image recorded
+    with a voucher at build (reused from an earlier run) is never this run's. The image file's mtime is NOT used then: it comes
+    over SMB and may lag the host's clock, so it can read earlier than the build for a genuinely fresh voucher. Without the
+    empty-at-build record (an older state file) the earlier rule applies, with the mtime as the check: not this run's when the
+    image was last written before the recorded build; the result then says the baseline is weak. The voucher's own write time
+    is never used (the node's clock is not trusted). No record that Media built this image and Boot reset the node in this run
+    (an image reused with the Media stage skipped, or Bootstrap run on its own) is never this run's.
+    Returns { ThisRun, Reason, Basis } with Basis EmptyAtBuild, Legacy or None. All comparisons are between UTC values.
     #>
     [CmdletBinding()]
-    param([AllowNull()][object]$ImageBuiltAt, [AllowNull()][object]$ResetAt, [AllowNull()][object]$ImageLastWriteUtc)
+    param([AllowNull()][object]$ImageBuiltAt, [AllowNull()][object]$ResetAt, [AllowNull()][object]$ImageLastWriteUtc, [AllowNull()][object]$ImageEmptyAtBuild = $null)
     $built = ConvertTo-ZtpUtcDateTime $ImageBuiltAt
     $reset = ConvertTo-ZtpUtcDateTime $ResetAt
     $written = ConvertTo-ZtpUtcDateTime $ImageLastWriteUtc
-    if ($null -eq $built) { return [pscustomobject]@{ ThisRun = $false; Reason = 'this run has no record that its Media stage built the image' } }
-    if ($null -eq $reset) { return [pscustomobject]@{ ThisRun = $false; Reason = 'this run has no record that its Boot stage reset the node onto the image' } }
-    if ($reset -lt $built) { return [pscustomobject]@{ ThisRun = $false; Reason = "the recorded reset ($($reset.ToString('o'))) is before the recorded image build ($($built.ToString('o')))" } }
-    if ($null -ne $written -and $written -lt $built) { return [pscustomobject]@{ ThisRun = $false; Reason = "the image was last written ($($written.ToString('o'))) before the image build this run recorded ($($built.ToString('o')))" } }
-    return [pscustomobject]@{ ThisRun = $true; Reason = "image built $($built.ToString('o')) and node reset onto it $($reset.ToString('o')) in this run, so a voucher in the image was written by this run's maintenance environment" }
+    if ($null -eq $built) { return [pscustomobject]@{ ThisRun = $false; Basis = 'None'; Reason = 'this run has no record that its Media stage built the image' } }
+    if ($null -eq $reset) { return [pscustomobject]@{ ThisRun = $false; Basis = 'None'; Reason = 'this run has no record that its Boot stage reset the node onto the image' } }
+    if ($reset -lt $built) { return [pscustomobject]@{ ThisRun = $false; Basis = 'None'; Reason = "the recorded reset ($($reset.ToString('o'))) is before the recorded image build ($($built.ToString('o')))" } }
+    if ($ImageEmptyAtBuild -is [bool] -and -not $ImageEmptyAtBuild) {
+        return [pscustomobject]@{ ThisRun = $false; Basis = 'EmptyAtBuild'; Reason = 'the image already held a voucher when this run''s Media stage built it (an image reused from an earlier run)' }
+    }
+    if ($ImageEmptyAtBuild -is [bool]) {
+        $lag = if ($null -ne $written -and $written -lt $built) { "; the image file's last write time ($($written.ToString('o'))) reads earlier than the build, which is ignored (SMB timestamps can lag)" } else { '' }
+        return [pscustomobject]@{ ThisRun = $true; Basis = 'EmptyAtBuild'; Reason = "image built $($built.ToString('o')) with no voucher and node reset onto it $($reset.ToString('o')) in this run, so a voucher in the image was written by this run's maintenance environment$lag" }
+    }
+    $weak = 'the state has no record that the image was empty when built, so this relies on the image file''s write time and cannot tell this run''s earlier voucher from an older one'
+    if ($null -ne $written -and $written -lt $built) { return [pscustomobject]@{ ThisRun = $false; Basis = 'Legacy'; Reason = "the image was last written ($($written.ToString('o'))) before the image build this run recorded ($($built.ToString('o'))); $weak" } }
+    return [pscustomobject]@{ ThisRun = $true; Basis = 'Legacy'; Reason = "image built $($built.ToString('o')) and node reset onto it $($reset.ToString('o')) in this run, so a voucher in the image was written by this run's maintenance environment (weak baseline: $weak)" }
 }
-
 function Get-ZtpAzureReadiness {
     <#
     .SYNOPSIS

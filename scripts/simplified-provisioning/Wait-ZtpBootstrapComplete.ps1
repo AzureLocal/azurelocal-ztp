@@ -48,6 +48,11 @@ it from the state file (stages.Media.data.images.<node>.builtAt). With -ResetAt 
 voucher already in the image when this watch starts is this run's if the image was built and the node reset in this run
 (a fast node writes it while the Boot stage is still watching the BMC). Without both, a voucher found before the node is
 seen booting is flagged as possibly left by an earlier run and is not accepted until the node is seen booting.
+.PARAMETER ImageEmptyAtBuild
+Per node (hashtable node -> $true/$false): whether the Media stage found the node's voucher slot empty when it read the image right
+after building it (stages.Media.data.images.<node>.voucherEmptyAtBuild). $true is the strong baseline: with the build and reset
+times, a voucher in the image is this run's, and the image file's mtime is not used. A node with no entry (an older state
+file) falls back to the mtime check and the event says the baseline is weak.
 .PARAMETER ResetAt
 Per node (hashtable node -> UTC time): when this run's Boot stage reset the node onto the image
 (stages.Boot.data.resetAt.<node>).
@@ -81,6 +86,7 @@ param(
     [switch]$SkipCertificateCheck,
     [hashtable]$ImageBuiltAt,
     [hashtable]$ResetAt,
+    [hashtable]$ImageEmptyAtBuild,
     [string]$EventLogPath = (Join-Path (Get-Location) 'ztp-events.jsonl'),
     [ValidateRange(1, 1440)][int]$TimeoutMinutes = 120,
     [ValidateRange(1, 1440)][int]$VoucherTimeoutMinutes = 90,
@@ -198,7 +204,8 @@ try {
                 $built = if ($ImageBuiltAt -and $ImageBuiltAt.ContainsKey($row.Node)) { $ImageBuiltAt[$row.Node] } else { $null }
                 $reset = if ($ResetAt -and $ResetAt.ContainsKey($row.Node)) { $ResetAt[$row.Node] } else { $null }
                 $imageWritten = if ($v.PSObject.Properties['ImageLastWriteUtc']) { $v.ImageLastWriteUtc } else { $null }
-                $provenance = Get-ZtpVoucherProvenance -ImageBuiltAt $built -ResetAt $reset -ImageLastWriteUtc $imageWritten
+                $emptyAtBuild = if ($ImageEmptyAtBuild -and $ImageEmptyAtBuild.ContainsKey($row.Node) -and $ImageEmptyAtBuild[$row.Node] -is [bool]) { $ImageEmptyAtBuild[$row.Node] } else { $null }
+                $provenance = Get-ZtpVoucherProvenance -ImageBuiltAt $built -ResetAt $reset -ImageLastWriteUtc $imageWritten -ImageEmptyAtBuild $emptyAtBuild
                 if ($provenance.ThisRun) {
                     $row.ThisRun = $true
                     $detail += "voucher already in the image when the watch started: $($provenance.Reason)"

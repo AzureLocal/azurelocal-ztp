@@ -162,7 +162,9 @@ started ("Job is not yet triggered as other jobs are still running") and Azure m
 Without it the stage only verifies, and OS configuration sets the address.
 .PARAMETER RestoreSettleMinutes
 Restore: how long to wait after the BIOS restart before checking that the Arc machines are Connected again (an Arc
-machine reads Connected for a while after its host went down).
+machine reads Connected for a while after its host went down). The check then needs a new connection: the machine's
+LastStatusChange after the restart (Test-ProvisionedMachines.ps1 -ConnectedSince), repeated every -PollIntervalSeconds for up to
+-ReadyTimeoutMinutes.
 .PARAMETER BiosTimeoutMinutes
 Restore: how long to wait for a node's BIOS to report the restored values after the restart.
 .PARAMETER StatePath
@@ -326,19 +328,21 @@ function Get-ZtpBootstrapBaseline {
     # What the Bootstrap watch needs to tell this run's voucher from a left-over one: when Media built each node's image
     # (stages.Media.data.images.<node>.builtAt) and when Boot reset the node onto it (stages.Boot.data.resetAt.<node>). A node
     # whose image Media did not build in this run, or that Boot did not reset in this run, has no entry.
-    $built = @{}; $reset = @{}
+    $built = @{}; $reset = @{}; $empty = @{}
     $media = Get-ZtpRecordedStageData -Name 'Media'
     if ($media -and $media.Contains('images') -and $media['images'] -is [System.Collections.IDictionary]) {
         foreach ($node in $NodeName) {
             $entry = if ($media['images'].Contains($node)) { $media['images'][$node] } else { $null }
             if ($entry -is [System.Collections.IDictionary] -and $entry.Contains('builtAt') -and $entry['builtAt']) { $built[$node] = $entry['builtAt'] }
+            # Read right after the build: was the voucher slot empty? Absent in a state file from before the field.
+            if ($entry -is [System.Collections.IDictionary] -and $entry.Contains('voucherEmptyAtBuild') -and $entry['voucherEmptyAtBuild'] -is [bool]) { $empty[$node] = $entry['voucherEmptyAtBuild'] }
         }
     }
     $boot = Get-ZtpRecordedStageData -Name 'Boot'
     if ($boot -and $boot.Contains('resetAt') -and $boot['resetAt'] -is [System.Collections.IDictionary]) {
         foreach ($node in $NodeName) { if ($boot['resetAt'].Contains($node) -and $boot['resetAt'][$node]) { $reset[$node] = $boot['resetAt'][$node] } }
     }
-    return @{ ImageBuiltAt = $built; ResetAt = $reset }
+    return @{ ImageBuiltAt = $built; ResetAt = $reset; ImageEmptyAtBuild = $empty }
 }
 function Get-ZtpStageCall {
     param([Parameter(Mandatory)][string]$Name, [switch]$ForExecute)
@@ -365,6 +369,7 @@ function Get-ZtpStageCall {
                 $baseline = Get-ZtpBootstrapBaseline
                 if ($baseline.ImageBuiltAt.Count) { $p.ImageBuiltAt = $baseline.ImageBuiltAt }
                 if ($baseline.ResetAt.Count) { $p.ResetAt = $baseline.ResetAt }
+                if ($baseline.ImageEmptyAtBuild.Count) { $p.ImageEmptyAtBuild = $baseline.ImageEmptyAtBuild }
             }
             if ($RfsWriteAttribute) { $p.RfsWriteAttribute = $true }
             if ($SkipCertificateCheck) { $p.SkipCertificateCheck = $true }
@@ -648,17 +653,38 @@ foreach ($name in $run) {
         }
         'Restore' {
             $rows = @(Invoke-ZtpStageScript -Call $calls[0] | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties['Restored'] })
+            # Fail closed: a node that needs a restore must report Restored or AlreadySet. Skipped, Planned, Failed or no row
+            # at all is not done, whatever the script returned instead of throwing.
+            foreach ($node in @(Get-ZtpRestoreNeed)) {
+                $row = @($rows | Where-Object { $_.Node -eq $node })
+                if ($row.Count -ne 1 -or [string]$row[0].Status -notin 'Restored', 'AlreadySet') { throw "Restore: $node was not restored (result: $(if ($row.Count -eq 1) { [string]$row[0].Status } else { 'none' }))." }
+            }
             $restarted = @($rows | Where-Object Status -EQ 'Restored')
             if ($restarted.Count) {
-                # The Arc machine reads Connected for a while after its host went down: let it notice the restart first.
-                Write-ZtpRunLog "Restore: BIOS set back on $(@($restarted.Node) -join ', '); waiting $RestoreSettleMinutes min, then until the Arc machines are Connected and the edge machines ready to cluster."
+                # The Arc machine reads Connected for a while after its host went down: let it notice the restart first, then
+                # accept Connected only as a NEW observation (Arc changed the machine's status after the restart began), not a
+                # Connected left over from before it.
+                Write-ZtpRunLog "Restore: BIOS set back on $(@($restarted.Node) -join ', '); waiting $RestoreSettleMinutes min, then until the Arc machines are Connected again after the restart and the edge machines ready to cluster."
                 if ($RestoreSettleMinutes -gt 0) { Start-Sleep -Seconds ($RestoreSettleMinutes * 60) }
+                $restartedAt = @{}
+                foreach ($r in $restarted) { $t = if ($r.PSObject.Properties['RestartedAt']) { ConvertTo-ZtpUtcDateTime $r.RestartedAt } else { $null }; if ($t) { $restartedAt[[string]$r.Node] = $t } }
                 $watch = @(Get-ZtpStageCall -Name 'Ready' -ForExecute)[0]
                 $arcRows = @(Invoke-ZtpStageScript -Call $watch | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties['ArcMachineName'] -and $_.PSObject.Properties['ArcResourceGroup'] })
                 foreach ($node in $NodeName) { if (@($arcRows | Where-Object { $_.Node -eq $node -and $_.ArcMachineName }).Count -ne 1) { throw "Restore: $node isn't ready to cluster after the BIOS restart." } }
+                $deadline = [datetime]::UtcNow.AddMinutes($ReadyTimeoutMinutes)
                 foreach ($group in @($arcRows | Group-Object ArcResourceGroup)) {
                     $test = [ordered]@{ SubscriptionId = $SubscriptionId; ResourceGroupName = $group.Name; ExpectedMachineName = @($group.Group.ArcMachineName) }
-                    $null = Invoke-ZtpStageScript -Call ([pscustomobject]@{ Script = 'Test-ProvisionedMachines.ps1'; Parameters = $test })
+                    $since = @{}
+                    foreach ($g in $group.Group) { if ($restartedAt.ContainsKey([string]$g.Node)) { $since[[string]$g.ArcMachineName] = $restartedAt[[string]$g.Node] } }
+                    if ($since.Count) { $test.ConnectedSince = $since }
+                    while ($true) {
+                        try { $null = Invoke-ZtpStageScript -Call ([pscustomobject]@{ Script = 'Test-ProvisionedMachines.ps1'; Parameters = $test }); break }
+                        catch {
+                            if ([datetime]::UtcNow -ge $deadline) { throw "Restore: the Arc machines are not Connected again after the BIOS restart within $ReadyTimeoutMinutes minutes: $($_.Exception.Message)" }
+                            Write-ZtpRunLog "Restore: not Connected again after the restart yet ($($_.Exception.Message)); checking again in $PollIntervalSeconds s."
+                            Start-Sleep -Seconds $PollIntervalSeconds
+                        }
+                    }
                 }
             }
             $restored = [ordered]@{}
@@ -685,6 +711,14 @@ foreach ($name in $run) {
             foreach ($node in $NodeName) {
                 $row = @($rows | Where-Object Node -EQ $node)[0]
                 $images[$node] = [ordered]@{ path = [string]$row.ImagePath; sha256 = $(if ($row.PSObject.Properties['Sha256']) { [string]$row.Sha256 } else { '' }); builtAt = $mediaStartedAt.ToString('o') }
+                # Read-only look into the image just built: its voucher slot must be empty. The Bootstrap stage accepts a
+                # voucher as this run's only when it was (an image reused from an earlier run may already hold one). When the
+                # image cannot be read here, nothing is recorded and Bootstrap falls back to the weaker file-time rule.
+                try {
+                    $probe = Find-ZtpVoucherInImage -ImagePath ([string]$row.ImagePath) -AllowOpen
+                    $images[$node].voucherEmptyAtBuild = (@($probe.Pem | Where-Object UnderVouchers).Count -eq 0)
+                }
+                catch { Write-ZtpRunLog "Media: couldn't read the image of $node to check that it holds no voucher ($($_.Exception.Message)); the Bootstrap stage will use the image file's write time instead." -Level Warning }
             }
             $data = @{ images = $images }
             $evidence = "images $(@($rows | ForEach-Object { Split-Path $_.ImagePath -Leaf }) -join ', ')"

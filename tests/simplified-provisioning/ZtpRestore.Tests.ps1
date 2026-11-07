@@ -20,6 +20,9 @@ $line = [ordered]@{ node = $NodeName; bmc = $BmcAddress; attributes = $Attribute
 # One file per node: the nodes run in parallel runspaces, and two appends to one file can collide.
 Set-Content -LiteralPath "$($env:ZTPR_LOG).$NodeName.$([guid]::NewGuid().ToString('N'))" -Value $line
 if (-not $Execute) { "PLAN: $NodeName BIOS stub"; return }
+if ($env:ZTPR_NORESULT -eq $NodeName) { return }
+if ($env:ZTPR_NONTERM -eq $NodeName) { Write-Error "$NodeName non-terminating error from the BMC"; return }
+if ($env:ZTPR_STATUS -like "$NodeName=*") { [pscustomobject]@{ Node = $NodeName; Bmc = $BmcAddress; Status = ($env:ZTPR_STATUS -split '=')[1]; Changes = @(); Original = [ordered]@{} }; return }
 if ($env:ZTPR_FAIL -eq $NodeName) { throw "$NodeName BIOS still reports Slot2=Disabled 30 minutes after the ForceRestart." }
 $status = if ($env:ZTPR_ALREADY -eq $NodeName) { 'AlreadySet' } else { 'Changed' }
 [pscustomobject]@{ Node = $NodeName; Bmc = $BmcAddress; Status = $status; Changes = @(foreach ($k in $Attributes.Keys) { "${k}: Disabled -> $($Attributes[$k])" }); Original = [ordered]@{} }
@@ -39,12 +42,12 @@ $status = if ($env:ZTPR_ALREADY -eq $NodeName) { 'AlreadySet' } else { 'Changed'
     $script:calls = { @(Get-ChildItem -Path "$($env:ZTPR_LOG).*" -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc | ForEach-Object { Get-Content -LiteralPath $_.FullName | ForEach-Object { $_ | ConvertFrom-Json } }) }
     $script:eventsOf = { param($p) if (Test-Path -LiteralPath $p) { @(Get-Content -LiteralPath $p | ForEach-Object { $_ | ConvertFrom-Json }) } else { @() } }
 }
-AfterAll { Remove-Item Env:\ZTPR_LOG, Env:\ZTPR_FAIL, Env:\ZTPR_ALREADY -ErrorAction SilentlyContinue }
+AfterAll { Remove-Item Env:\ZTPR_LOG, Env:\ZTPR_FAIL, Env:\ZTPR_ALREADY, Env:\ZTPR_NORESULT, Env:\ZTPR_NONTERM, Env:\ZTPR_STATUS -ErrorAction SilentlyContinue }
 
 Describe 'Restore-ZtpBios.ps1' {
     BeforeEach {
         $env:ZTPR_LOG = Join-Path $TestDrive "calls-$([guid]::NewGuid().ToString('N')).jsonl"
-        Remove-Item Env:\ZTPR_FAIL, Env:\ZTPR_ALREADY -ErrorAction SilentlyContinue
+        Remove-Item Env:\ZTPR_FAIL, Env:\ZTPR_ALREADY, Env:\ZTPR_NORESULT, Env:\ZTPR_NONTERM, Env:\ZTPR_STATUS -ErrorAction SilentlyContinue
         $script:events = Join-Path $TestDrive "events-$([guid]::NewGuid().ToString('N')).jsonl"
     }
 
@@ -98,6 +101,66 @@ Describe 'Restore-ZtpBios.ps1' {
         ($ev | Where-Object state -EQ 'BiosRestoreFailed').node | Should -Be 'node-02'
         ($ev | Where-Object state -EQ 'BiosRestoreFailed').level | Should -Be 'Error'
         ($ev | Where-Object { $_.node -eq 'node-01' -and $_.state -eq 'BiosRestored' }) | Should -Not -BeNullOrEmpty
+    }
+
+    It 'fails closed: no result, a non-success status or a non-terminating error is a failure, never Restored' {
+        $nodes = & $script:writeNodes @{ Slot2 = 'Enabled' }
+        $run = { & $script:restore -NodeName node-01 -NodesFile $nodes -Credential $script:bmc -ConfirmNotClustered -EventLogPath $script:events -Execute -Confirm:$false }
+        $env:ZTPR_NORESULT = 'node-01'
+        { & $run } | Should -Throw '*Restore failed on node-01: Set-ZtpBios.ps1 returned no result*'
+        Remove-Item Env:\ZTPR_NORESULT
+        foreach ($bad in 'Skipped', 'Failed', 'Planned', 'None') {
+            $env:ZTPR_STATUS = "node-01=$bad"
+            { & $run } | Should -Throw "*Restore failed on node-01: Set-ZtpBios.ps1 returned status '$bad'*"
+        }
+        Remove-Item Env:\ZTPR_STATUS
+        $env:ZTPR_NONTERM = 'node-01'
+        { & $run } | Should -Throw '*Restore failed on node-01*non-terminating error*'
+        $ev = & $script:eventsOf $script:events
+        @($ev | Where-Object state -EQ 'BiosRestored').Count | Should -Be 0
+        @($ev | Where-Object state -EQ 'BiosRestoreFailed').Count | Should -Be 6
+    }
+
+    It 'a partial failure carries every node''s outcome in the thrown error, the rows and the events' {
+        $env:ZTPR_FAIL = 'node-02'
+        $nodes = & $script:writeNodes @{ Slot2 = 'Enabled' } @{ Slot2 = 'Enabled' }
+        $caught = $null
+        try { & $script:restore -NodeName node-01, node-02 -NodesFile $nodes -Credential $script:bmc -ConfirmNotClustered -EventLogPath $script:events -Execute -Confirm:$false } catch { $caught = $_ }
+        $caught | Should -Not -BeNullOrEmpty
+        $caught.Exception.Message | Should -BeLike '*Outcome per node: node-01 Restored, node-02 Failed*already restarted*'
+        $rows = @($caught.TargetObject)
+        @($rows | ForEach-Object { "$($_.Node) $($_.Status)" }) | Should -Be @('node-01 Restored', 'node-02 Failed')
+        $rows[0].RestartedAt | Should -Not -BeNullOrEmpty
+        $rows[1].Error | Should -BeLike '*node-02 BIOS still reports*'
+        @($caught.Exception.Data['Rows']).Count | Should -Be 2
+        ((& $script:eventsOf $script:events) | Where-Object state -EQ 'BiosRestoreFailed').evidence | Should -BeLike '*All nodes: node-01 Restored, node-02 Failed'
+    }
+
+    It 'a rerun leaves the node that is already right alone (AlreadySet, no RestartedAt) and restores the other' {
+        $env:ZTPR_ALREADY = 'node-01'
+        $nodes = & $script:writeNodes @{ Slot2 = 'Enabled' } @{ Slot2 = 'Enabled' }
+        $rows = @(& $script:restore -NodeName node-01, node-02 -NodesFile $nodes -Credential $script:bmc -ConfirmNotClustered -EventLogPath $script:events -Execute -Confirm:$false)
+        @($rows | ForEach-Object { "$($_.Node) $($_.Status)" }) | Should -Be @('node-01 AlreadySet', 'node-02 Restored')
+        $rows[0].RestartedAt | Should -BeNullOrEmpty
+        $rows[1].RestartedAt | Should -BeOfType ([datetime])
+    }
+
+    It 'accepts -Original as a PSCustomObject (run state read from JSON without -AsHashtable)' {
+        $nodes = & $script:writeNodes @{ Slot2 = '' }
+        $original = '{"node-01":{"Slot2":"Enabled"}}' | ConvertFrom-Json
+        $original | Should -BeOfType ([pscustomobject])
+        $rows = @(& $script:restore -NodeName node-01 -NodesFile $nodes -Original $original -Credential $script:bmc -ConfirmNotClustered -Execute -Confirm:$false)
+        $rows[0].Status | Should -Be 'Restored'
+        $rows[0].Restored.Slot2 | Should -Be 'Enabled'
+        (& $script:calls)[0].attributes.Slot2 | Should -Be 'Enabled'
+    }
+
+    It 'returns the planned nodes as Skipped under -WhatIf, and calls nothing' {
+        $nodes = & $script:writeNodes @{ Slot2 = 'Enabled' } @{ Slot2 = 'Enabled' }
+        $rows = @(& $script:restore -NodeName node-01, node-02 -NodesFile $nodes -Credential $script:bmc -ConfirmNotClustered -EventLogPath $script:events -Execute -WhatIf)
+        @($rows | ForEach-Object { "$($_.Node) $($_.Status)" }) | Should -Be @('node-01 Skipped', 'node-02 Skipped')
+        & $script:calls | Should -BeNullOrEmpty
+        Test-Path -LiteralPath $script:events | Should -BeFalse
     }
 
     It 'refuses when the value to set back was not saved, and needs the credential and -ConfirmNotClustered to act' {

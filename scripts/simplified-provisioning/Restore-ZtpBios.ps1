@@ -12,6 +12,12 @@ for the saved value.
 Per node, through Set-ZtpBios.ps1: PATCH the Bios Settings resource with ApplyTime OnReset (only what differs), restart
 the node through Redfish, wait until the BIOS reports the values. All nodes run at once. The orchestrator then waits until
 the Arc machines report Connected again and the edge machines are still ready to cluster.
+Result: one row per node { Node, Status, Restored, Changes, RestartedAt, Error }. Status is Restored (changed, node restarted;
+RestartedAt is a UTC time at or before the restart), AlreadySet (the BIOS already held the values; no restart), NotNeeded, Planned
+(no -Execute), Skipped (-WhatIf or declined) or Failed. Only Set-ZtpBios.ps1's Changed and AlreadySet count as success: no
+result, or any other status, is a failure. When any node fails the script throws after all nodes finished; the error's
+TargetObject is the rows of every node, so the caller sees which nodes were already restarted. A rerun leaves a node whose BIOS is
+already right alone (AlreadySet, no restart).
 Events (stage Restore, in -EventLogPath): BiosRestoreStarted, then BiosRestored or BiosRestoreFailed, per node. Each
 change goes to -BiosLogPath (bios-changes.jsonl). Without -Execute it prints the plan (PLAN: lines). A node without
 bios_restore is reported as NotNeeded; when no node has one, the stage is a no-op that says so.
@@ -22,11 +28,15 @@ Node objects { name, bmc_address, bios_restore }.
 .PARAMETER NodesFile
 The node list (see config/simplified-provisioning/nodes.example.json).
 .PARAMETER Original
-Node name -> (attribute -> value before Boot changed it), from the run state.
+Node name -> (attribute -> value before Boot changed it), from the run state. A hashtable or a PSCustomObject (JSON run state
+read without -AsHashtable) is accepted.
 .PARAMETER Credential
 BMC account (required with -Execute when something is restored).
 .PARAMETER ConfirmNotClustered
-Confirms the nodes carry no cluster to keep: applying the BIOS restarts them.
+Confirms the nodes carry no cluster to keep: applying the BIOS restarts them. This is an assertion, not a check: the repository
+has no cluster-membership check to enforce it with (nothing in ZTP clusters hardware, and the Boot stage does not test for a
+cluster either), so the precondition is documented in docs/automated-bootstrap.md. The nodes restart at the same time on purpose:
+that is only safe before a cluster exists.
 .PARAMETER SkipCertificateCheck
 Accept the BMC's self-signed certificate.
 .PARAMETER BiosLogPath
@@ -46,7 +56,7 @@ param(
     [Parameter(Mandatory)][ValidateCount(1, 64)][string[]]$NodeName,
     [object[]]$Nodes,
     [string]$NodesFile,
-    [System.Collections.IDictionary]$Original = @{},
+    [object]$Original = @{},
     [pscredential]$Credential,
     [switch]$ConfirmNotClustered,
     [switch]$SkipCertificateCheck,
@@ -102,7 +112,7 @@ foreach ($node in $NodeName) {
 }
 
 $rows = [System.Collections.Generic.List[object]]::new()
-foreach ($node in $NodeName) { if (-not $plan.Contains($node)) { $rows.Add([pscustomobject]@{ Node = $node; Status = 'NotNeeded'; Restored = [ordered]@{}; Changes = @() }) } }
+foreach ($node in $NodeName) { if (-not $plan.Contains($node)) { $rows.Add([pscustomobject]@{ Node = $node; Status = 'NotNeeded'; Restored = [ordered]@{}; Changes = @(); RestartedAt = $null; Error = $null }) } }
 if ($plan.Count -eq 0) {
     Write-Information -MessageData "Restore: no node has bios_during_provisioning; nothing to set back." -InformationAction Continue
     if (-not $Execute) { 'PLAN: Restore: no bios_during_provisioning in the environment file; nothing to set back.' }
@@ -124,37 +134,67 @@ if (-not $Execute) {
             & $setBios @a
         }
     }
-    foreach ($node in $plan.Keys) { $rows.Add([pscustomobject]@{ Node = $node; Status = 'Planned'; Restored = $plan[$node].Set; Changes = @() }) }
+    foreach ($node in $plan.Keys) { $rows.Add([pscustomobject]@{ Node = $node; Status = 'Planned'; Restored = $plan[$node].Set; Changes = @(); RestartedAt = $null; Error = $null }) }
     return $rows.ToArray()
 }
 if (-not $Credential) { throw 'Restore: -Credential (the BMC account) is required with -Execute.' }
 if (-not $ConfirmNotClustered) { throw 'Restore: applying the BIOS restarts the nodes. Pass -ConfirmNotClustered.' }
-if (-not $PSCmdlet.ShouldProcess(($plan.Keys -join ', '), 'Set the provisioning-only BIOS values back and restart')) { return $rows.ToArray() }
+if (-not $PSCmdlet.ShouldProcess(($plan.Keys -join ', '), 'Set the provisioning-only BIOS values back and restart')) {
+    # Declined or -WhatIf: nothing was changed. The planned nodes come back as Skipped so no caller reads this as done.
+    foreach ($node in $plan.Keys) { $rows.Add([pscustomobject]@{ Node = $node; Status = 'Skipped'; Restored = [ordered]@{}; Changes = @(); RestartedAt = $null; Error = $null }) }
+    return $rows.ToArray()
+}
 
 foreach ($node in $plan.Keys) { Send-RestoreEvent $node 'BiosRestoreStarted' "BIOS $(@($plan[$node].Set.Keys | ForEach-Object { "$_=$($plan[$node].Set[$_])" }) -join ', ')" }
 $biosArgs = @{ ConfirmNotClustered = $true; SkipCertificateCheck = $SkipCertificateCheck; TimeoutMinutes = $TimeoutMinutes }
 if ($BiosLogPath) { $biosArgs.ChangeLogPath = $BiosLogPath }
 $work = @(foreach ($node in $plan.Keys) { [pscustomobject]@{ Node = $node; Address = @($targets | Where-Object Node -EQ $node)[0].Address; Set = $plan[$node].Set } })
+# The restarts run at the same time on purpose (no cluster exists yet). A runspace does not inherit the strictness or the
+# error preference of this script, so the worker sets both: a non-terminating error is a failure, not a quiet success.
 $done = @($work | ForEach-Object -ThrottleLimit ([Math]::Max(1, $work.Count)) -Parallel {
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = 'Stop'
         $w = $_
+        $startedAt = [datetime]::UtcNow
         try {
             $b = ([hashtable]$using:biosArgs).Clone()
-            $result = @(& $using:setBios @b -NodeName $w.Node -BmcAddress $w.Address -Attributes $w.Set -Credential $using:Credential -Execute -Confirm:$false) | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties['Changes'] } | Select-Object -Last 1
-            [pscustomobject]@{ Node = $w.Node; Status = $(if ($result) { [string]$result.Status } else { 'Unknown' }); Changes = @(if ($result) { $result.Changes }); Error = $null }
+            $result = @(& $using:setBios @b -NodeName $w.Node -BmcAddress $w.Address -Attributes $w.Set -Credential $using:Credential -Execute -Confirm:$false) | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties['Changes'] -and $_.PSObject.Properties['Status'] } | Select-Object -Last 1
+            [pscustomobject]@{ Node = $w.Node; Status = $(if ($result) { [string]$result.Status } else { 'Unknown' }); Changes = @(if ($result) { $result.Changes }); StartedAt = $startedAt; Error = $null }
         }
-        catch { [pscustomobject]@{ Node = $w.Node; Status = 'Failed'; Changes = @(); Error = $_.Exception.Message } }
+        catch { [pscustomobject]@{ Node = $w.Node; Status = 'Failed'; Changes = @(); StartedAt = $startedAt; Error = $_.Exception.Message } }
     })
-$failed = [System.Collections.Generic.List[string]]::new()
-foreach ($d in $done) {
-    if ($d.Error) {
-        Send-RestoreEvent $d.Node 'BiosRestoreFailed' $d.Error 'Error' 'Fix the cause and rerun -From Restore; values already right are left alone.'
-        $failed.Add("$($d.Node): $($d.Error)")
-        continue
-    }
+# Set-ZtpBios.ps1 returns Status Changed (set, node restarted, BIOS reports the values), AlreadySet (nothing to change; no
+# restart) or None (nothing requested, which cannot happen here). Anything else, or no result, is a failure.
+$outcome = [System.Collections.Generic.List[object]]::new()
+$planOrder = @($plan.Keys)
+# The parallel workers finish in any order; report the nodes in the order of the plan.
+foreach ($d in @($done | Sort-Object { [array]::IndexOf($planOrder, $_.Node) })) {
     $set = $plan[$d.Node].Set
+    $problem = $d.Error
+    if (-not $problem -and $d.Status -notin 'Changed', 'AlreadySet') {
+        $problem = if ($d.Status -eq 'Unknown') { 'Set-ZtpBios.ps1 returned no result for the node (so the restore is not proven)' } else { "Set-ZtpBios.ps1 returned status '$($d.Status)', expected Changed or AlreadySet" }
+    }
+    if ($problem) { $outcome.Add([pscustomobject]@{ Node = $d.Node; Status = 'Failed'; Restored = [ordered]@{}; Changes = @($d.Changes); RestartedAt = $null; Error = ([string]$problem).TrimEnd('.') }); continue }
     $status = if ($d.Status -eq 'AlreadySet') { 'AlreadySet' } else { 'Restored' }
-    Send-RestoreEvent $d.Node 'BiosRestored' "BIOS $(@($set.Keys | ForEach-Object { "$_=$($set[$_])" }) -join ', ')$(if ($status -eq 'AlreadySet') { ' (already set; no restart)' } else { " ($(@($d.Changes) -join '; '))" })"
-    $rows.Add([pscustomobject]@{ Node = $d.Node; Status = $status; Restored = $set; Changes = @($d.Changes) })
+    $outcome.Add([pscustomobject]@{ Node = $d.Node; Status = $status; Restored = $set; Changes = @($d.Changes); RestartedAt = $(if ($status -eq 'Restored') { $d.StartedAt } else { $null }); Error = $null })
 }
-if ($failed.Count) { throw "Restore failed on $($failed -join ' | ')" }
+$summary = @($outcome | ForEach-Object { "$($_.Node) $($_.Status)" }) -join ', '
+foreach ($o in $outcome) {
+    $set = $plan[$o.Node].Set
+    if ($o.Status -eq 'Failed') {
+        Send-RestoreEvent $o.Node 'BiosRestoreFailed' "$($o.Error). All nodes: $summary" 'Error' 'Fix the cause and rerun -From Restore; a node whose BIOS is already right is left alone (no restart).'
+    }
+    else {
+        Send-RestoreEvent $o.Node 'BiosRestored' "BIOS $(@($set.Keys | ForEach-Object { "$_=$($set[$_])" }) -join ', ')$(if ($o.Status -eq 'AlreadySet') { ' (already set; no restart)' } else { " ($(@($o.Changes) -join '; '))" })"
+    }
+    $rows.Add($o)
+}
+$failedRows = @($outcome | Where-Object Status -EQ 'Failed')
+if ($failedRows.Count) {
+    $restartedRows = @($outcome | Where-Object Status -EQ 'Restored')
+    $message = "Restore failed on $(@($failedRows | ForEach-Object { "$($_.Node): $($_.Error)" }) -join ' | '). Outcome per node: $summary$(if ($restartedRows.Count) { ' (a node marked Restored has already restarted; rerun -From Restore leaves it alone)' })."
+    $exception = [System.InvalidOperationException]::new($message)
+    $exception.Data['Rows'] = $rows.ToArray()
+    throw [System.Management.Automation.ErrorRecord]::new($exception, 'ZtpRestoreFailed', [System.Management.Automation.ErrorCategory]::InvalidResult, $rows.ToArray())
+}
 return $rows.ToArray()

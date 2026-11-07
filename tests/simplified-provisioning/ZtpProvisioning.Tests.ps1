@@ -21,7 +21,7 @@ BeforeAll {
     'TimeoutMinutes', 'Action', 'Remove', 'SharePath', 'Stage', 'SubscriptionId', 'ResourceGroupName', 'ParameterFile', 'VoucherPath', 'OsVersion',
     'SiteMode', 'Node', 'DeploymentName', 'AdminPassword', 'PollIntervalSeconds', 'RetryProvisionOs', 'ArcMachineNameMapPath', 'ExpectedMachineName',
     'Version', 'CacheDirectory', 'IncludePreview', 'MaxTrain', 'Oem', 'EventLogPath', 'VoucherTimeoutMinutes',
-    'SkipAzureCheck', 'ImageBuiltAt', 'ResetAt', 'Location', 'HandoffPath', 'ManagementAddressCheck', 'OutputPath', 'Format', 'BiosLogPath', 'ChangeLogPath', 'Original', 'RestoredBios', 'ApplyThroughAzure'
+    'SkipAzureCheck', 'ImageBuiltAt', 'ResetAt', 'Location', 'HandoffPath', 'ManagementAddressCheck', 'OutputPath', 'Format', 'BiosLogPath', 'ChangeLogPath', 'Original', 'RestoredBios', 'ApplyThroughAzure', 'ConnectedSince', 'ImageEmptyAtBuild'
     $paramBlock = ($names | ForEach-Object { "[object]`$$_" }) -join ', '
     foreach ($script in 'New-ZtpVirtualUsbImage.ps1', 'Start-MaintenanceBoot.ps1', 'Wait-ZtpVoucher.ps1', 'Mount-ZtpVirtualUsb.ps1', 'Publish-MaintenanceIso.ps1',
         'Invoke-ZtpAzureProvisioning.ps1', 'Test-ProvisionedMachines.ps1', 'Get-ZtpBootstrapIso.ps1', 'Wait-ZtpBootstrapComplete.ps1',
@@ -144,6 +144,42 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
         @($wait.Params.ResetAt.Keys | Sort-Object) | Should -Be @('node-01', 'node-02')
         (ConvertTo-ZtpUtcDateTime $wait.Params.ImageBuiltAt['node-01']) | Should -Be (ConvertTo-ZtpUtcDateTime $state.stages.Media.data.images['node-01'].builtAt)
         (ConvertTo-ZtpUtcDateTime $wait.Params.ResetAt['node-02']) | Should -Be (ConvertTo-ZtpUtcDateTime $state.stages.Boot.data.resetAt['node-02'])
+    }
+
+    It 'Media reads each image it built and records whether its voucher slot was empty; Bootstrap gets that baseline, also from a later run' {
+        # Real FAT32 images: node-01's is empty, node-02's already holds a voucher (an image reused from an earlier run).
+        $global:ztpRunBehavior['New-ZtpVirtualUsbImage.ps1'] = {
+            param($p)
+            if (-not $p['Execute']) { return 'PLAN: build images' }
+            $src = Join-Path $p['OutputDirectory'] 'src'; $null = New-Item -ItemType Directory -Force -Path $src
+            Set-Content -LiteralPath (Join-Path $src 'boot.catalog') -Value 'c' -NoNewline
+            foreach ($n in $p['NodeName']) {
+                $f = Join-Path $p['OutputDirectory'] "ztp-usb-$n.img"
+                $extra = if ($n -eq 'node-02') { @{ 'vouchers/EXAMPLE2/EXAMPLE2.pem' = [System.Text.Encoding]::ASCII.GetBytes("-----BEGIN OWNERSHIP VOUCHER-----`nAAAA`n-----END OWNERSHIP VOUCHER-----`n") } } else { @{} }
+                $null = Build-ZtpFat32Image -SourcePath $src -OutputPath $f -SizeBytes 40MB -ClusterSize 512 -ExtraFiles $extra
+                [pscustomobject]@{ Node = $n; ImagePath = $f; Sha256 = 'AB' }
+            }
+        }
+        $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; Stage = 'Media' }
+        $state = Get-Content $script:statePath -Raw | ConvertFrom-Json -AsHashtable
+        $state.stages.Media.data.images['node-01'].voucherEmptyAtBuild | Should -BeTrue
+        $state.stages.Media.data.images['node-02'].voucherEmptyAtBuild | Should -BeFalse
+        $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; Stage = 'Boot' }
+        $global:ztpRunCalls.Clear()
+        $null = & $script:invoke @{ Execute = $true; BmcCredential = $script:bmc; Confirm = $false; Stage = 'Bootstrap' }
+        $wait = $global:ztpRunCalls | Where-Object Script -EQ 'Wait-ZtpBootstrapComplete.ps1'
+        $wait.Params.ImageEmptyAtBuild['node-01'] | Should -BeTrue
+        $wait.Params.ImageEmptyAtBuild['node-02'] | Should -BeFalse
+    }
+
+    It 'records nothing about the image when Media cannot read it, and passes no ImageEmptyAtBuild (the file-time fallback)' {
+        $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; Stage = 'Media' }
+        $state = Get-Content $script:statePath -Raw | ConvertFrom-Json -AsHashtable
+        $state.stages.Media.data.images['node-01'].ContainsKey('voucherEmptyAtBuild') | Should -BeFalse
+        $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; Stage = 'Boot' }
+        $global:ztpRunCalls.Clear()
+        $null = & $script:invoke @{ Execute = $true; BmcCredential = $script:bmc; Confirm = $false; Stage = 'Bootstrap' }
+        ($global:ztpRunCalls | Where-Object Script -EQ 'Wait-ZtpBootstrapComplete.ps1').Params.ContainsKey('ImageEmptyAtBuild') | Should -BeFalse
     }
 
     It 'passes the recorded times to a Bootstrap run later, from the state file' {
@@ -284,6 +320,47 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
         # Restore needs the BMC credential only when there is something to restore.
         { & $script:invoke @{ Execute = $true; Stage = 'Restore'; Confirm = $false; NodesFile = $nodes } } | Should -Throw '*Stage Restore: no value for BmcCredential*'
         Remove-Variable ztpRunSlot2 -Scope Global
+    }
+
+    Context 'Restore waits for a new Arc connection after the restart' {
+        BeforeEach {
+            $script:restoreNodes = Join-Path $TestDrive "nodes-restore-$([guid]::NewGuid().ToString('N')).json"
+            @{ nodes = @(@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11'; bios_restore = @{ Slot2 = 'Enabled' } }, @{ name = 'node-02'; service_tag = 'EXAMPLE2'; bmc_address = '198.51.100.12'; bios_restore = @{ Slot2 = 'Enabled' } }) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:restoreNodes
+            $script:restartedAt = [datetime]::UtcNow
+            $global:ztpRunRestartedAt = $script:restartedAt
+            $global:ztpRunBehavior['Restore-ZtpBios.ps1'] = { param($p) [pscustomobject]@{ Node = 'node-01'; Status = 'Restored'; Restored = [ordered]@{ Slot2 = 'Enabled' }; Changes = @(); RestartedAt = $global:ztpRunRestartedAt }; [pscustomobject]@{ Node = 'node-02'; Status = 'AlreadySet'; Restored = [ordered]@{ Slot2 = 'Enabled' }; Changes = @(); RestartedAt = $null } }
+            $script:rArgs = @{ Execute = $true; From = 'Restore'; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; NodesFile = $script:restoreNodes; RestoreSettleMinutes = 0; PollIntervalSeconds = 0 }
+        }
+        AfterEach { Remove-Variable ztpRunRestartedAt, ztpRunTestTries -Scope Global -ErrorAction SilentlyContinue }
+
+        It 'tests with -ConnectedSince for the restarted node only (the AlreadySet node is checked as before)' {
+            $null = & $script:invoke $script:rArgs
+            $test = $global:ztpRunCalls | Where-Object Script -EQ 'Test-ProvisionedMachines.ps1'
+            @($test.Params.ConnectedSince.Keys) | Should -Be @('00000000-0000-0000-0000-000000000000-1')
+            (ConvertTo-ZtpUtcDateTime $test.Params.ConnectedSince['00000000-0000-0000-0000-000000000000-1']) | Should -Be (ConvertTo-ZtpUtcDateTime $script:restartedAt)
+        }
+
+        It 'keeps checking until a new connection shows, instead of passing on a stale Connected' {
+            $global:ztpRunTestTries = 0
+            $global:ztpRunBehavior['Test-ProvisionedMachines.ps1'] = { param($p) $global:ztpRunTestTries++; if ($global:ztpRunTestTries -lt 3) { throw 'Provisioned machine verification failed: node (Connected since 2026-01-01T00:00:00.0000000Z, before the restart)' } }
+            $null = & $script:invoke $script:rArgs
+            @($global:ztpRunCalls | Where-Object Script -EQ 'Test-ProvisionedMachines.ps1').Count | Should -Be 3
+        }
+
+        It 'fails the stage when no new connection shows within the Ready timeout' {
+            $global:ztpRunBehavior['Test-ProvisionedMachines.ps1'] = { param($p) throw 'Provisioned machine verification failed: node (Connected since the old time)' }
+            $script:rArgs.ReadyTimeoutMinutes = 0
+            { & $script:invoke $script:rArgs } | Should -Throw '*not Connected again after the BIOS restart*'
+        }
+
+        It 'fails the stage when a node that needs a restore reports Skipped, Planned or Failed, or no row' {
+            foreach ($status in 'Skipped', 'Planned', 'Failed') {
+                $global:ztpRunBehavior['Restore-ZtpBios.ps1'] = [scriptblock]::Create("param(`$p) [pscustomobject]@{ Node = 'node-01'; Status = 'Restored'; Restored = [ordered]@{}; Changes = @() }; [pscustomobject]@{ Node = 'node-02'; Status = '$status'; Restored = [ordered]@{}; Changes = @() }")
+                { & $script:invoke $script:rArgs } | Should -Throw "*Restore: node-02 was not restored (result: $status)*"
+            }
+            $global:ztpRunBehavior['Restore-ZtpBios.ps1'] = { param($p) [pscustomobject]@{ Node = 'node-01'; Status = 'Restored'; Restored = [ordered]@{}; Changes = @() } }
+            { & $script:invoke $script:rArgs } | Should -Throw '*Restore: node-02 was not restored (result: none)*'
+        }
     }
 
     It 'writes StageStarted and StageCompleted events for every stage and StageFailed with the reason when a stage throws' {

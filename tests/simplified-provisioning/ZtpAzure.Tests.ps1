@@ -591,6 +591,28 @@ Describe 'ZTP Azure half' {
             { & $script:machines -SubscriptionId test -ResourceGroupName test -ExpectedMachineName node -StrictGroup } | Should -Throw
         }
 
+        It 'with -ConnectedSince, a Connected from before the restart is not a new observation; one after it is' {
+            $since = ([datetime]'2026-11-07T13:00:00Z').ToUniversalTime()
+            Mock Get-AzConnectedMachine { [pscustomobject]@{ Name = 'node'; Status = 'Connected'; OSName = 'Azure Local'; LastStatusChange = '2026-11-07T12:40:00Z' } }
+            $rows = @(& $script:machines -SubscriptionId test -ResourceGroupName test -ExpectedMachineName node -ConnectedSince @{ node = $since } -PassThru)
+            $rows[0].Connected | Should -BeFalse
+            $rows[0].Detail | Should -BeLike '*before the restart*'
+            { & $script:machines -SubscriptionId test -ResourceGroupName test -ExpectedMachineName node -ConnectedSince @{ node = $since } } | Should -Throw '*node (Connected since*'
+            Mock Get-AzConnectedMachine { [pscustomobject]@{ Name = 'node'; Status = 'Connected'; OSName = 'Azure Local'; LastStatusChange = '2026-11-07T13:12:00Z' } }
+            $rows = @(& $script:machines -SubscriptionId test -ResourceGroupName test -ExpectedMachineName node -ConnectedSince @{ node = $since } -PassThru)
+            $rows[0].Connected | Should -BeTrue
+            $rows[0].Detail | Should -BeLike 'Ready to cluster*'
+        }
+
+        It 'with -ConnectedSince, a Connected machine that reports no LastStatusChange fails closed, and a machine not named is checked as before' {
+            $since = ([datetime]'2026-11-07T13:00:00Z').ToUniversalTime()
+            $rows = @(& $script:machines -SubscriptionId test -ResourceGroupName test -ExpectedMachineName node -ConnectedSince @{ node = $since } -PassThru)
+            $rows[0].Connected | Should -BeFalse
+            $rows[0].Detail | Should -BeLike '*no LastStatusChange*'
+            $rows = @(& $script:machines -SubscriptionId test -ResourceGroupName test -ExpectedMachineName node -ConnectedSince @{ other = $since } -PassThru)
+            $rows[0].Connected | Should -BeTrue
+        }
+
         It 'reports a missing machine' {
             Mock Get-AzConnectedMachine { if ($Name) { $null } else { @() } }
             $rows = @(& $script:machines -SubscriptionId test -ResourceGroupName test -ExpectedMachineName node -PassThru)

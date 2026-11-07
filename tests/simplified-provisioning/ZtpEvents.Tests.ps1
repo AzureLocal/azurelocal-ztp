@@ -52,6 +52,41 @@ Describe 'Get-ZtpVoucherProvenance' {
         $r.ThisRun | Should -BeFalse
         $r.Reason | Should -Match 'before the image build'
     }
+    It 'with the image recorded empty at build, ignores the image mtime (SMB lag) and accepts the voucher of this run' {
+        $r = Get-ZtpVoucherProvenance -ImageBuiltAt $script:built -ResetAt $script:reset -ImageLastWriteUtc ([datetime]'2026-11-07T13:07:30Z') -ImageEmptyAtBuild $true
+        $r.ThisRun | Should -BeTrue
+        $r.Basis | Should -Be 'EmptyAtBuild'
+        $r.Reason | Should -Match 'ignored'
+        (Get-ZtpVoucherProvenance -ImageBuiltAt $script:built -ResetAt $script:reset -ImageLastWriteUtc ([datetime]'2026-11-06T09:00:00Z') -ImageEmptyAtBuild $true).ThisRun | Should -BeTrue
+        (Get-ZtpVoucherProvenance -ImageBuiltAt $script:built -ResetAt $script:reset -ImageLastWriteUtc $null -ImageEmptyAtBuild $true).ThisRun | Should -BeTrue
+    }
+    It 'never accepts a voucher in an image that held one when Media built it, nor without the build and reset records' {
+        $r = Get-ZtpVoucherProvenance -ImageBuiltAt $script:built -ResetAt $script:reset -ImageLastWriteUtc ([datetime]'2026-11-07T13:13:00Z') -ImageEmptyAtBuild $false
+        $r.ThisRun | Should -BeFalse
+        $r.Reason | Should -Match 'already held a voucher'
+        (Get-ZtpVoucherProvenance -ImageBuiltAt $null -ResetAt $script:reset -ImageLastWriteUtc $null -ImageEmptyAtBuild $true).ThisRun | Should -BeFalse
+        (Get-ZtpVoucherProvenance -ImageBuiltAt $script:built -ResetAt $null -ImageLastWriteUtc $null -ImageEmptyAtBuild $true).ThisRun | Should -BeFalse
+        (Get-ZtpVoucherProvenance -ImageBuiltAt $script:reset -ResetAt $script:built -ImageLastWriteUtc $null -ImageEmptyAtBuild $true).ThisRun | Should -BeFalse
+    }
+    It 'falls back to the file time for a state without the empty-at-build record, and says the baseline is weak' {
+        $ok = Get-ZtpVoucherProvenance -ImageBuiltAt $script:built -ResetAt $script:reset -ImageLastWriteUtc ([datetime]'2026-11-07T13:13:00Z')
+        $ok.ThisRun | Should -BeTrue; $ok.Basis | Should -Be 'Legacy'; $ok.Reason | Should -Match 'weak baseline'
+        $no = Get-ZtpVoucherProvenance -ImageBuiltAt $script:built -ResetAt $script:reset -ImageLastWriteUtc ([datetime]'2026-11-06T09:00:00Z') -ImageEmptyAtBuild $null
+        $no.ThisRun | Should -BeFalse; $no.Reason | Should -Match 'cannot tell'
+    }
+    It 'compares UTC values: the same moment as local, offset or UTC kinds gives the same result' {
+        (Get-ZtpVoucherProvenance -ImageBuiltAt $script:built.ToLocalTime() -ResetAt '2026-11-07T15:09:51+02:00' -ImageLastWriteUtc $null).ThisRun | Should -BeTrue
+        (Get-ZtpVoucherProvenance -ImageBuiltAt '2026-11-07T15:08:00+02:00' -ResetAt '2026-11-07T13:07:00Z' -ImageLastWriteUtc $null).ThisRun | Should -BeFalse -Because '15:08+02:00 is 13:08Z, after a 13:07Z reset'
+    }
+    It 'takes an Unspecified [datetime] or a zone-less string as UTC, whatever the host''s offset' {
+        $u = [datetime]::SpecifyKind([datetime]'2026-11-07T13:09:51', [DateTimeKind]::Unspecified)
+        $c = ConvertTo-ZtpUtcDateTime $u
+        $c.Kind | Should -Be 'Utc'
+        $c.Hour | Should -Be 13
+        (ConvertTo-ZtpUtcDateTime '2026-11-07T13:09:51').Hour | Should -Be 13
+        (ConvertTo-ZtpUtcDateTime '2026-11-07T15:09:51+02:00').Hour | Should -Be 13
+        (ConvertTo-ZtpUtcDateTime $script:reset.ToLocalTime()).Kind | Should -Be 'Utc'
+    }
     It 'reads times as UTC from a [datetime] of any kind or an ISO string, and ignores what it cannot read' {
         (ConvertTo-ZtpUtcDateTime '2026-11-07T13:09:51.0000000Z') | Should -Be $script:reset
         (ConvertTo-ZtpUtcDateTime ([datetime]::SpecifyKind($script:reset, 'Utc'))) | Should -Be $script:reset
@@ -422,6 +457,32 @@ Describe 'Wait-ZtpBootstrapComplete.ps1' {
             $global:ztpE_voucherAt['node-01'] = 1
             $rows = & $global:ztpE_run @{ ImageBuiltAt = @{ 'node-01' = '2026-10-15T11:50:00.0000000Z' }; ResetAt = @{ 'node-01' = '2026-10-15T11:55:00.0000000Z' } }
             $rows[0].Ready | Should -BeTrue
+        }
+
+        It 'with the image recorded empty at build, accepts the voucher at the first poll even when the image mtime reads before the build (SMB lag)' {
+            $global:ztpE_imageWritten = [datetime]'2026-10-15T11:49:00Z'
+            $global:ztpE_script['node-01'] = { param($n) New-ZtpTestReading -Enabled Disabled -Target None }
+            $global:ztpE_voucherAt['node-01'] = 1
+            $rows = & $global:ztpE_run @{ ImageBuiltAt = $global:ztpE_built; ResetAt = $global:ztpE_reset; ImageEmptyAtBuild = @{ 'node-01' = $true } }
+            $rows[0].Ready | Should -BeTrue
+            $events = & $global:ztpE_read
+            @($events | ForEach-Object state) | Should -Be @('NotStarted', 'VoucherWritten', 'ReadyForPortal')
+            @($events | Where-Object { $_.level -ne 'Info' }).Count | Should -Be 0
+        }
+
+        It 'the live G20 sequence with the empty-at-build record: image built, node reset, voucher at the first poll gives VoucherWritten then ReadyForPortal' {
+            $global:ztpE_script['node-01'] = { param($n) New-ZtpTestReading -Enabled Disabled -Target None }
+            $global:ztpE_voucherAt['node-01'] = 1
+            $null = & $global:ztpE_run @{ ImageBuiltAt = $global:ztpE_built; ResetAt = $global:ztpE_reset; ImageEmptyAtBuild = @{ 'node-01' = $true } }
+            @(& $global:ztpE_read | ForEach-Object state | Where-Object { $_ -in 'VoucherWritten', 'ReadyForPortal' }) | Should -Be @('VoucherWritten', 'ReadyForPortal')
+        }
+
+        It 'with the image recorded as holding a voucher at build (a reused image), does not accept it' {
+            $global:ztpE_script['node-01'] = { param($n) New-ZtpTestReading -Enabled Once }
+            $global:ztpE_voucherAt['node-01'] = 1
+            $rows = & $global:ztpE_run @{ ImageBuiltAt = $global:ztpE_built; ResetAt = $global:ztpE_reset; ImageEmptyAtBuild = @{ 'node-01' = $false }; VoucherTimeoutMinutes = 3; TimeoutMinutes = 10 }
+            $rows[0].State | Should -Be 'VoucherMissing'
+            (& $global:ztpE_read | Where-Object { $_.level -eq 'Warning' -and $_.evidence -match 'already in the image' }).evidence | Should -Match 'already held a voucher when this run'
         }
 
         It 'does not accept a voucher the image held before this run built it: the stale-image warning stays' {
