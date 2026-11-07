@@ -21,8 +21,13 @@
 .PARAMETER From
     Stage to resume from.
 .PARAMETER MediaPath
-    Where the maintenance ISO, node images, vouchers, driver packages and run state are kept. Defaults to _media at the
-    repository root (ignored by git).
+    Where the maintenance ISO, node images (about 4 GB each), vouchers, unpacked drivers and run state are kept. Overrides
+    ztp.media_path; without either, %ProgramData%\AzureLocalZtp\<ztp.site_name>\media. Refused inside a git working tree;
+    created when missing.
+.PARAMETER EvidencePath
+    Where the event log (ztp-events.jsonl, which monitors follow), the change logs and the run transcript go. Overrides
+    ztp.evidence_path; without either, %ProgramData%\AzureLocalZtp\<ztp.site_name>\evidence. Refused inside a git working
+    tree; created when missing.
 .PARAMETER ValidatorPath
     An extra validator for the environment file, run with -ConfigFile <file> and expected to leave a non-zero exit code on
     failure. Optional. When not given, tools/Validate-Infrastructure.ps1 beside the environment file is used if it exists;
@@ -41,7 +46,8 @@ param(
     [Parameter(Mandatory)][string]$InfrastructureFile,
     [string[]]$Node,
     [ValidateSet('Resolve', 'Media', 'Boot', 'Bootstrap', 'Vouchers', 'Azure', 'Ready', 'Handoff', 'Prepare')][string]$From,
-    [string]$MediaPath = ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../_media'))),
+    [string]$MediaPath,
+    [string]$EvidencePath,
     [string]$ValidatorPath,
     [switch]$UseManagedIdentity,
     [switch]$Execute
@@ -75,7 +81,12 @@ $vaultRg = [string]$ztp.admin_secret.resource_group
 $rg = [string]$ztp.resource_group
 
 $root = Resolve-Path (Join-Path $PSScriptRoot '..\..')
-$media = [IO.Path]::GetFullPath($MediaPath)
+# Downloads, images, vouchers and state, and the evidence, live outside any repository: -MediaPath / -EvidencePath, then
+# ztp.media_path / ztp.evidence_path, then %ProgramData%\AzureLocalZtp\<site>.
+$media = Resolve-ZtpDataPath -Environment $env_ -Kind media -Override $MediaPath
+$evidence = Resolve-ZtpDataPath -Environment $env_ -Kind evidence -Override $EvidencePath
+Write-Output "Media: $media. Evidence: $evidence."
+$events = Join-Path $evidence 'ztp-events.jsonl'
 $cfgDir = Join-Path $root 'config\simplified-provisioning'
 $nodesFile = Join-Path $cfgDir 'nodes.json'
 $config = Join-Path $cfgDir 'ztp-provisioning.json'
@@ -200,7 +211,7 @@ $bicepParameters | ConvertTo-Json -Depth 10 | Set-Content $parameters
     VoucherWaitMinutes             = 120
     RfsWriteAttribute              = $true
     SkipCertificateCheck           = $true
-    EventLogPath                   = Join-Path $state 'ztp-events.jsonl'
+    EventLogPath                   = $events
     BootstrapTimeoutMinutes        = 120
     BootstrapVoucherTimeoutMinutes = 90
     SkipAzureCheck                 = $false
@@ -223,40 +234,48 @@ $orchestrator = Join-Path $PSScriptRoot 'Invoke-ZtpProvisioning.ps1'
 # After Ready to cluster: drivers, SBE files, deployment admin and one management address, so the nodes pass Validate.
 $prepare = Join-Path $PSScriptRoot 'Initialize-ZtpNode.ps1'
 $driverStaging = Join-Path $media 'sbe-drivers'
-if ($From -eq 'Prepare') {
-    & $prepare -InfrastructureFile $InfrastructureFile -Node $Node -DriverStagingPath $driverStaging -EventLogPath (Join-Path $state 'ztp-events.jsonl') -Execute:$Execute
-    return
-}
 if (-not $Execute) {
+    if ($From -eq 'Prepare') { & $prepare -InfrastructureFile $InfrastructureFile -Node $Node -DriverStagingPath $driverStaging -EventLogPath $events; return }
     & $orchestrator -ConfigPath $config -NodeName $Node
     Write-Output '--- Prepare (after Ready to cluster)'
-    try { & $prepare -InfrastructureFile $InfrastructureFile -Node $Node -DriverStagingPath $driverStaging -EventLogPath (Join-Path $state 'ztp-events.jsonl') } catch { Write-Warning $_.Exception.Message }
+    try { & $prepare -InfrastructureFile $InfrastructureFile -Node $Node -DriverStagingPath $driverStaging -EventLogPath $events } catch { Write-Warning $_.Exception.Message }
     return
 }
 
-Set-AzContext -Tenant $tenant -Subscription $vaultSub -Scope Process -WarningAction SilentlyContinue | Out-Null
-$user = Get-AzKeyVaultSecret -VaultName ([string]$ztp.bmc_secret.vault) -Name ([string]$ztp.bmc_secret.username_name) -AsPlainText
-$password = Get-AzKeyVaultSecret -VaultName ([string]$ztp.bmc_secret.vault) -Name ([string]$ztp.bmc_secret.password_name)
-$bmc = [pscredential]::new($user, $password.SecretValue)
+# A run that changes things leaves its transcript with the evidence. Nothing secret is written to the output.
+$transcript = Join-Path $evidence ("$runName.{0}.transcript.log" -f (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ'))
+$null = Start-Transcript -LiteralPath $transcript -IncludeInvocationHeader
+try {
+    if ($From -eq 'Prepare') {
+        & $prepare -InfrastructureFile $InfrastructureFile -Node $Node -DriverStagingPath $driverStaging -EventLogPath $events -Execute
+        return
+    }
 
-Set-AzContext -Tenant $tenant -Subscription $clusterSub -Scope Process -WarningAction SilentlyContinue | Out-Null
-if (-not (Get-AzResourceGroup -Name $rg -ErrorAction SilentlyContinue)) {
-    New-AzResourceGroup -Name $rg -Location ([string]$env_.azure_resources.location) -Tag $tags | Out-Null
-    Write-Output "Created resource group $rg"
-}
+    Set-AzContext -Tenant $tenant -Subscription $vaultSub -Scope Process -WarningAction SilentlyContinue | Out-Null
+    $user = Get-AzKeyVaultSecret -VaultName ([string]$ztp.bmc_secret.vault) -Name ([string]$ztp.bmc_secret.username_name) -AsPlainText
+    $password = Get-AzKeyVaultSecret -VaultName ([string]$ztp.bmc_secret.vault) -Name ([string]$ztp.bmc_secret.password_name)
+    $bmc = [pscredential]::new($user, $password.SecretValue)
 
-$run = @{
-    ConfigPath           = $config
-    NodeName             = $Node
-    BmcCredential        = $bmc
-    ConfirmNotClustered  = $true
-    SkipCertificateCheck = $true
-    RetryProvisionOs     = $true
-    Execute              = $true
-    Confirm              = $false
+    Set-AzContext -Tenant $tenant -Subscription $clusterSub -Scope Process -WarningAction SilentlyContinue | Out-Null
+    if (-not (Get-AzResourceGroup -Name $rg -ErrorAction SilentlyContinue)) {
+        New-AzResourceGroup -Name $rg -Location ([string]$env_.azure_resources.location) -Tag $tags | Out-Null
+        Write-Output "Created resource group $rg"
+    }
+
+    $run = @{
+        ConfigPath           = $config
+        NodeName             = $Node
+        BmcCredential        = $bmc
+        ConfirmNotClustered  = $true
+        SkipCertificateCheck = $true
+        RetryProvisionOs     = $true
+        Execute              = $true
+        Confirm              = $false
+    }
+    if ($From) { $run.From = $From }
+    # A run that builds media (from the start, Resolve or Media) is a fresh provisioning, so replace this tool's own images.
+    if (-not $From -or $From -in 'Resolve', 'Media') { $run.RebuildImages = $true }
+    & $orchestrator @run
+    & $prepare -InfrastructureFile $InfrastructureFile -Node $Node -DriverStagingPath $driverStaging -EventLogPath $events -Execute
 }
-if ($From) { $run.From = $From }
-# A run that builds media (from the start, Resolve or Media) is a fresh provisioning, so replace this tool's own images.
-if (-not $From -or $From -in 'Resolve', 'Media') { $run.RebuildImages = $true }
-& $orchestrator @run
-& $prepare -InfrastructureFile $InfrastructureFile -Node $Node -DriverStagingPath $driverStaging -EventLogPath (Join-Path $state 'ztp-events.jsonl') -Execute
+finally { $null = Stop-Transcript -ErrorAction SilentlyContinue }

@@ -86,7 +86,7 @@ The template gives each edge machine's identity the right to assign **Key Vault 
 | `powershell-yaml` | `Install-Module powershell-yaml -Scope AllUsers` |
 | Pester 5 | Only to run the tests: `Install-Module Pester -MinimumVersion 5.0 -Scope AllUsers` |
 | WinRM trusted hosts | Prepare connects to each node by IP with a local account (NTLM). Add the node addresses to the client's TrustedHosts list: `Set-Item WSMan:\localhost\Client\TrustedHosts -Value '192.0.2.11,192.0.2.12' -Concatenate`. See [Learn: about_Remote_Troubleshooting](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_remote_troubleshooting#how-to-use-an-ip-address-in-a-remote-command). |
-| Disk space | About 3 GB for the maintenance download and ISO, plus 4 GiB per node for the images, in `_media` at the root of the clone (git ignores it). |
+| Disk space | About 3 GB for the maintenance download and ISO, plus 4 GiB per node for the images, in the media folder (`ztp.media_path`, default `%ProgramData%\AzureLocalZtp\<site>\media`), outside any git repository. |
 | A session that lasts | The run takes hours. Use a session that won't end or sleep, or run it from a [pipeline](automation-pipelines.md). |
 
 ### Security
@@ -94,7 +94,7 @@ The template gives each edge machine's identity the right to assign **Key Vault 
 | Do this | Why |
 | --- | --- |
 | Change the BMC factory password, and keep the BMC credential only in Key Vault. | The run reads it from Key Vault into memory and never writes it. |
-| Restrict the folder that holds the vouchers (`_media/vouchers`), and never commit vouchers. | An ownership voucher is a secret: it's what claims the machine in Azure. |
+| Restrict the folder that holds the vouchers (`<media_path>\vouchers`), and never commit vouchers. | An ownership voucher is a secret: it's what claims the machine in Azure. |
 | Treat the read-write share as a tampering risk while it's up. Consider requiring SMB signing on the host, and test that your BMC still connects. | The machine boots from the image on that share. The run limits the share to the BMC addresses and one dedicated account with a random password, and removes the share, the account and the firewall rule after the Vouchers stage. |
 | Keep the generated files and the handoff out of source control. | They hold your subscription, addresses and resource IDs. |
 
@@ -107,7 +107,7 @@ git clone https://github.com/AzureLocal/azurelocal-ztp.git D:\git\azurelocal-ztp
 Set-Location D:\git\azurelocal-ztp
 ```
 
-The run keeps its working files in `_media` at the root of the clone: downloads, images, vouchers and state. Git ignores that folder. Keep the clone where it lasts, because resuming a run depends on `_media`.
+The run keeps its working files in the media folder: downloads, images, vouchers and state. Its evidence (the event log, change logs and transcripts) goes to the evidence folder. Set both in the environment file (`ztp.media_path`, `ztp.evidence_path`); without them they are `%ProgramData%\AzureLocalZtp\<ztp.site_name>\media` and `\evidence`. The run refuses a folder inside a git working tree, and creates the folders when missing. Keep them where they last, because resuming a run depends on them. See [Run data](environment-file.md#run-data-media-and-evidence).
 
 Copy [`examples/infrastructure.example.yml`](https://github.com/AzureLocal/azurelocal-ztp/blob/main/examples/infrastructure.example.yml), keep it outside this repository, and fill in your values. Every key is described in the [Environment file reference](environment-file.md).
 
@@ -231,7 +231,7 @@ The run checks every stage itself and stops with the reason when a check fails. 
 | Where | What you see |
 | --- | --- |
 | The console | `[HH:mm:ssZ] [ztp] ...` lines: the stage table at the start and each stage's evidence at the end. During Ready, each change of lifecycle, stage and job step is printed once. Prepare runs all nodes at once, and its lines start with `[<node>]`. |
-| The event file | `_media\ztp-state\ztp-events.jsonl` under the clone root, one JSON object per line. Follow it with `Get-Content -Wait -Tail 20 .\_media\ztp-state\ztp-events.jsonl`. |
+| The event file | `ztp-events.jsonl` in the evidence folder (`ztp.evidence_path`), one JSON object per line. Follow it with `Get-Content -Wait -Tail 20 <evidence_path>\ztp-events.jsonl`. |
 | AzureLocal Sonar | `Start-ZtpMonitor.ps1` writes a Sonar config for the event file and the edge machines, and starts [azurelocal-sonar](https://github.com/AzureLocal/azurelocal-sonar) from its `main` branch. Sonar only reads. |
 | The Azure portal | **Azure Arc** > **Operations** > **Provisioning (preview)** > **Provisioned machines**. Wait for **Ready to cluster** ([Learn: verify Arc connectivity](https://learn.microsoft.com/azure/azure-local/deploy/simplified-machine-provisioning#step-5-verify-azure-arc-connectivity)). |
 
@@ -242,7 +242,7 @@ Connect-AzAccount -Tenant <tenant-id>
 ./scripts/simplified-provisioning/Start-ZtpMonitor.ps1 -SonarPath D:\git\azurelocal-sonar `
     -SubscriptionId <subscription-id> -ResourceGroupName <resource-group> `
     -NodesFile ./config/simplified-provisioning/nodes.json `
-    -EventLogPath ./_media/ztp-state/ztp-events.jsonl -ClusterName <cluster-name> -Execute
+    -EventLogPath <evidence_path>\ztp-events.jsonl -ClusterName <cluster-name> -Execute
 ```
 
 Two things are normal on Dell AX-760 / iDRAC 7.30: a first OS install can fail with 5901, and the run resubmits it once; and a node can wait up to about 45 minutes at `AwaitingConnection` after the claim. See [Reading what you see](monitoring.md#reading-what-you-see), and [Troubleshooting](troubleshooting.md) for the causes.
@@ -268,7 +268,7 @@ Things to know:
 
 - **The state file is per set of nodes.** A run with `-Node node-01` doesn't see the state of a run with both nodes. Resume with the same list.
 - **Vouchers are one-time use.** After a claim, the voucher is spent. The Azure stage never re-PUTs an edge machine that exists. To provision a claimed node again from `Boot`, first delete its edge machine: **Azure Arc** > **Operations** > **Machine provisioning (preview)** > **Provisioned machines**, select it, **Delete**. Learn's recovery for a failed claim does the same and waits 15 minutes before provisioning again ([Learn](https://learn.microsoft.com/azure/azure-local/deploy/troubleshoot-simplified-machine-provisioning#when-you-provision-new-machines-arm-template-validation-fails)).
-- **To forget the state** of a set of nodes, delete `_media/ztp-state/<run>.ztp-provisioning.state.json`. The entry point has no reset switch.
+- **To forget the state** of a set of nodes, delete `<media_path>\ztp-state\<run>.ztp-provisioning.state.json`. The entry point has no reset switch.
 - **If a run failed during Boot,** check each node before you retry: the virtual media is ejected and the one-time boot override is cleared. `./scripts/simplified-provisioning/Mount-ZtpVirtualUsb.ps1 -NodeName node-01 -NodesFile ./config/simplified-provisioning/nodes.json -Credential $bmc -Action Status -SkipCertificateCheck -Execute` shows the slot, power state and boot override (read-only). `-Action Eject` ejects it.
 - A stopped Boot or Vouchers stage can leave the share in place. The next Boot replaces it, and the Vouchers stage removes it. To remove it by hand: `./scripts/simplified-provisioning/Publish-MaintenanceIso.ps1 -Remove -ShareName <share-name> -SharePath <image folder> -Execute`.
 
@@ -292,7 +292,7 @@ It doesn't mean the cluster will deploy. Active Directory preparation, Validate 
 
 ## What to hand to the cluster deployment
 
-The handoff is in `_media/ztp-state/`:
+The handoff is in `<media_path>\ztp-state\`:
 
 | File | Contents |
 | --- | --- |
@@ -303,7 +303,7 @@ The handoff is in `_media/ztp-state/`:
 **Use each node's `arcMachineResourceId` from the handoff**, not the host name. The service names the Arc machine `<device-id>-1`, not after the host, and replaces the `arcMachineResourceId` set at claim time. The handoff reads `arcMachineResourceId` from the edge machine after Ready, so it names that service-created machine. This was **proven on Dell AX-760 / iDRAC 7.30**.
 
 ```powershell
-(Get-Content .\_media\ztp-state\node-01+node-02.ztp-handoff.json -Raw | ConvertFrom-Json).nodes |
+(Get-Content <media_path>\ztp-state\node-01+node-02.ztp-handoff.json -Raw | ConvertFrom-Json).nodes |
     Select-Object name, arcMachineResourceId
 ```
 

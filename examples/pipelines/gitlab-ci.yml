@@ -5,8 +5,8 @@
 # Before you use it:
 # - A self-hosted Windows runner on the management network with shell = "pwsh", running as a service under a local
 #   administrator account, with the prerequisites in docs/operator-guide.md. Give it the tags "windows" and "ztp".
-# - In the runner's config.toml, [runners.custom_build_dir] enabled = true, so GIT_CLONE_PATH below is allowed. A fixed
-#   clone path keeps the run's state in the same _media folder on every job and every run.
+# - In the runner's config.toml, [runners.custom_build_dir] enabled = true, so GIT_CLONE_PATH below is allowed. The run's
+#   state is in ztp.media_path of the environment file, outside the clone, on every job and every run.
 # - The runner host has a managed identity (Azure VM or Azure Arc-enabled server) with the roles in
 #   docs/automation-pipelines.md. No secret is stored in GitLab: the environment file references Key Vault.
 # - If your tier has them, protect the environment azurelocal-ztp-execute and require deployment approvals.

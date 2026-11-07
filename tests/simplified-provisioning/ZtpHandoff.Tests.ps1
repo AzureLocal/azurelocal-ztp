@@ -155,7 +155,8 @@ if ($Execute) { foreach ($n in $NodeName) { $f = Join-Path $OutputDirectory "$Im
     }
     BeforeEach { $global:ztpH_calls.Clear(); Remove-Item (Join-Path $TestDrive 'images'), (Join-Path $TestDrive 'dl') -Recurse -Force -ErrorAction SilentlyContinue }
     It 'plans by default from the config alone: resolves, selects the SBE, plans the images, writes nothing' {
-        $r = & $global:ztpH_prep -ConfigPath $global:ztpH_cfg -StageScriptRoot $global:ztpH_stubs -InformationAction SilentlyContinue -WarningAction SilentlyContinue
+        # The plan lines come first; the result object is the last output.
+        $r = @(& $global:ztpH_prep -ConfigPath $global:ztpH_cfg -StageScriptRoot $global:ztpH_stubs -InformationAction SilentlyContinue -WarningAction SilentlyContinue)[-1]
         $r.Planned | Should -BeTrue
         @($global:ztpH_calls | ForEach-Object Script) | Should -Be @('iso', 'sbe')
         ($global:ztpH_calls | Where-Object Script -EQ 'iso').P.ContainsKey('Execute') | Should -BeFalse
@@ -191,7 +192,7 @@ if ($Execute) { foreach ($n in $NodeName) { $f = Join-Path $OutputDirectory "$Im
     It 'uses SourcePath as it is without a cache directory and needs one of the two' {
         $c = Join-Path $TestDrive 'cfg2.json'; $iso = Join-Path $TestDrive 'mine.iso'; Set-Content $iso 'x'
         @{ NodesFile = $global:ztpH_nodes; ImageDirectory = (Join-Path $TestDrive 'images'); SourcePath = $iso } | ConvertTo-Json | Set-Content $c
-        $r = & $global:ztpH_prep -ConfigPath $c -StageScriptRoot $global:ztpH_stubs -InformationAction SilentlyContinue -WarningAction SilentlyContinue
+        $r = @(& $global:ztpH_prep -ConfigPath $c -StageScriptRoot $global:ztpH_stubs -InformationAction SilentlyContinue -WarningAction SilentlyContinue)[-1]
         $r.IsoPath | Should -Be $iso
         @($global:ztpH_calls | Where-Object Script -EQ 'iso').Count | Should -Be 0
         @{ NodesFile = $global:ztpH_nodes; ImageDirectory = (Join-Path $TestDrive 'images') } | ConvertTo-Json | Set-Content $c

@@ -35,8 +35,8 @@
 .PARAMETER ReachTimeoutMinutes
     How long gates 2 and 3 wait for the node to accept a sign-in.
 .PARAMETER DriverStagingPath
-    Where the SBE's network drivers are unpacked on this server, one folder per SBE. Defaults to _media/sbe-drivers at the
-    repository root (ignored by git).
+    Where the SBE's network drivers are unpacked on this server, one folder per SBE. Defaults to sbe-drivers in the media
+    folder: ztp.media_path, else %ProgramData%\AzureLocalZtp\<ztp.site_name>\media. Refused inside a git working tree.
 .PARAMETER OemConfigDirectory
     The folder of OEM definitions (<vendor>.json, which names the SBE folders that hold network drivers). Defaults to
     config/oem at the repository root.
@@ -57,7 +57,7 @@ param(
     [string[]]$Node,
     [int]$ReadyTimeoutMinutes = 240,
     [int]$ReachTimeoutMinutes = 30,
-    [string]$DriverStagingPath = ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../_media/sbe-drivers'))),
+    [string]$DriverStagingPath,
     [string]$OemConfigDirectory = ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../config/oem'))),
     [string]$WorkerScriptPath = $PSCommandPath,
     [string]$EventLogPath,
@@ -100,6 +100,8 @@ $mgmtMode = Get-ZtpManagementAssignment -Environment $env_
 
 $envNodes = @($env_.cluster_nodes)
 $Node = @(Resolve-ZtpNodeSelection -Environment $env_ -Node $Node)
+if (-not $DriverStagingPath) { $DriverStagingPath = Join-Path (Resolve-ZtpDataPath -Environment $env_ -Kind media) 'sbe-drivers' }
+elseif (Find-ZtpGitWorkTree -Path $DriverStagingPath) { throw "-DriverStagingPath $DriverStagingPath is inside the git working tree $(Find-ZtpGitWorkTree -Path $DriverStagingPath); unpacked drivers don't belong in a repository." }
 
 # ------------------------------------------------------------------ the SBE: verify, then index its network drivers
 $sbe = Get-ZtpSbeBundle -Path ([string]$ztp.node_preparation.sbe_bundle)

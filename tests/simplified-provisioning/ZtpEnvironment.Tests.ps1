@@ -66,6 +66,9 @@ BeforeAll {
         param([Parameter(Mandatory)][string]$Name, [string]$Sbe = 'C:\unused', [scriptblock]$Edit)
         $e = Read-ZtpEnvironmentFile -Path $script:fixture
         $e.ztp.node_preparation.sbe_bundle = $Sbe
+        # Run data in TestDrive, one folder per case: never in the repository, never in the real ProgramData.
+        $e.ztp.media_path = Join-Path $TestDrive "data-$Name/media"
+        $e.ztp.evidence_path = Join-Path $TestDrive "data-$Name/evidence"
         if ($Edit) { & $Edit $e }
         $path = Join-Path $TestDrive "$Name.yml"
         Set-Content -LiteralPath $path -Value (ConvertTo-Yaml $e)
@@ -157,6 +160,8 @@ Describe 'Checking the environment file' {
         @{ Case = 'the management VLAN is out of range'; Edit = { param($e) $e.network_intents.management.vlan_id = 5000 }; Expect = "vlan_id must be 0-4094, not '5000'" }
         @{ Case = 'an Arc machine name has a space'; Edit = { param($e) $e.cluster_nodes[0].arc_machine_name = 'node 01' }; Expect = "arc_machine_name 'node 01' isn't a valid Arc machine name" }
         @{ Case = 'an Arc machine name ends in a dot'; Edit = { param($e) $e.cluster_nodes[0].arc_machine_name = 'node-01.' }; Expect = "arc_machine_name 'node-01.' isn't a valid Arc machine name" }
+        @{ Case = 'the media path is relative'; Edit = { param($e) $e.ztp.media_path = '_media' }; Expect = "ztp.media_path must be a full path such as D:\Data\azl-ztp\site\media, not '_media'" }
+        @{ Case = 'the evidence path is a list'; Edit = { param($e) $e.ztp.evidence_path = @('a') }; Expect = 'ztp.evidence_path must be a single value' }
     ) {
         $e = Read-ZtpEnvironmentFile -Path $script:fixture
         & $Edit $e
@@ -294,7 +299,9 @@ Describe 'Initialize-ZtpNode.ps1 plan' {
         $text | Should -BeLike '*Port 1 PCI\VEN_8086&DEV_1572 driver 1.0.0.0 -> 1.2.3.4 (nic.inf)*'
         $text | Should -BeLike '*PLAN: drivers nic.inf 1.2.3.4 (signatures valid); SBE to C:\SBE; create deployadmin; static 192.0.2.11/24 gw 192.0.2.1 on Port 1; DHCP and gateway off on Port 2; DNS 192.0.2.53,192.0.2.54; time ntp.example.com.*'
         $text | Should -BeLike '*Plan only. Add -Execute*'
-        $staging = Join-Path $script:initRoot '_media/sbe-drivers/SBE_Contoso_1.0.0.0'
+        # The default staging folder is in the file's media folder, not in the repository.
+        $staging = Join-Path $TestDrive 'data-init-plan/media/sbe-drivers/SBE_Contoso_1.0.0.0'
+        Test-Path (Join-Path $script:initRoot '_media') | Should -BeFalse
         Test-Path (Join-Path $staging '.extracted') | Should -BeTrue
         Test-Path (Join-Path $staging 'Drivers/Network/nicA/nic.inf') | Should -BeTrue
         Test-Path (Join-Path $staging 'unrelated.txt') | Should -BeFalse
@@ -477,18 +484,59 @@ param($params)
         $global:ztpE_runs[0].Params['NodeName'] | Should -Be @('node-01', 'node-02')
         $global:ztpE_runs[0].Params.ContainsKey('Execute') | Should -BeFalse
         $global:ztpE_runs[1].Params['DriverStagingPath'] | Should -Be (Join-Path $script:media 'sbe-drivers')
-        $global:ztpE_runs[1].Params['EventLogPath'] | Should -Be (Join-Path $script:media 'ztp-state/ztp-events.jsonl') -Because 'Prepare reports its gates to the event file Sonar follows'
+        $global:ztpE_runs[1].Params['EventLogPath'] | Should -Be ([IO.Path]::GetFullPath((Join-Path $TestDrive 'data-env-plan/evidence/ztp-events.jsonl'))) -Because 'Prepare reports its gates to the event file Sonar follows, in the evidence folder'
+        $cfg.EventLogPath | Should -Be $global:ztpE_runs[1].Params['EventLogPath']
         $global:ztpE_runs[1].Params.ContainsKey('Execute') | Should -BeFalse
         # Plan mode creates nothing in Azure and reads no secret.
         ($global:ztpE_calls -join "`n") | Should -Not -BeLike '*New-AzResourceGroup*'
         ($global:ztpE_calls -join "`n") | Should -Not -BeLike '*Get-AzKeyVaultSecret*'
     }
 
-    It 'uses _media at the repository root when -MediaPath is not given' {
-        $infra = New-TestEnvironment -Name 'env-default-media' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-default'))
+    It 'keeps run data in ztp.media_path and ztp.evidence_path when -MediaPath and -EvidencePath are not given, and creates them' {
+        $infra = New-TestEnvironment -Name 'env-file-paths' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-file-paths'))
         $null = & $script:envScript -InfrastructureFile $infra *>&1
         $cfg = Get-Content -LiteralPath (Join-Path $script:envRoot 'config/simplified-provisioning/ztp-provisioning.json') -Raw | ConvertFrom-Json
-        $cfg.BootstrapCacheDirectory | Should -Be (Join-Path $script:envRoot '_media')
+        $media = [IO.Path]::GetFullPath((Join-Path $TestDrive 'data-env-file-paths/media'))
+        $evidence = [IO.Path]::GetFullPath((Join-Path $TestDrive 'data-env-file-paths/evidence'))
+        $cfg.BootstrapCacheDirectory | Should -Be $media
+        $cfg.StatePath | Should -BeLike "$media*ztp-state*"
+        $cfg.EventLogPath | Should -Be (Join-Path $evidence 'ztp-events.jsonl')
+        Test-Path -LiteralPath $evidence -PathType Container | Should -BeTrue
+        Test-Path (Join-Path $script:envRoot '_media') | Should -BeFalse
+        # The parameters win over the file.
+        $null = & $script:envScript -InfrastructureFile $infra -MediaPath (Join-Path $TestDrive 'param-media') -EvidencePath (Join-Path $TestDrive 'param-evidence') *>&1
+        $cfg = Get-Content -LiteralPath (Join-Path $script:envRoot 'config/simplified-provisioning/ztp-provisioning.json') -Raw | ConvertFrom-Json
+        $cfg.BootstrapCacheDirectory | Should -Be ([IO.Path]::GetFullPath((Join-Path $TestDrive 'param-media')))
+        $cfg.EventLogPath | Should -Be ([IO.Path]::GetFullPath((Join-Path $TestDrive 'param-evidence/ztp-events.jsonl')))
+    }
+
+    It 'without the keys or the parameters, uses the site folder under ProgramData\AzureLocalZtp' {
+        $infra = New-TestEnvironment -Name 'env-default-paths' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-default')) -Edit { param($e) $e.ztp.Remove('media_path'); $e.ztp.Remove('evidence_path') }
+        $saved = $env:ProgramData
+        $env:ProgramData = Join-Path $TestDrive 'programdata'
+        try { $null = & $script:envScript -InfrastructureFile $infra *>&1 }
+        finally { $env:ProgramData = $saved }
+        $cfg = Get-Content -LiteralPath (Join-Path $script:envRoot 'config/simplified-provisioning/ztp-provisioning.json') -Raw | ConvertFrom-Json
+        $cfg.BootstrapCacheDirectory | Should -Be ([IO.Path]::GetFullPath((Join-Path $TestDrive 'programdata/AzureLocalZtp/example-site/media')))
+        $cfg.EventLogPath | Should -Be ([IO.Path]::GetFullPath((Join-Path $TestDrive 'programdata/AzureLocalZtp/example-site/evidence/ztp-events.jsonl')))
+    }
+
+    It 'refuses a media or evidence folder inside a git working tree, from the file or from the parameters' {
+        $repo = Join-Path $TestDrive 'a-clone'
+        $null = New-Item -ItemType Directory -Force -Path (Join-Path $repo '.git')
+        $sbe = New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-in-repo')
+        $inFile = New-TestEnvironment -Name 'env-in-repo' -Sbe $sbe -Edit { param($e) $e.ztp.media_path = Join-Path $repo '_media' }
+        { & $script:envScript -InfrastructureFile $inFile } | Should -Throw "*ztp.media_path*is inside the git working tree*a-clone*"
+        $clean = New-TestEnvironment -Name 'env-param-in-repo' -Sbe $sbe
+        { & $script:envScript -InfrastructureFile $clean -MediaPath (Join-Path $repo 'media') } | Should -Throw '*media folder*(from -MediaPath) is inside the git working tree*'
+        { & $script:envScript -InfrastructureFile $clean -EvidencePath (Join-Path $repo 'deep/evidence') } | Should -Throw '*evidence folder*(from -EvidencePath) is inside the git working tree*'
+        Test-Path (Join-Path $repo 'media') | Should -BeFalse
+    }
+
+    It 'with -Execute writes the run transcript to the evidence folder' {
+        $infra = New-TestEnvironment -Name 'env-transcript' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-transcript'))
+        $null = & $script:envScript -InfrastructureFile $infra -Node node-01 -Execute *>&1
+        @(Get-ChildItem -LiteralPath (Join-Path $TestDrive 'data-env-transcript/evidence') -Filter 'node-01.*.transcript.log').Count | Should -Be 1
     }
 
     It 'covers the nodes named and keeps a separate state for that set' {

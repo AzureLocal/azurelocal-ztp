@@ -18,7 +18,7 @@ Every Azure read is an ARM GET through `Invoke-AzRestMethod` under your Az Power
 | Bootstrap: BMC signals | Media inserted and its write protection, power state, the one-time override consumed, power transitions after it, BMC log entries | Redfish GETs of the manager's virtual media, the system, and the log services and message patterns in `config/oem/<oem>.json` (Dell: `Lclog` and `Sel`) (`Wait-ZtpBootstrapComplete.ps1`) | 15 s, backing off by 1.5 times up to 120 s while nothing changes | None of its own. A stall writes a warning after 20 minutes in the same state. | Moves the node to `Mounted`, `Booting` or `MaintenanceEnvironmentRunning`. These signals are weak and never fail a node. | `MediaRejected`: this node's image isn't inserted after 3 minutes, or it's write-protected without `-RfsWriteAttribute`. |
 | Bootstrap: voucher in the image | A complete, valid ownership voucher for the node's serial under `\vouchers\<serial>\` | The host opens the node's image file read-only, shared with the iDRAC's open handle, and validates the `.pem` | Same loop | 90 minutes from the start (voucher deadline), 120 minutes overall | `VoucherWritten`. This is the decisive signal. A voucher that was already in the image before the node was seen booting doesn't count until the node boots or the voucher changes. | `VoucherMissing` at the voucher deadline, `Failed` at the overall budget. |
 | Bootstrap: Azure readiness | The subscription can claim a voucher now (`Get-ZtpAzureReadiness`) | ARM GETs: the feature `Microsoft.DeviceOnboarding/AzureLocalZTP` (api-version `2021-07-01`) is `Registered`; the providers `Microsoft.AzureStackHCI`, `Microsoft.Edge`, `Microsoft.HybridCompute` and `Microsoft.DeviceOnboarding` (`2021-04-01`) are `Registered`; the OS image catalog `locations/<location>/osImages?solution-type=HCI` (`2026-10-01`) isn't empty | Only once a node has a valid voucher. The result is cached for 5 minutes. | Same budgets | `ReadyForPortal`: a valid voucher and Azure ready. It doesn't mean Azure saw the device: Learn documents no Azure signal for a device waiting to be claimed. | Doesn't fail by itself. The node stays at `VoucherWritten` with a warning event naming what isn't ready, until the overall budget. |
-| Vouchers | The same voucher check, then eject and an exclusive read | Image read (`Wait-ZtpVoucher.ps1`), Redfish `EjectMedia`, then `Read-ZtpVoucherFromImage.ps1` | Every 60 s | 120 minutes | A valid voucher written to `_media/vouchers/<serial>.pem` for every node | No voucher in time. The error names each node's last image status. |
+| Vouchers | The same voucher check, then eject and an exclusive read | Image read (`Wait-ZtpVoucher.ps1`), Redfish `EjectMedia`, then `Read-ZtpVoucherFromImage.ps1` | Every 60 s | 120 minutes | A valid voucher written to `<media_path>/vouchers/<serial>.pem` for every node | No voucher in time. The error names each node's last image status. |
 | Azure | ARM accepted the claim deployment | `Get-AzResourceGroupDeployment` for the deployment name | Every 15 s | 10 minutes | The deployment record appears, newer than the submit, and isn't `Failed` | The record shows `Failed`, the job fails, or nothing appears in 10 minutes |
 | Ready | Each edge machine and its OS install (`Wait-ZtpMachineReady.ps1`, `Get-ZtpEdgeMachineStatus`) | ARM GETs of `Microsoft.AzureStackHCI/edgeMachines/<node>` and `edgeMachines/<node>/jobs/ProvisionOs`, api-version `2026-10-01`. See [Ready in detail](#ready-in-detail). | Every 60 s | 180 minutes | Every node ready to cluster. Then `Update-ArcMachineNames.ps1` reads each Arc machine name, and `Test-ProvisionedMachines.ps1` checks each Arc machine is `Connected` with the four mandatory extensions `Succeeded`. | A failure that remains after the one resubmit, or the timeout |
 | Prepare gate 1 | Azure reports the node ready to cluster | The same two ARM GETs and the same rules as Ready (`Initialize-ZtpNode.ps1`) | Every 60 s | 240 minutes | Ready | Azure reports the node failed, or the timeout |
@@ -83,7 +83,7 @@ The Boot, Bootstrap and Vouchers waits print little on the console. Their detail
 
 | How you run | Path |
 | --- | --- |
-| `Invoke-ZtpEnvironment.ps1` | `<MediaPath>\ztp-state\ztp-events.jsonl`. `-MediaPath` defaults to `_media` at the root of the repository clone, which git ignores. From the clone root that's `.\_media\ztp-state\ztp-events.jsonl`. |
+| `Invoke-ZtpEnvironment.ps1` | `ztp-events.jsonl` in the evidence folder: `ztp.evidence_path` of the environment file, or `-EvidencePath`, by default `%ProgramData%\AzureLocalZtp\<site>\evidence`. Before this change it was `_media\ztp-state\ztp-events.jsonl` in the clone; point monitors at the new path. |
 | `Invoke-ZtpProvisioning.ps1` directly | `-EventLogPath`, default `ztp-events.jsonl` in the current folder |
 
 The file is only ever appended to, so it holds every run that used it. Each event carries its own UTC time.
@@ -146,7 +146,7 @@ Example lines:
 From the clone root, in a second PowerShell 7 window:
 
 ```powershell
-$events = '.\_media\ztp-state\ztp-events.jsonl'
+$events = 'D:\Data\azl-ztp\site-01\evidence\ztp-events.jsonl'   # ztp.evidence_path
 
 # Every new event as one line. -Tail 20 starts with the last 20 instead of the whole history.
 Get-Content -Path $events -Tail 20 -Wait | ForEach-Object {
@@ -230,7 +230,7 @@ The config it writes:
     { "name": "node-01", "address": "192.0.2.11", "seed": true },
     { "name": "node-02", "address": "192.0.2.12" }
   ],
-  "ztpEvents": { "path": "D:\\azurelocal-ztp\\_media\\ztp-state\\ztp-events.jsonl" },
+  "ztpEvents": { "path": "D:\\Data\\azl-ztp\\site-01\\evidence\\ztp-events.jsonl" },
   "credential": { "source": "prompt" }
 }
 ```
@@ -244,7 +244,7 @@ Connect-AzAccount -Tenant <tenant-id>
 ./scripts/simplified-provisioning/Start-ZtpMonitor.ps1 -SonarPath D:\git\azurelocal-sonar `
     -SubscriptionId <subscription-id> -ResourceGroupName <resource-group> `
     -NodesFile ./config/simplified-provisioning/nodes.json `
-    -EventLogPath ./_media/ztp-state/ztp-events.jsonl -ClusterName <cluster-name> -Execute
+    -EventLogPath D:\Data\azl-ztp\site-01\evidence\ztp-events.jsonl -ClusterName <cluster-name> -Execute
 ```
 
 Sonar asks once for the account that reads the seed node's logs, because the config says `credential.source: prompt`. You can cancel: Sonar then uses your Windows identity, and provisioning is shown either way. The page opens at `http://localhost:8642/`. Press Ctrl+C in that window to stop Sonar; the run isn't affected.

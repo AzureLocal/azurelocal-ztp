@@ -80,19 +80,19 @@ The host needs inbound TCP 445 from the BMC addresses only. `Publish-Maintenance
 
 | Data | Path | Where it's kept |
 | --- | --- | --- |
-| Maintenance ISO | Microsoft download link `https://aka.ms/aep/installeros/<YYMM>`, then the host cache, then one image per node, then the SMB share, then the BMC, then the machine. | `_media/bootstrap/<version>/` with a trust-on-first-use manifest. Microsoft publishes no hash for this download; see [Bootstrap media and the OEM SBE](bootstrap-media-and-sbe.md). |
-| Per-node image | Built on the host, shared to the BMC, written back by the machine. | `_media/ztp-virtual-usb/ztp-usb-<node>.img` |
-| Ownership voucher | The machine writes `\vouchers\<serial>\*.pem` into its own image. The host reads it after the eject and writes `<serial>.pem`. At claim time it's base64-encoded into a secure deployment parameter. It's never printed. | `_media/vouchers/<serial>.pem`. Vouchers are one-time use. |
+| Maintenance ISO | Microsoft download link `https://aka.ms/aep/installeros/<YYMM>`, then the host cache, then one image per node, then the SMB share, then the BMC, then the machine. | `<media_path>/bootstrap/<version>/` with a trust-on-first-use manifest. Microsoft publishes no hash for this download; see [Bootstrap media and the OEM SBE](bootstrap-media-and-sbe.md). |
+| Per-node image | Built on the host, shared to the BMC, written back by the machine. | `<media_path>/ztp-virtual-usb/ztp-usb-<node>.img` |
+| Ownership voucher | The machine writes `\vouchers\<serial>\*.pem` into its own image. The host reads it after the eject and writes `<serial>.pem`. At claim time it's base64-encoded into a secure deployment parameter. It's never printed. | `<media_path>/vouchers/<serial>.pem`. Vouchers are one-time use. |
 | BMC login | Key Vault, read into memory. | Never written. |
 | SMB share account | Generated with a random password for each publish, held in memory only, removed after the Vouchers stage. | Never written. |
 | Provisioning administrator password | Must already exist as a Key Vault secret. The template passes only the secret's resource ID. Each edge machine's identity gets a constrained right to grant Key Vault Secrets User on the vault, so the OS install can read it. Prepare reads it to sign in. | Key Vault |
 | Deployment admin password | Key Vault (`credentials.local_admin_password_secret`). Prepare reads it and creates the local account. | Key Vault |
 | The claim | One ARM deployment of `bicep/main.bicep` with the vouchers in memory. | Resource group deployment history |
-| SBE | You download it from the OEM. Resolve and Prepare check its SHA-256 against the OEM's discovery manifest. Prepare extracts the network drivers once and copies the three SBE files to each node. | Your folder (`ztp.node_preparation.sbe_bundle`); drivers in `_media/sbe-drivers/<sbe>/`; `C:\SBE` on each node. |
-| Handoff | Written after Ready. Holds each node's `arcMachineResourceId`, read from the edge machine after Ready, so it names the service-created `<device-id>-1` Arc machine. Also the site, the solution version and the SBE values. | `_media/ztp-state/<run>.ztp-handoff.json`, `<run>.ztp-cluster-inputs.yaml`, `<run>.arc-machine-names.json` |
-| Events | One JSON line per state change and per stage. | `_media/ztp-state/ztp-events.jsonl` |
+| SBE | You download it from the OEM. Resolve and Prepare check its SHA-256 against the OEM's discovery manifest. Prepare extracts the network drivers once and copies the three SBE files to each node. | Your folder (`ztp.node_preparation.sbe_bundle`); drivers in `<media_path>/sbe-drivers/<sbe>/`; `C:\SBE` on each node. |
+| Handoff | Written after Ready. Holds each node's `arcMachineResourceId`, read from the edge machine after Ready, so it names the service-created `<device-id>-1` Arc machine. Also the site, the solution version and the SBE values. | `<media_path>/ztp-state/<run>.ztp-handoff.json`, `<run>.ztp-cluster-inputs.yaml`, `<run>.arc-machine-names.json` |
+| Events | One JSON line per state change and per stage. | `<evidence_path>/ztp-events.jsonl` |
 
-`_media` is a folder at the root of the repository clone, which git ignores (`-MediaPath` of `Invoke-ZtpEnvironment.ps1` changes it). `<run>` is the node names of the run joined with `+`, for example `node-01+node-02`.
+`<media_path>` and `<evidence_path>` are `ztp.media_path` and `ztp.evidence_path` of the environment file, by default `%ProgramData%\AzureLocalZtp\<site>\media` and `\evidence`; `-MediaPath` and `-EvidencePath` of `Invoke-ZtpEnvironment.ps1` override them. Neither may be inside a git working tree. `<run>` is the node names of the run joined with `+`, for example `node-01+node-02`.
 
 The entry point also writes three generated files inside the clone. They hold environment values, so keep them out of source control:
 
@@ -102,7 +102,7 @@ The entry point also writes three generated files inside the clone. They hold en
 
 ## Idempotence and resume
 
-- **State per set of nodes.** The orchestrator records each completed stage, with its evidence, in `_media/ztp-state/<run>.ztp-provisioning.state.json`. Each set of nodes keeps its own state, so a run for `node-02` alone never disturbs a run for both nodes.
+- **State per set of nodes.** The orchestrator records each completed stage, with its evidence, in `<media_path>/ztp-state/<run>.ztp-provisioning.state.json`. Each set of nodes keeps its own state, so a run for `node-02` alone never disturbs a run for both nodes.
 - **A rerun resumes.** Run the same command again with the same `-Node` list. The orchestrator starts at the first stage that didn't complete. Prepare always runs after it, and it skips steps that are already done.
 - **`-From <Stage>`** runs that stage and every later one, whatever the state file says. `-From Prepare` runs only Prepare. The stages you can name are `Resolve`, `Media`, `Boot`, `Bootstrap`, `Vouchers`, `Azure`, `Ready`, `Handoff` and `Prepare`.
 - **The Azure stage never re-PUTs an existing edge machine.** It claims only the nodes whose edge machine doesn't exist yet. If ARM already has every edge machine, Azure goes straight to Ready.

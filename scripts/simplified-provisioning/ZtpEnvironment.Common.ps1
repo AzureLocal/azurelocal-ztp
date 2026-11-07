@@ -31,6 +31,10 @@ The keys, by what needs them:
     ztp.admin_secret.resource_group
     ztp.bmc_secret.vault, .username_name, .password_name
     ztp.tags (optional mapping), ztp.azl_rp_object_id (optional GUID)
+  Both read, optionally
+    ztp.media_path      downloads, images, vouchers, unpacked drivers and run state  (default %ProgramData%\AzureLocalZtp\<site_name>\media)
+    ztp.evidence_path   the event log, change logs and run logs                      (default %ProgramData%\AzureLocalZtp\<site_name>\evidence)
+    Neither may be inside a git working tree: Resolve-ZtpDataPath refuses one, and creates the folder.
 #>
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -160,6 +164,17 @@ function Test-ZtpEnvironment {
     & $check $Environment 'ztp.admin_secret.subscription_id' 'ztp.admin_secret.subscription_id' 'guid'
     foreach ($k in 'vault', 'name', 'username') { & $check $Environment "ztp.admin_secret.$k" "ztp.admin_secret.$k" 'text' }
     & $check $Environment 'ztp.node_preparation.sbe_bundle' 'ztp.node_preparation.sbe_bundle' 'text'
+    foreach ($k in 'media_path', 'evidence_path') {
+        & $check $Environment "ztp.$k" "ztp.$k" 'text' -Optional
+        $p = Get-ZtpEnvValue -Environment $Environment -Path "ztp.$k"
+        if ($p -is [string] -and $p.Trim()) {
+            if (-not [IO.Path]::IsPathFullyQualified($p)) { $problems.Add("ztp.$k must be a full path such as D:\Data\azl-ztp\site\$($k -replace '_path$'), not '$p'.") }
+            else {
+                $repo = Find-ZtpGitWorkTree -Path $p
+                if ($repo) { $problems.Add("ztp.$k '$p' is inside the git working tree $repo; run data must stay out of repositories.") }
+            }
+        }
+    }
 
     if ($For -eq 'Provision') {
         & $check $Environment 'hardware.model' 'hardware.model' 'text'
@@ -210,6 +225,61 @@ function Get-ZtpManagementAssignment {
     $mode = [string](Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.ip_assignment')
     if ($mode) { return $mode.ToLowerInvariant() }
     return 'static'
+}
+
+function Find-ZtpGitWorkTree {
+    <#
+    .SYNOPSIS
+    The git working tree that holds a path (the nearest folder above it with a .git folder or file), or $null. The path
+    doesn't have to exist yet.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][string]$Path)
+    $dir = [IO.Path]::GetFullPath($Path)
+    while ($dir) {
+        if (Test-Path -LiteralPath (Join-Path $dir '.git')) { return $dir }
+        $parent = [IO.Path]::GetDirectoryName($dir)
+        if (-not $parent -or $parent -eq $dir) { break }
+        $dir = $parent
+    }
+    return $null
+}
+
+function Resolve-ZtpDataPath {
+    <#
+    .SYNOPSIS
+    The folder for a run's media (downloads, images, vouchers, state) or evidence (event log, change logs, run logs), created
+    when missing. Refuses a folder inside a git working tree: 4 GB images and one-time vouchers never belong in a repository.
+    .DESCRIPTION
+    Order: -Override (the script's -MediaPath or -EvidencePath), then ztp.media_path or ztp.evidence_path, then
+    %ProgramData%\AzureLocalZtp\<ztp.site_name>\<media|evidence> (site 'default' when the file names none).
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Environment,
+        [Parameter(Mandatory)][ValidateSet('media', 'evidence')][string]$Kind,
+        [string]$Override
+    )
+    $key = "ztp.$($Kind)_path"
+    $parameter = if ($Kind -eq 'media') { '-MediaPath' } else { '-EvidencePath' }
+    $from = if ($Override) { $parameter } else { $key }
+    $path = if ($Override) { $Override } else { [string](Get-ZtpEnvValue -Environment $Environment -Path $key) }
+    if (-not $path) {
+        $root = if ($env:ProgramData) { $env:ProgramData } else { [Environment]::GetFolderPath('CommonApplicationData') }
+        $site = [string](Get-ZtpEnvValue -Environment $Environment -Path 'ztp.site_name')
+        if ($site -notmatch '^[A-Za-z0-9][A-Za-z0-9-]{0,62}$') { $site = 'default' }
+        $path = Join-Path $root "AzureLocalZtp\$site\$Kind"
+        $from = 'the default'
+    }
+    $full = [IO.Path]::GetFullPath($path)
+    $repo = Find-ZtpGitWorkTree -Path $full
+    if ($repo) {
+        throw "The $Kind folder $full (from $from) is inside the git working tree $repo. Run data doesn't belong in a repository: set $key, or $parameter, to a folder outside it."
+    }
+    New-Item -ItemType Directory -Force -Path $full | Out-Null
+    return $full
 }
 
 function ConvertTo-ZtpSubnetMask {

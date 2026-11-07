@@ -8,7 +8,7 @@
 #   docs/automation-pipelines.md. No secret is stored in the pipeline: the environment file references Key Vault.
 # - An environment named azurelocal-ztp-execute with an Approvals check, and an Exclusive lock check so that
 #   only one run per environment goes at a time.
-# - Don't set "workspace: clean: all": the run keeps its state in _media next to the checkout.
+# - The run keeps its state in ztp.media_path of the environment file, outside the checkout, so a clean workspace is fine.
 
 trigger: none
 pr: none

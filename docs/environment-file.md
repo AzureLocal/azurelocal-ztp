@@ -96,6 +96,23 @@ That application ID is what `Invoke-ZtpEnvironment.ps1` uses for the lookup.
 | `ztp.node_preparation.sbe_bundle` | P+P | Folder path on the management host | Folder with the OEM's SBE: exactly one `SBE_*.zip`, its `SBE_*.xml`, and `SBE_Discovery_<oem>.xml`. See [Download the SBE](operator-guide.md#step-2-download-the-oem-sbe). |
 | `ztp.node_preparation.allow_unvalidated_sbe` | Prov, optional | `true` or `false` (default `false`) | **Test only.** Use the SBE in `sbe_bundle` even though the OEM's manifest doesn't list it as validated with `ztp.os_version`, for example to test a new Azure Local build before the OEM publishes a matching SBE. The SBE's hash is still checked; only the solution-compatibility check is skipped. The run warns, and the handoff records `compatibilityChecked: false`. The OEM doesn't support the combination, and cluster Validate or Deploy may still refuse it. |
 
+### Run data: media and evidence
+
+A run downloads and writes a lot: the maintenance ISO, one USB image per node (about 4 GB each), the SBE's unpacked drivers, the ownership vouchers and the run state. It also leaves evidence: the event log that monitors follow, change logs, and with `-Execute` a transcript. None of it belongs in a git repository, so ZTP keeps it in two folders that the file names.
+
+| Key | Needed by | Format | Used for |
+| --- | --- | --- | --- |
+| `ztp.media_path` | P+P, optional | Full path, outside any git working tree | Downloads and run data: `bootstrap\` (the ISO cache), `ztp-virtual-usb\` (the images), `vouchers\`, `sbe-drivers\` (Prepare's unpacked drivers) and `ztp-state\` (the state, handoff and Arc-name files). Default: `%ProgramData%\AzureLocalZtp\<ztp.site_name>\media`. `-MediaPath` overrides it. |
+| `ztp.evidence_path` | P+P, optional | Full path, outside any git working tree | Evidence: `ztp-events.jsonl` (the event log Sonar and `Start-ZtpMonitor.ps1` follow), the BIOS change log, and `<run>.<time>.transcript.log` for each `-Execute` run. Default: `%ProgramData%\AzureLocalZtp\<ztp.site_name>\evidence`. `-EvidencePath` overrides it. |
+
+The run creates both folders when they're missing. It refuses a folder inside a git working tree (any folder with a `.git` above it), whether it came from the file, from the parameter or from the default, before it writes anything. Keep the folders where they last: resuming a run (`-From`) reads the state and vouchers there.
+
+```yaml
+ztp:
+  media_path: 'D:\Data\azl-ztp\site-01\media'
+  evidence_path: 'D:\Data\azl-ztp\site-01\evidence'
+```
+
 ## Values the entry point sets for you
 
 `Invoke-ZtpEnvironment.ps1` fixes these values in the generated inputs. To change one, run the orchestrator directly (see [Orchestrator reference](automated-bootstrap.md)).
