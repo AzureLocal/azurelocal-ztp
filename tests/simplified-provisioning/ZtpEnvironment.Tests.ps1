@@ -162,6 +162,9 @@ Describe 'Checking the environment file' {
         @{ Case = 'an Arc machine name ends in a dot'; Edit = { param($e) $e.cluster_nodes[0].arc_machine_name = 'node-01.' }; Expect = "arc_machine_name 'node-01.' isn't a valid Arc machine name" }
         @{ Case = 'the media path is relative'; Edit = { param($e) $e.ztp.media_path = '_media' }; Expect = "ztp.media_path must be a full path such as D:\Data\azl-ztp\site\media, not '_media'" }
         @{ Case = 'the evidence path is a list'; Edit = { param($e) $e.ztp.evidence_path = @('a') }; Expect = 'ztp.evidence_path must be a single value' }
+        @{ Case = 'a BIOS value is not a string'; Edit = { param($e) $e.hardware['bios'] = [ordered]@{ Slot2 = $true } }; Expect = "hardware.bios.Slot2 must be a string; quote it ('True')" }
+        @{ Case = 'hardware.bios is a list'; Edit = { param($e) $e.hardware['bios'] = @('Slot2=Disabled') }; Expect = 'hardware.bios must be a mapping of BIOS attribute names to values' }
+        @{ Case = 'a node''s BIOS attribute name has a space'; Edit = { param($e) $e.cluster_nodes[1]['bios'] = [ordered]@{ 'Slot 2' = 'Disabled' } }; Expect = "cluster_nodes[1] (node-02).bios has 'Slot 2', which isn't a BIOS attribute name" }
     ) {
         $e = Read-ZtpEnvironmentFile -Path $script:fixture
         & $Edit $e
@@ -531,6 +534,26 @@ param($params)
         { & $script:envScript -InfrastructureFile $clean -MediaPath (Join-Path $repo 'media') } | Should -Throw '*media folder*(from -MediaPath) is inside the git working tree*'
         { & $script:envScript -InfrastructureFile $clean -EvidencePath (Join-Path $repo 'deep/evidence') } | Should -Throw '*evidence folder*(from -EvidencePath) is inside the git working tree*'
         Test-Path (Join-Path $repo 'media') | Should -BeFalse
+    }
+
+    It 'writes each node''s BIOS settings to the node list: hardware.bios with the node''s own merged over it' {
+        $infra = New-TestEnvironment -Name 'env-bios' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-bios')) -Edit {
+            param($e)
+            $e.hardware['bios'] = [ordered]@{ Slot2 = 'Disabled'; EmbNic1Nic2 = 'Enabled' }
+            $e.cluster_nodes[1]['bios'] = [ordered]@{ Slot2 = 'Enabled'; SriovGlobalEnable = 'Enabled' }
+        }
+        $text = Get-StepText (& $script:envScript -InfrastructureFile $infra *>&1)
+        $text | Should -BeLike '*BIOS set by the Boot stage before the maintenance boot: node-01 Slot2=Disabled, EmbNic1Nic2=Enabled; node-02 Slot2=Enabled, EmbNic1Nic2=Enabled, SriovGlobalEnable=Enabled.*'
+        $nodes = Get-Content -LiteralPath (Join-Path $script:envRoot 'config/simplified-provisioning/nodes.json') -Raw | ConvertFrom-Json
+        $nodes.nodes[0].bios.Slot2 | Should -Be 'Disabled'
+        $nodes.nodes[1].bios.Slot2 | Should -Be 'Enabled'
+        $nodes.nodes[1].bios.EmbNic1Nic2 | Should -Be 'Enabled'
+        $nodes.nodes[1].bios.SriovGlobalEnable | Should -Be 'Enabled'
+        # Without bios, the node list has no bios key.
+        $plain = New-TestEnvironment -Name 'env-no-bios' -Sbe (New-TestSbe -Dir (Join-Path $TestDrive 'sbe-env-no-bios'))
+        $null = & $script:envScript -InfrastructureFile $plain *>&1
+        $nodes = Get-Content -LiteralPath (Join-Path $script:envRoot 'config/simplified-provisioning/nodes.json') -Raw | ConvertFrom-Json
+        $nodes.nodes[0].PSObject.Properties.Name | Should -Not -Contain 'bios'
     }
 
     It 'with -Execute writes the run transcript to the evidence folder' {

@@ -15,7 +15,7 @@ Docs: [Automated bootstrap](../../docs/automated-bootstrap.md) (the whole path, 
 | Media | `New-ZtpVirtualUsbImage.ps1` | One raw `.img` per node: GPT, one FAT32 partition labelled `CDROM`, maintenance ISO contents, optional `edgeuser` hash. |
 | Boot | `Publish-MaintenanceIso.ps1` | Read-write SMB share for the images, one generated account, TCP 445 only from the BMCs; `-Remove` undoes it. |
 | Boot | `Mount-ZtpVirtualUsb.ps1` | `-Action Mount`, `Eject`, `Status` on the BMC USB-stick slot; read-back proof, one-time USB boot, `-Restart` needs `-ConfirmNotClustered`. |
-| Boot | `Start-MaintenanceBoot.ps1` | Publish and mount for all nodes in one process. |
+| Boot | `Start-MaintenanceBoot.ps1` | BIOS settings first (`Set-ZtpBios.ps1`, only what differs), then publish and mount for all nodes in one process. |
 | Bootstrap | `Wait-ZtpBootstrapComplete.ps1` | One read-only watch: Mounted, Booting, MaintenanceEnvironmentRunning, VoucherWritten, ReadyForPortal, with JSON-lines events (Redfish, voucher read-back, Azure prerequisites). |
 | Vouchers | `Wait-ZtpVoucher.ps1` | Wait for the voucher in each image, eject, extract `<serial>.pem`; `-VoucherFolder` takes Configurator App vouchers. |
 | Vouchers | `Read-ZtpVoucherFromImage.ps1` | Read and validate vouchers from images (read-only). |

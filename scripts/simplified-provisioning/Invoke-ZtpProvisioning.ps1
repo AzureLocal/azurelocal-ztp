@@ -11,7 +11,9 @@ file; nothing is hardcoded.
             only when -BootstrapCacheDirectory is set; otherwise -SourcePath must name the ISO and the stage is recorded as skipped.
   Media     New-ZtpVirtualUsbImage.ps1 -NodeName: one virtual-USB image per node (<ImageNamePrefix><node>.img in
             -ImageDirectory) from the maintenance ISO (-SourcePath), GPT with one FAT32 partition labelled CDROM.
-  Boot      Start-MaintenanceBoot.ps1: shares the images read-write in place (one account, TCP 445 only from the BMCs),
+  Boot      Start-MaintenanceBoot.ps1: sets each node's BIOS attributes from the node list's bios first (Set-ZtpBios.ps1:
+            only what differs, applied at a reset, logged to bios-changes.jsonl beside -EventLogPath),
+            shares the images read-write in place (one account, TCP 445 only from the BMCs),
             inserts each node's image on the BMC USB-stick slot read-write, proves the attach, sets a one-time boot to
             that slot and power-cycles every node at once (iDRAC 7.30: the RFS write attribute and the vFDD / Once-Floppy
             boot, see Mount-ZtpVirtualUsb.ps1). Needs -ConfirmNotClustered: the maintenance environment
@@ -320,6 +322,8 @@ function Get-ZtpStageCall {
             if ($BmcCredential) { $p.Credential = $BmcCredential }
             if ($RfsWriteAttribute) { $p.RfsWriteAttribute = $true }
             if ($SkipCertificateCheck) { $p.SkipCertificateCheck = $true }
+            # BIOS changes are evidence: they go beside the event log.
+            if ($EventLogPath) { $p.BiosLogPath = Join-Path (Split-Path -Parent ([IO.Path]::GetFullPath($EventLogPath))) 'bios-changes.jsonl' }
             & $act $p
             $calls.Add([pscustomobject]@{ Script = 'Start-MaintenanceBoot.ps1'; Parameters = $p })
         }
@@ -501,7 +505,11 @@ foreach ($name in $run) {
                 if ([bool]$row[0].WriteProtected -and -not $RfsWriteAttribute) { throw "Boot: the image of $node is attached write-protected; the voucher cannot be written back. Retry with -RfsWriteAttribute." }
                 if (-not [bool]$row[0].Restarted) { throw "Boot: $node was not restarted into the maintenance environment." }
             }
-            $evidence = "read-write image and one-time boot on $($NodeName -join ', ')"
+            $bios = @(foreach ($r in $rows) { if ($r.PSObject.Properties['Bios'] -and @($r.Bios).Count) { "$($r.Node) $(@($r.Bios) -join ', ')" } })
+            foreach ($r in @($rows | Where-Object { $_.PSObject.Properties['Bios'] -and @($_.Bios).Count })) {
+                Write-ZtpEvent -Path $EventLogPath -Node $r.Node -State 'BiosChanged' -Evidence (@($r.Bios) -join '; ') -NextAction '' -Stage 'Boot'
+            }
+            $evidence = "read-write image and one-time boot on $($NodeName -join ', ')$(if ($bios) { "; BIOS $($bios -join '; ')" })"
         }
         'Vouchers' {
             $rows = @(Invoke-ZtpStageScript -Call $calls[0] | Where-Object { $_ -is [pscustomobject] -and $_.PSObject.Properties['Valid'] })

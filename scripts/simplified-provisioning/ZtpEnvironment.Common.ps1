@@ -116,6 +116,18 @@ function Test-ZtpEnvironment {
         }
     }
 
+    # BIOS attributes: a mapping of attribute names to string values (quote numbers and words YAML reads as booleans).
+    $checkBios = {
+        param([object]$Bios, [string]$Label)
+        if ($null -eq $Bios) { return }
+        if ($Bios -isnot [System.Collections.IDictionary]) { $problems.Add("$Label must be a mapping of BIOS attribute names to values."); return }
+        foreach ($k in $Bios.Keys) {
+            if ([string]$k -notmatch '^[A-Za-z0-9_.\[\]-]{1,128}$') { $problems.Add("$Label has '$k', which isn't a BIOS attribute name.") }
+            if ($Bios[$k] -isnot [string]) { $problems.Add("$Label.$k must be a string; quote it ('$($Bios[$k])').") }
+        }
+    }
+    & $checkBios (Get-ZtpEnvValue -Environment $Environment -Path 'hardware.bios') 'hardware.bios'
+
     $nodes = Get-ZtpEnvValue -Environment $Environment -Path 'cluster_nodes'
     if ($nodes -isnot [System.Collections.IList] -or @($nodes).Count -eq 0) { $problems.Add('cluster_nodes is required: a list with one entry per node.') }
     else {
@@ -138,6 +150,7 @@ function Test-ZtpEnvironment {
                 & $check $n 'service_tag' "$label.service_tag" 'text'
                 & $check $n 'idrac_ip' "$label.idrac_ip" 'ip'
             }
+            & $checkBios (Get-ZtpEnvValue -Environment $n -Path 'bios') "$label.bios"
             $index++
         }
     }
@@ -225,6 +238,22 @@ function Get-ZtpManagementAssignment {
     $mode = [string](Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.ip_assignment')
     if ($mode) { return $mode.ToLowerInvariant() }
     return 'static'
+}
+
+function Get-ZtpEnvironmentBios {
+    <#
+    .SYNOPSIS
+    A node's BIOS attributes from the environment file: hardware.bios with cluster_nodes[].bios merged over it (the node
+    wins). An ordered dictionary of strings; empty when neither is set.
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Collections.Specialized.OrderedDictionary])]
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment, [Parameter(Mandatory)][System.Collections.IDictionary]$Node)
+    $merged = [ordered]@{}
+    foreach ($source in (Get-ZtpEnvValue -Environment $Environment -Path 'hardware.bios'), (Get-ZtpEnvValue -Environment $Node -Path 'bios')) {
+        if ($source -is [System.Collections.IDictionary]) { foreach ($k in $source.Keys) { $merged[[string]$k] = [string]$source[$k] } }
+    }
+    return $merged
 }
 
 function Find-ZtpGitWorkTree {

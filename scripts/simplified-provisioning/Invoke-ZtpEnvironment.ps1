@@ -117,8 +117,19 @@ if ($allowUnvalidatedSbe) {
 # Each set of nodes keeps its own state, so proving one node never disturbs another's run.
 $runName = $Node -join '+'
 
-@{ nodes = @($nodeList | ForEach-Object { [ordered]@{ name = [string]$_.name; service_tag = [string]$_.service_tag; bmc_address = [string]$_.idrac_ip; management_ip = [string]$_.ip_address } }) } |
+# The node list the stages read. bios (hardware.bios merged with the node's own) is applied by the Boot stage.
+@{ nodes = @($nodeList | ForEach-Object {
+            $entry = [ordered]@{ name = [string]$_.name; service_tag = [string]$_.service_tag; bmc_address = [string]$_.idrac_ip; management_ip = [string]$_.ip_address }
+            $bios = Get-ZtpEnvironmentBios -Environment $env_ -Node $_
+            if ($bios.Count) { $entry.bios = $bios }
+            $entry
+        }) } |
     ConvertTo-Json -Depth 5 | Set-Content $nodesFile
+$biosPlan = @(foreach ($n in $nodeList) {
+        $b = Get-ZtpEnvironmentBios -Environment $env_ -Node $n
+        if ($b.Count) { "$($n.name) $(@($b.Keys | ForEach-Object { "$_=$($b[$_])" }) -join ', ')" }
+    })
+if ($biosPlan) { Write-Output "BIOS set by the Boot stage before the maintenance boot: $($biosPlan -join '; ')." }
 
 if ($UseManagedIdentity) {
     Connect-AzAccount -Identity -WarningAction SilentlyContinue | Out-Null

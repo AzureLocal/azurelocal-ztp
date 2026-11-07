@@ -48,6 +48,34 @@ A complete example with placeholder values is in [`examples/infrastructure.examp
 | --- | --- | --- | --- |
 | `hardware.vendor` | P+P | Text, for example `Dell` | Picks `config/oem/<vendor>.json`: the SBE manifest URL, the driver folders inside the SBE, and the BMC log patterns. |
 | `hardware.model` | Prov | Text, for example `AX-760` | SBE selection. Hyphens are removed, so `AX-760` becomes `AX760`. |
+| `hardware.bios` | Prov, optional | Mapping: BIOS attribute name -> value, values quoted as strings | BIOS attributes the Boot stage sets on every node before the maintenance boot. See [BIOS settings](#bios-settings). |
+| `cluster_nodes[].bios` | Prov, optional | Same | One node's own BIOS attributes, merged over `hardware.bios` (the node's value wins). |
+
+#### BIOS settings
+
+Some machines need a BIOS change before the maintenance environment works, and the file holds it, so nothing is set by hand. Two Dell examples:
+
+```yaml
+hardware:
+  bios:
+    Slot2: "Disabled"       # a Fibre Channel HBA in slot 2: the maintenance environment offered its SAN LUN as the install disk
+    EmbNic1Nic2: "Enabled"  # the embedded LOMs shipped as DisabledOs, so the OS couldn't see the management ports
+cluster_nodes:
+  - name: node-02
+    bios:
+      Slot2: "Enabled"      # this node has no HBA there
+```
+
+Names are the attributes of the BMC's Redfish Bios resource (`GET /redfish/v1/Systems/System.Embedded.1/Bios` on an iDRAC), and they're case-sensitive. Quote every value: ZTP converts it to the type the BIOS reports for that attribute (a number or a boolean). The check refuses a value that isn't a string and a name with spaces.
+
+In the Boot stage, before it mounts the image, ZTP does this for each node that has settings (`Set-ZtpBios.ps1`):
+
+1. Reads the current values. An attribute the BIOS doesn't have stops the run before anything changes. If every value already matches, it moves on without a restart.
+2. Sends only the values that differ: `PATCH /redfish/v1/Systems/System.Embedded.1/Bios/Settings` with `"@Redfish.SettingsApplyTime": { "ApplyTime": "OnReset" }`. A value already pending from an earlier run isn't sent again.
+3. Powers the node on (`On`) if it's off, otherwise restarts it (`ForceRestart`), so the BIOS job runs.
+4. Waits, up to 30 minutes, until the Bios resource reports every new value. Then it mounts the image and sets the one-time boot, so the BIOS reset can't use up the boot to the virtual USB.
+
+Every change goes to `<evidence_path>\bios-changes.jsonl` (time, node, BMC, attribute, before, after, `requested` then `applied`), to the Boot stage's evidence, and to the event log as a `BiosChanged` event. The plan (without `-Execute`) lists the settings it would apply; run `Set-ZtpBios.ps1` with `-Credential` and without `-Execute` to see the current values and what would change.
 
 ### Azure
 

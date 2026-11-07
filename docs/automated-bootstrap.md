@@ -35,7 +35,7 @@ Set `RfsWriteAttribute` to `true` for iDRAC 7.30 (see [iDRAC quirks](troubleshoo
 | --- | --- | --- |
 | Resolve | `Get-ZtpBootstrapIso.ps1`, `Get-ZtpSbe.ps1` | A verified ISO exists. Skipped when `BootstrapCacheDirectory` is empty; `SourcePath` is then the ISO. |
 | Media | `New-ZtpVirtualUsbImage.ps1` | One image per node |
-| Boot | `Start-MaintenanceBoot.ps1` (`Publish-MaintenanceIso.ps1`, `Mount-ZtpVirtualUsb.ps1`) | Every node attached and restarted |
+| Boot | `Start-MaintenanceBoot.ps1` (`Set-ZtpBios.ps1`, `Publish-MaintenanceIso.ps1`, `Mount-ZtpVirtualUsb.ps1`) | Every node's BIOS reports the file's settings; every node attached and restarted |
 | Bootstrap | `Wait-ZtpBootstrapComplete.ps1` | Every node `ReadyForPortal` |
 | Vouchers | `Wait-ZtpVoucher.ps1`, then `Publish-MaintenanceIso.ps1 -Remove` | A valid voucher per node |
 | Azure | `Invoke-ZtpAzureProvisioning.ps1` stages Prereqs, Validate, Plan, Execute | No voucher problem; deployment accepted |

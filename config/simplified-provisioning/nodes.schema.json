@@ -17,7 +17,8 @@
           "name": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$", "description": "Node host name = edge machine name." },
           "service_tag": { "type": "string", "minLength": 1, "description": "Serial number / Dell service tag the voucher is issued for." },
           "bmc_address": { "type": "string", "minLength": 1, "description": "BMC (iDRAC) address." },
-          "management_ip": { "type": "string", "description": "Optional management address (used by Start-ZtpMonitor.ps1 as the Sonar node address)." }
+          "management_ip": { "type": "string", "description": "Optional management address (used by Start-ZtpMonitor.ps1 as the Sonar node address)." },
+          "bios": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Optional BIOS attributes (Redfish Bios attribute name -> value) the Boot stage sets before the maintenance boot, for example { \"Slot2\": \"Disabled\" }. Invoke-ZtpEnvironment.ps1 writes hardware.bios merged with the node's own." }
         }
       }
     }

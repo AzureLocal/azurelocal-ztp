@@ -19,7 +19,7 @@ BeforeAll {
     'TimeoutMinutes', 'Action', 'Remove', 'SharePath', 'Stage', 'SubscriptionId', 'ResourceGroupName', 'ParameterFile', 'VoucherPath', 'OsVersion',
     'SiteMode', 'Node', 'DeploymentName', 'AdminPassword', 'PollIntervalSeconds', 'RetryProvisionOs', 'ArcMachineNameMapPath', 'ExpectedMachineName',
     'Version', 'CacheDirectory', 'IncludePreview', 'MaxTrain', 'Oem', 'SolutionVersion', 'Model', 'Family', 'PackagePath', 'EventLogPath', 'VoucherTimeoutMinutes',
-    'SkipAzureCheck', 'Location', 'HandoffPath', 'SbeManifestPath', 'BootstrapManifestPath', 'OutputPath', 'Format'
+    'SkipAzureCheck', 'Location', 'HandoffPath', 'SbeManifestPath', 'BootstrapManifestPath', 'OutputPath', 'Format', 'BiosLogPath'
     $paramBlock = ($names | ForEach-Object { "[object]`$$_" }) -join ', '
     foreach ($script in 'New-ZtpVirtualUsbImage.ps1', 'Start-MaintenanceBoot.ps1', 'Wait-ZtpVoucher.ps1', 'Mount-ZtpVirtualUsb.ps1', 'Publish-MaintenanceIso.ps1',
         'Invoke-ZtpAzureProvisioning.ps1', 'Test-ProvisionedMachines.ps1', 'Get-ZtpBootstrapIso.ps1', 'Get-ZtpSbe.ps1', 'Wait-ZtpBootstrapComplete.ps1',
@@ -132,6 +132,20 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
         $failed = $events | Where-Object state -EQ 'StageFailed'
         $failed.stage | Should -Be 'Bootstrap'; $failed.level | Should -Be 'Error'; $failed.evidence | Should -Match 'VoucherMissing'
         & $script:called | Should -Not -Contain 'Wait-ZtpVoucher.ps1'
+    }
+
+    It 'Boot logs BIOS changes beside the event log, records them in the stage evidence and writes a BiosChanged event per node' {
+        $global:ztpRunBehavior['Start-MaintenanceBoot.ps1'] = { param($p) if ($p['Execute']) { foreach ($n in $p['NodeName']) { [pscustomobject]@{ Node = $n; Image = "ztp-usb-$n.img"; WriteProtected = $false; Restarted = $true; Bios = $(if ($n -eq 'node-01') { @('Slot2: Enabled -> Disabled') } else { @() }) } } } }
+        $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; Stage = 'Boot' }
+        $boot = $global:ztpRunCalls | Where-Object Script -EQ 'Start-MaintenanceBoot.ps1'
+        $boot.Params.BiosLogPath | Should -Be (Join-Path $TestDrive 'bios-changes.jsonl')
+        $state = Get-Content $script:statePath -Raw | ConvertFrom-Json -AsHashtable
+        $state.stages.Boot.evidence | Should -Match 'BIOS node-01 Slot2: Enabled -> Disabled'
+        $events = @(Get-Content (Join-Path $TestDrive 'events.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
+        $changed = @($events | Where-Object state -EQ 'BiosChanged')
+        $changed.Count | Should -Be 1
+        $changed[0].node | Should -Be 'node-01'
+        $changed[0].evidence | Should -Be 'Slot2: Enabled -> Disabled'
     }
 
     It 'Resolve downloads the ISO and the SBE descriptor, Media builds from that ISO, and Handoff gets both manifests' {

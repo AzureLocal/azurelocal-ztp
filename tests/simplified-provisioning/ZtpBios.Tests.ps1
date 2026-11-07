@@ -1,0 +1,207 @@
+#Requires -Version 7.0
+#Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.5.0'; MaximumVersion = '5.99.99' }
+# BIOS settings before the maintenance boot: ZtpBios.Common.ps1 (node list lookup, comparison, typing), Set-ZtpBios.ps1
+# against a stubbed Redfish BMC (plan, idempotent apply, pending values, unknown attributes, timeout, change log), and the
+# Boot stage wiring in Start-MaintenanceBoot.ps1. No BMC is contacted: the Redfish functions are global stubs, which the
+# scripts use instead of dot-sourcing ZtpRedfish.Common.ps1.
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseDeclaredVarsMoreThanAssignments', '', Justification = 'BeforeAll variables are consumed inside It blocks.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidGlobalVars', '', Justification = 'The stub BMC keeps its state in globals.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '', Justification = 'Only a synthetic test secret is converted.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Stub signatures mirror the real functions.')]
+param()
+
+BeforeAll {
+    $script:root = Join-Path (Split-Path $PSScriptRoot -Parent | Split-Path -Parent) 'scripts/simplified-provisioning'
+    . (Join-Path $script:root 'ZtpBios.Common.ps1')
+    $script:setBios = Join-Path $script:root 'Set-ZtpBios.ps1'
+    $script:bmc = [pscredential]::new('bmc-example', (ConvertTo-SecureString 'Example-Not-A-Secret-1' -AsPlainText -Force))
+
+    # The stub BMC: current BIOS values, values pending for the next reset, power state, and every request.
+    function global:Reset-TestBmc {
+        param([hashtable]$Current, [string]$Power = 'On', [hashtable]$Pending = @{}, [bool]$ApplyOnReset = $true)
+        $global:biosT_current = [ordered]@{}; foreach ($k in $Current.Keys) { $global:biosT_current[$k] = $Current[$k] }
+        $global:biosT_pending = [ordered]@{}; foreach ($k in $Pending.Keys) { $global:biosT_pending[$k] = $Pending[$k] }
+        $global:biosT_power = $Power
+        $global:biosT_apply = $ApplyOnReset
+        $global:biosT_calls = [System.Collections.Generic.List[object]]::new()
+    }
+    function global:New-ZtpRedfishSession { param([string]$BmcAddress, [pscredential]$Credential, [switch]$SkipCertificateCheck) $global:biosT_calls.Add([pscustomobject]@{ Method = 'Session'; Path = $BmcAddress; Body = $null }); 'test-session' }
+    function global:Remove-ZtpRedfishSession { param($Session) }
+    function global:Get-ZtpRedfishSystem { param($Session, [string]$SystemId) [pscustomobject]@{ '@odata.id' = '/redfish/v1/Systems/System.Embedded.1'; Bios = [pscustomobject]@{ '@odata.id' = '/redfish/v1/Systems/System.Embedded.1/Bios' } } }
+    function global:Invoke-ZtpRedfish {
+        param($Session, [string]$Path, [string]$Method = 'Get', [hashtable]$Body, [int]$MaxAttempts)
+        $global:biosT_calls.Add([pscustomobject]@{ Method = $Method; Path = $Path; Body = $Body })
+        switch -Wildcard ("$Method $Path") {
+            'Get */Bios' { return [pscustomobject]@{ Attributes = [pscustomobject]$global:biosT_current; '@Redfish.Settings' = [pscustomobject]@{ SettingsObject = [pscustomobject]@{ '@odata.id' = '/redfish/v1/Systems/System.Embedded.1/Bios/Settings' } } } }
+            'Get */Bios/Settings' { return [pscustomobject]@{ Attributes = [pscustomobject]$global:biosT_pending } }
+            'Patch */Bios/Settings' { foreach ($k in $Body.Attributes.Keys) { $global:biosT_pending[$k] = $Body.Attributes[$k] }; return $null }
+            'Get */System.Embedded.1' { return [pscustomobject]@{ PowerState = $global:biosT_power } }
+            'Post */ComputerSystem.Reset' {
+                $global:biosT_power = 'On'
+                if ($global:biosT_apply) { foreach ($k in @($global:biosT_pending.Keys)) { $global:biosT_current[$k] = $global:biosT_pending[$k] }; $global:biosT_pending.Clear() }
+                return $null
+            }
+        }
+    }
+    $script:run = {
+        param([hashtable]$Arguments)
+        $base = @{ NodeName = 'node-01'; BmcAddress = '198.51.100.11'; Attributes = [ordered]@{ Slot2 = 'Disabled'; EmbNic1Nic2 = 'Enabled' }; PollSeconds = 1; InformationAction = 'SilentlyContinue' }
+        foreach ($k in $Arguments.Keys) { $base[$k] = $Arguments[$k] }
+        & $script:setBios @base
+    }
+    $script:writes = { @($global:biosT_calls | Where-Object { $_.Method -in 'Patch', 'Post' }) }
+}
+
+AfterAll {
+    foreach ($name in 'Reset-TestBmc', 'New-ZtpRedfishSession', 'Remove-ZtpRedfishSession', 'Get-ZtpRedfishSystem', 'Invoke-ZtpRedfish') { Remove-Item "Function:global:$name" -ErrorAction SilentlyContinue }
+    Get-Variable -Scope Global -Name 'biosT_*' -ErrorAction SilentlyContinue | Remove-Variable -Scope Global -Force -ErrorAction SilentlyContinue
+}
+
+Describe 'Comparing BIOS values' {
+    It 'lists only the attributes that differ, in the type the BIOS reports' {
+        $current = [pscustomobject]@{ Slot2 = 'Enabled'; EmbNic1Nic2 = 'Enabled'; ProcCores = 32; SriovGlobalEnable = $false }
+        $changes = @(Get-ZtpBiosChange -Current $current -Desired ([ordered]@{ Slot2 = 'Disabled'; EmbNic1Nic2 = 'Enabled'; ProcCores = '16'; SriovGlobalEnable = 'true' }))
+        $changes.Attribute | Should -Be @('Slot2', 'ProcCores', 'SriovGlobalEnable')
+        $changes[0].Current | Should -Be 'Enabled'; $changes[0].Value | Should -Be 'Disabled'
+        $changes[1].Value | Should -BeOfType [long]; $changes[1].Value | Should -Be 16
+        $changes[2].Value | Should -BeOfType [bool]; $changes[2].Value | Should -BeTrue
+    }
+    It 'compares case-sensitively and treats a boolean written in lowercase as equal' {
+        @(Get-ZtpBiosChange -Current ([pscustomobject]@{ Slot2 = 'disabled' }) -Desired @{ Slot2 = 'Disabled' }).Count | Should -Be 1
+        @(Get-ZtpBiosChange -Current ([pscustomobject]@{ Flag = $true }) -Desired @{ Flag = 'true' }).Count | Should -Be 0
+    }
+    It 'refuses an attribute the BIOS does not have, naming it, and a value of the wrong type' {
+        { Get-ZtpBiosChange -Current ([pscustomobject]@{ Slot2 = 'Enabled' }) -Desired @{ slot2 = 'Disabled' } } | Should -Throw '*no attribute slot2*case-sensitive*'
+        { Get-ZtpBiosChange -Current ([pscustomobject]@{ ProcCores = 32 }) -Desired @{ ProcCores = 'all' } } | Should -Throw "*ProcCores is a number; 'all' isn't one*"
+    }
+    It 'reads a node''s bios from a JSON node list (objects) or a YAML one (mappings), and nothing for a node without it' {
+        $json = '{ "nodes": [ { "name": "node-01", "bios": { "Slot2": "Disabled" } }, { "name": "node-02" } ] }' | ConvertFrom-Json
+        (Get-ZtpNodeBiosSetting -NodeName node-01 -Nodes $json.nodes)['Slot2'] | Should -Be 'Disabled'
+        (Get-ZtpNodeBiosSetting -NodeName node-02 -Nodes $json.nodes).Count | Should -Be 0
+        (Get-ZtpNodeBiosSetting -NodeName node-01 -Nodes @([ordered]@{ name = 'node-01'; bios = [ordered]@{ EmbNic1Nic2 = 'Enabled' } }))['EmbNic1Nic2'] | Should -Be 'Enabled'
+    }
+}
+
+Describe 'Set-ZtpBios.ps1' {
+    BeforeEach { Reset-TestBmc -Current @{ Slot2 = 'Enabled'; EmbNic1Nic2 = 'DisabledOs'; SysProfile = 'PerfOptimized' } }
+
+    It 'plans without a BMC call when no credential is given' {
+        $out = @(& $script:run @{})
+        $out[0] | Should -BeLike 'PLAN: node-01 BIOS Slot2=Disabled, EmbNic1Nic2=Enabled (reads the current values first*'
+        $global:biosT_calls.Count | Should -Be 0
+    }
+    It 'plans from the current values with a credential, and changes nothing' {
+        $out = @(& $script:run @{ Credential = $script:bmc })
+        $out | Should -Contain 'PLAN: node-01 BIOS Slot2 Enabled -> Disabled'
+        $out | Should -Contain 'PLAN: node-01 BIOS EmbNic1Nic2 DisabledOs -> Enabled'
+        @(& $script:writes).Count | Should -Be 0
+    }
+    It 'refuses -Execute without -ConfirmNotClustered or a credential' {
+        { & $script:run @{ Credential = $script:bmc; Execute = $true; Confirm = $false } } | Should -Throw '*ConfirmNotClustered*'
+        { & $script:run @{ ConfirmNotClustered = $true; Execute = $true; Confirm = $false } } | Should -Throw '*-Credential*'
+    }
+    It 'PATCHes only what differs to Bios/Settings OnReset, restarts, waits for the BIOS to report it and logs every change' {
+        $global:biosT_current['EmbNic1Nic2'] = 'Enabled'
+        $log = Join-Path $TestDrive 'evidence/bios-changes.jsonl'
+        $row = & $script:run @{ Credential = $script:bmc; ConfirmNotClustered = $true; Execute = $true; Confirm = $false; ChangeLogPath = $log }
+        $row.Status | Should -Be 'Changed'
+        $row.Changes | Should -Be @('Slot2: Enabled -> Disabled')
+        $patch = @($global:biosT_calls | Where-Object Method -EQ 'Patch')
+        $patch.Count | Should -Be 1
+        $patch[0].Path | Should -Be '/redfish/v1/Systems/System.Embedded.1/Bios/Settings'
+        @($patch[0].Body.Attributes.Keys) | Should -Be @('Slot2')
+        $patch[0].Body['@Redfish.SettingsApplyTime'].ApplyTime | Should -Be 'OnReset'
+        $reset = @($global:biosT_calls | Where-Object Method -EQ 'Post')
+        $reset[0].Body.ResetType | Should -Be 'ForceRestart'
+        $global:biosT_current['Slot2'] | Should -Be 'Disabled'
+        $lines = @(Get-Content -LiteralPath $log | ForEach-Object { $_ | ConvertFrom-Json })
+        $lines.phase | Should -Be @('requested', 'applied')
+        $lines[0].attribute | Should -Be 'Slot2'; $lines[0].before | Should -Be 'Enabled'; $lines[0].after | Should -Be 'Disabled'; $lines[0].node | Should -Be 'node-01'
+    }
+    It 'powers a node that is off on to apply the settings' {
+        Reset-TestBmc -Current @{ Slot2 = 'Enabled'; EmbNic1Nic2 = 'Enabled' } -Power 'Off'
+        $null = & $script:run @{ Credential = $script:bmc; ConfirmNotClustered = $true; Execute = $true; Confirm = $false }
+        @($global:biosT_calls | Where-Object Method -EQ 'Post')[0].Body.ResetType | Should -Be 'On'
+    }
+    It 'changes and restarts nothing when the BIOS already holds every value' {
+        Reset-TestBmc -Current @{ Slot2 = 'Disabled'; EmbNic1Nic2 = 'Enabled' }
+        $row = & $script:run @{ Credential = $script:bmc; ConfirmNotClustered = $true; Execute = $true; Confirm = $false }
+        $row.Status | Should -Be 'AlreadySet'
+        @(& $script:writes).Count | Should -Be 0
+    }
+    It 'does not send a value again that is already pending, but still applies it' {
+        Reset-TestBmc -Current @{ Slot2 = 'Enabled'; EmbNic1Nic2 = 'Enabled' } -Pending @{ Slot2 = 'Disabled' }
+        $row = & $script:run @{ Credential = $script:bmc; ConfirmNotClustered = $true; Execute = $true; Confirm = $false }
+        @($global:biosT_calls | Where-Object Method -EQ 'Patch').Count | Should -Be 0
+        @($global:biosT_calls | Where-Object Method -EQ 'Post').Count | Should -Be 1
+        $row.Status | Should -Be 'Changed'
+    }
+    It 'stops before any change when an attribute is unknown' {
+        { & $script:run @{ Credential = $script:bmc; ConfirmNotClustered = $true; Execute = $true; Confirm = $false; Attributes = @{ Slot2 = 'Disabled'; NoSuchAttribute = 'x' } } } | Should -Throw '*no attribute NoSuchAttribute*'
+        @(& $script:writes).Count | Should -Be 0
+    }
+    It 'fails, naming what is still different, when the BIOS does not report the values in time' {
+        Reset-TestBmc -Current @{ Slot2 = 'Enabled'; EmbNic1Nic2 = 'Enabled' } -ApplyOnReset $false
+        { & $script:run @{ Credential = $script:bmc; ConfirmNotClustered = $true; Execute = $true; Confirm = $false; TimeoutMinutes = 0 } } | Should -Throw '*BIOS still reports Slot2=Enabled 0 minutes after the ForceRestart*'
+    }
+}
+
+Describe 'BIOS in the Boot stage (Start-MaintenanceBoot.ps1)' {
+    BeforeAll {
+        $script:bin = Join-Path $TestDrive 'boot-bin'
+        $null = New-Item -ItemType Directory -Path $script:bin
+        Copy-Item -Path (Join-Path $script:root 'Start-MaintenanceBoot.ps1'), (Join-Path $script:root '*.Common.ps1') -Destination $script:bin
+        Set-Content -LiteralPath (Join-Path $script:bin 'Publish-MaintenanceIso.ps1') -Value @'
+[CmdletBinding(SupportsShouldProcess)]
+param([string[]]$IsoPath, $SharePath, $ShareName, $ShareHost, $AllowedBmcAddress, $ReadWrite, [switch]$Execute)
+if (-not $Execute) { return 'PLAN: share' }
+[pscustomobject]@{ Credential = $null; Images = @($IsoPath | ForEach-Object { [pscustomobject]@{ ImagePath = "//$ShareHost/$ShareName/$(Split-Path $_ -Leaf)"; Sha256 = 'AB' } }) }
+'@
+        # The mount records when it ran, so the test can prove the BIOS step came first.
+        Set-Content -LiteralPath (Join-Path $script:bin 'Mount-ZtpVirtualUsb.ps1') -Value @'
+[CmdletBinding(SupportsShouldProcess)]
+param($ShareHost, $ShareName, $ImageNamePrefix, $ReadOnly, $RfsWriteAttribute, $Restart, $ConfirmNotClustered, $SkipCertificateCheck, $NodesFile, $Nodes, [string[]]$NodeName, $Credential, $ShareCredential, [switch]$Execute)
+if (-not $Execute) { return "PLAN: mount $($NodeName -join ',')" }
+Add-Content -LiteralPath (Join-Path $env:ZTP_TEST_BIOS_DIR 'order.txt') -Value "mount $($NodeName[0])"
+[pscustomobject]@{ Node = $NodeName[0]; Image = "//$ShareHost/$ShareName/ztp-usb-$($NodeName[0]).img"; WriteProtected = $false }
+'@
+        Set-Content -LiteralPath (Join-Path $script:bin 'Set-ZtpBios.ps1') -Value @'
+[CmdletBinding(SupportsShouldProcess)]
+param([string]$NodeName, [string]$BmcAddress, [System.Collections.IDictionary]$Attributes, $Credential, $ChangeLogPath, $TimeoutMinutes, $PollSeconds, [switch]$ConfirmNotClustered, [switch]$SkipCertificateCheck, [switch]$Execute)
+if (-not $Execute) { return "PLAN: $NodeName BIOS $(@($Attributes.Keys | ForEach-Object { "$_=$($Attributes[$_])" }) -join ', ') on $BmcAddress" }
+Add-Content -LiteralPath (Join-Path $env:ZTP_TEST_BIOS_DIR 'order.txt') -Value "bios $NodeName $ChangeLogPath"
+[pscustomobject]@{ Node = $NodeName; Bmc = $BmcAddress; Status = 'Changed'; Changes = @($Attributes.Keys | ForEach-Object { "${_}: Enabled -> $($Attributes[$_])" }) }
+'@
+        $script:images = Join-Path $TestDrive 'boot-images'
+        $null = New-Item -ItemType Directory -Path $script:images
+        foreach ($n in 'node-01', 'node-02') { Set-Content -LiteralPath (Join-Path $script:images "ztp-usb-$n.img") -Value 'x' }
+        $script:nodesFile = Join-Path $TestDrive 'boot-nodes.json'
+        @{ nodes = @(
+                [ordered]@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11'; bios = [ordered]@{ Slot2 = 'Disabled' } }
+                [ordered]@{ name = 'node-02'; service_tag = 'EXAMPLE2'; bmc_address = '198.51.100.12' }
+            ) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:nodesFile
+        $script:boot = Join-Path $script:bin 'Start-MaintenanceBoot.ps1'
+    }
+
+    It 'shows the BIOS plan for the nodes that have bios, and none for the others' {
+        $out = @(& $script:boot -ImageDirectory $script:images -ShareHost 192.0.2.10 -NodeName node-01, node-02 -NodesFile $script:nodesFile)
+        $out | Should -Contain 'PLAN: node-01 BIOS Slot2=Disabled on 198.51.100.11'
+        @($out | Where-Object { $_ -like 'PLAN: node-02 BIOS*' }).Count | Should -Be 0
+    }
+    It 'sets the BIOS before the mount, with the change log, and reports the changes on the node''s row' {
+        $dir = Join-Path $TestDrive 'boot-order'; $null = New-Item -ItemType Directory -Force -Path $dir
+        $env:ZTP_TEST_BIOS_DIR = $dir
+        try { $rows = @(& $script:boot -ImageDirectory $script:images -ShareHost 192.0.2.10 -NodeName node-01, node-02 -NodesFile $script:nodesFile -Credential $script:bmc -Restart -ConfirmNotClustered -BiosLogPath (Join-Path $TestDrive 'ev/bios-changes.jsonl') -Execute -Confirm:$false) }
+        finally { $env:ZTP_TEST_BIOS_DIR = $null }
+        $order = @(Get-Content -LiteralPath (Join-Path $dir 'order.txt'))
+        $node1 = @($order | Where-Object { $_ -like '* node-01*' })
+        $node1[0] | Should -BeLike 'bios node-01 *ev*bios-changes.jsonl'
+        $node1[1] | Should -Be 'mount node-01'
+        @($order | Where-Object { $_ -like 'bios node-02*' }).Count | Should -Be 0
+        ($rows | Where-Object Node -EQ 'node-01').Bios | Should -Be @('Slot2: Enabled -> Disabled')
+        @(($rows | Where-Object Node -EQ 'node-02').Bios).Count | Should -Be 0
+    }
+    It 'refuses to apply BIOS settings without -Restart' {
+        { & $script:boot -ImageDirectory $script:images -ShareHost 192.0.2.10 -NodeName node-01 -NodesFile $script:nodesFile -Credential $script:bmc -Execute -Confirm:$false } | Should -Throw '*BIOS settings are applied with a restart*'
+    }
+}
