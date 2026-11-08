@@ -21,7 +21,7 @@ The stages are Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, 
 
 You supply one thing: an environment file, started from one of the toolkit's templates (see [Pick the template](operator-guide.md#pick-the-template)). Then you run `Invoke-ZtpEnvironment.ps1`, first as a plan, then with `-Execute`.
 
-**The result:** each machine is **Provisioned** in Azure and **Arc-connected**, with its management IP on the management NIC (found by MAC) as the infrastructure file says. The Arc machine IDs are in the handoff. The nodes are ready for OS configuration, not yet for Validate: OEM drivers, the SBE, DHCP off on the other NICs, DNS and time on the host, and the deployment admin come next, in [azurelocal-toolkit Phase 03: OS Configuration](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/). See [What's next: OS configuration](operator-guide.md#whats-next-os-configuration).
+**The result:** each machine is **Provisioned** in Azure and **Arc-connected**, with its management IP on the management NIC (found by MAC) as the infrastructure file says. The Arc machine IDs are in the handoff. The nodes are ready for OS configuration, not yet for Validate: OEM drivers, an SBE (optional, only when a person asks for it), DHCP off on the other NICs, DNS and time on the host, and the deployment admin come next, in [azurelocal-toolkit Phase 03: OS Configuration](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/). See [What's next: OS configuration](operator-guide.md#whats-next-os-configuration).
 
 ![Azure Local ZTP: from infrastructure.yml to provisioned machines and the handoff](./diagrams/ztp-flow-to-handoff.png)
 

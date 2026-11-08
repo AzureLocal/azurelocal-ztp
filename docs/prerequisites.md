@@ -2,13 +2,13 @@
 
 > Everything that must be in place before a ZTP run, and every value the environment file needs. Each item says whether ZTP checks it, and where, or whether you do it.
 
-ZTP ends at the Handoff: each machine is Provisioned in Azure and Arc-connected, with its management address on the management port. OEM drivers, the SBE, DHCP off on the other ports, DNS and time on the host, and the deployment admin are OS configuration, which comes next ([Phase 03 OS Configuration](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/)). This page lists only what ZTP needs.
+ZTP ends at the Handoff: each machine is Provisioned in Azure and Arc-connected, with its management address on the management port. OEM drivers, an SBE (optional, only when a person asks for it), DHCP off on the other ports, DNS and time on the host, and the deployment admin are OS configuration, which comes next ([Phase 03 OS Configuration](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/)). This page lists only what ZTP needs.
 
 **Checked by ZTP** means the run fails, or warns, with a message that names the problem. **You do this** means ZTP doesn't check it, and a gap shows up later as a failed stage.
 
 ## Before you run
 
-- [ ] Start the environment file from the [ZTP-only template](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/infrastructure/infrastructure.ztp.example.yml) (schema 5.3, `_metadata.scope: ztp`; the toolkit is adding it, it isn't published yet), or from the [full template](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/infrastructure/infrastructure.example.yml) if OS configuration and deployment follow. Keep it outside this repository. Fill every value in [Values you need](#values-you-need).
+- [ ] Start the environment file from the [ZTP-only template](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/variables/examples/infrastructure.ztp.example.yml) (schema 5.3 or later, `_metadata.scope: ztp`; `New-InfrastructureArtifacts.ps1 -Cut ztp -From <file>` in the toolkit cuts a full file down to what ZTP reads), or from the [full template](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/variables/examples/infrastructure.example.yml) if OS configuration and deployment follow. Keep it outside this repository. Fill every value in [Values you need](#values-you-need).
 - [ ] The `AzureLocalZTP` feature and the resource providers are registered in the subscription ([Azure](#azure)).
 - [ ] Your account has the roles on the resource group and the Key Vault ([Roles](#roles)).
 - [ ] The Key Vault uses the Azure RBAC permission model and holds the provisioning admin password and the BMC login ([Key Vault](#key-vault)).
@@ -280,3 +280,22 @@ Every key ZTP reads, in schema 5 paths (`ConvertFrom-ZtpInfrastructureV5`, `Test
 | `tags` | Optional | `{ Owner: "platform-team" }` | Your tagging standard | Azure (the site configuration and the edge machines; a new resource group) |
 
 ZTP doesn't read `hardware.sbe`, `hardware.model`, `identity.local_admin`, `networking.ntp_servers`, or the ports without role `management` or `provisioning`. They belong to OS configuration and deployment. See [Not read by ZTP](infrastructure-schema-5.md#not-read-by-ztp).
+## How this page maps to Learn 2610
+
+Microsoft Learn, [simplified machine provisioning (preview)](https://learn.microsoft.com/azure/azure-local/deploy/simplified-machine-provisioning), checked against train 2610. What Learn asks of a person with a USB stick, ZTP does over the BMC.
+
+| Learn 2610 | Where it is here |
+| --- | --- |
+| Hardware: validated SKUs (Lenovo ThinkAgile MX650 V3 and V4, HPE ProLiant DL360 Gen11, Dell AX-750 and AX-650); a USB port; a Windows 11 computer; an 8 GB USB flash drive | [Hardware](#hardware). ZTP needs no USB stick and no Windows 11 laptop: the BMC mounts a virtual USB image from the management host. |
+| On-site: the general deployment prerequisites, Active Directory prepared, the maintenance ISO and tools downloaded from the portal | The ISO is downloaded and hash-checked by the Resolve stage ([Bootstrap media](bootstrap-media.md)). Active Directory preparation is outside ZTP. |
+| Register the feature: `az feature register --namespace Microsoft.DeviceOnboarding --name AzureLocalZTP` | [Resource providers and features](#resource-providers-and-features). Checked by the Bootstrap stage. |
+| Resource providers: HybridCompute, AzureStackHCI, DeviceOnboarding, Edge, GuestConfiguration, HybridConnectivity, KeyVault, ManagedIdentity, PolicyInsights, Storage, Insights (Learn lists HybridCompute twice) | The same eleven in the table and the registration script above. ZTP checks the first four. |
+| Permissions: resource group Owner, or Contributor and Role Based Access Control Administrator | [Roles](#roles) |
+| Region: only East US supports the provisioning resources; the resource group can be anywhere | [Subscription and region](#subscription-and-region) |
+| Secure Boot and TPM on; disable the USB in BIOS after setup | [Hardware](#hardware) (Secure Boot and TPM, USB boot order) |
+| Prepare machines: wait for "Maintenance environment setup completed successfully"; the machine reboots twice; up to 30 minutes | The Bootstrap stage watches the BMC log for the same signals ([Monitoring](monitoring.md)). |
+| Ownership voucher: a `.pem` file named after the serial number in `\vouchers\<serial-number>\`, or downloaded with the Configurator app | The Vouchers stage reads it from the node's image and checks the serial ([Redfish virtual USB and vouchers](redfish-virtual-usb-vouchers.md)). |
+| Configurator app: user `edgeuser`, default password `Password1` | The Device stage uses the same REST service on TCP 20001; set `provisioning.simplified.maintenance_password` to change the password ([Appendix B](appendix/configurator-app-api.md)). |
+| Site: time zone and time server; Arc gateway not supported in the preview | [The site's network setting](#the-sites-network-setting); `site.time_zone` in [Values you need](#values-you-need) |
+| Provision: vouchers, software version, local administrator (12 or more characters with lower and upper case, a digit and a special character), machine name as the Arc resource name | [The secrets](#the-secrets); `provisioning.os_version`; `nodes[].arc_machine_name` |
+| Status "Ready to cluster" in **Azure Arc > Operations > Provisioning (preview)** | The Ready stage waits for it. |

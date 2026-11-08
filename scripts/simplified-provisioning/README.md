@@ -2,7 +2,7 @@
 
 Stage scripts that take nodes from bare metal to Arc-connected machines ready to cluster, using Microsoft's Simplified machine provisioning (preview, East US only) without a physical USB stick. PowerShell 7. Every script is a **plan by default**; hardware and Azure change only with an explicit `-Execute`.
 
-ZTP ends at the Handoff: each machine is Provisioned in Azure and Arc-connected, with its management address on the management port (found by MAC). OEM drivers, the SBE, DHCP off on the other ports, DNS and time on the host, and the deployment admin are OS configuration, which comes next: [Phase 03 OS Configuration](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/).
+ZTP ends at the Handoff: each machine is Provisioned in Azure and Arc-connected, with its management address on the management port (found by MAC). OEM drivers, an SBE (optional, only when a person asks for it), DHCP off on the other ports, DNS and time on the host, and the deployment admin are OS configuration, which comes next: [Phase 03 OS Configuration](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/).
 
 Docs: [Prerequisites](../../docs/prerequisites.md), [Automated bootstrap](../../docs/automated-bootstrap.md) (the whole path, states, handoff, proofs still needed), [Bootstrap media](../../docs/bootstrap-media.md), [Redfish virtual USB and voucher read-back](../../docs/redfish-virtual-usb-vouchers.md) and [Azure provisioning from vouchers](../../docs/azure-provisioning-vouchers.md). They state what is proven live and what is not.
 

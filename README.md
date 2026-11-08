@@ -21,6 +21,31 @@ The stages are Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, 
 
 ![Azure Local ZTP flow, from start to handoff](docs/diagrams/ztp-flow-to-handoff.png)
 
+## Where ZTP fits: the whole flow
+
+ZTP is one step of the Azure Local route. Each step starts only when the one before it is done and checked.
+
+```text
+Hardware discovery -> ZTP -> OS configuration -> PRE-CLUSTER VERIFICATION GATE -> ARM Validate -> ARM Deploy -> day 2
+```
+
+| # | Step | Tool | What it does | Page |
+| --- | --- | --- | --- | --- |
+| 1 | Hardware discovery (optional, Dell only in this phase) | azurelocal-toolkit `Invoke-HardwareDiscovery.ps1` | Reads each machine's BMC over Redfish and fills the serial numbers and port MACs of the infrastructure file | [Discovery](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/scripts/common/idrac-management/README.md) |
+| 2 | **ZTP** (this repo) | `Invoke-ZtpEnvironment.ps1` | Installs the OS from Azure by simplified machine provisioning and registers every machine with Azure Arc. Ends at the handoff | This page |
+| 3 | OS configuration | azurelocal-toolkit `Invoke-AzureLocalOsConfiguration.ps1` | Static management address by MAC, DHCP off on the other ports, DNS, time, deployment admin, domain join, storage preparation. The SBE only when a person asks (below) | [OS configuration](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/docs/os-configuration-and-arm-deployment.md) |
+| 4 | **Pre-cluster verification gate** | azurelocal-toolkit and the Sonar Verification monitor | A read-only check that every machine is ready for a cluster. Validate should not start until it passes. **Being built; not in main yet** | See the note below |
+| 5 | ARM Validate | azurelocal-toolkit `Invoke-AzureLocalArmDeployment.ps1 -Mode Validate` | Submits the deployment in validate mode and reports each validation step | [ARM deployment guide](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/docs/arm-deployment-guide.md) |
+| 6 | ARM Deploy | the same script, `-Mode Deploy` | Creates the cluster. A separate, explicit run that needs a successful Validate | Same |
+| 7 | Day 2 | the toolkit's post-deployment, operations and update tasks | Logical networks, monitoring, backup, updates | [Part 4: Cluster Deployment](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/) |
+
+[Sonar](https://github.com/AzureLocal/azurelocal-sonar) watches steps 2 to 6 read only; start it beside any of them.
+
+<!-- TODO(gate): the pre-cluster verification gate and Sonar's Verification monitor are being built in the toolkit and Sonar repositories. When they are in main, link the toolkit page of the gate here and name the checks it makes. -->
+
+**Pre-cluster verification gate.** It sits between OS configuration and ARM Validate. It is not part of ZTP and ZTP does not call it. It is being built in azurelocal-toolkit (and the Sonar Verification monitor in azurelocal-sonar) and is not in their main branches yet. Until it is published, check these yourself before Validate: the handoff's `managementAddressVerified` and the OS configuration report's `converged` for every node.
+
+**The SBE is optional and never the default.** ZTP never touches the Solution Builder Extension: the OS install discovers its own. Nothing downstream stages one unless a person asks: the toolkit side-loads an SBE only when `hardware.sbe.delivery` is `winrm_copy` or `node_pull`. With no `hardware.sbe` block, or `delivery: skip`, the OS configuration Sbe and Drivers steps are skipped, the ARM deployment passes no SBE value, and the machines keep the OEM drivers the OS already has. See [the toolkit's SBE section](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/docs/os-configuration-and-arm-deployment.md).
 ## Status
 
 | Item | State |
@@ -31,6 +56,22 @@ The stages are Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, 
 | Other OEMs | BMC handling is proven on Dell iDRAC only. |
 | Scope | Ends at the handoff: provisioned, Arc-connected nodes with the management address on the management NIC. OS configuration, Active Directory preparation, Validate and Deploy are separate. |
 
+## Prerequisites at a glance
+
+The full list, with who checks what, is on the [Prerequisites](docs/prerequisites.md) page. It follows [Microsoft Learn, simplified machine provisioning (preview), train 2610](https://learn.microsoft.com/azure/azure-local/deploy/simplified-machine-provisioning).
+
+| Need | Detail |
+| --- | --- |
+| PowerShell | PowerShell 7.0 or later, in an elevated session on Windows. Every script has `#Requires -Version 7.0`. Windows PowerShell 5.1 cannot run it. |
+| Modules and tools | `powershell-yaml`; `Az.Accounts`, `Az.Resources`, `Az.KeyVault`, `Az.ConnectedMachine` (the code states no minimum versions); the Azure CLI with Bicep (`az bicep install`). Pester 5.9.1 only to run the tests. |
+| Operating system | A Windows management host (the SMB share, the local account and the firewall rule are Windows features). It must reach the BMCs, the provisioning network and the internet, and stay up for the run (1.5 to 2 hours for two nodes). |
+| Azure feature and resource providers | The feature `Microsoft.DeviceOnboarding/AzureLocalZTP` is registered, and these resource providers are registered in the subscription: `Microsoft.HybridCompute`, `Microsoft.AzureStackHCI`, `Microsoft.DeviceOnboarding`, `Microsoft.Edge`, `Microsoft.GuestConfiguration`, `Microsoft.HybridConnectivity`, `Microsoft.KeyVault`, `Microsoft.ManagedIdentity`, `Microsoft.PolicyInsights`, `Microsoft.Storage`, `Microsoft.Insights`. |
+| Region | In the preview only **East US** supports the provisioning resources (the site and the edge machines). The resource group can be in another region. |
+| Permissions | Owner, or Contributor and Role Based Access Control Administrator, on the resource group; Reader on the subscription; Key Vault Secrets User on each vault a `keyvault://` reference names. |
+| Ownership vouchers | One small `.pem` file per machine, named after its serial number. The maintenance environment writes it to `\vouchers\<serial>\`. ZTP reads it back from the node's virtual USB image over the BMC (no USB stick, no one at the machine), checks that it holds the node's serial number, and claims the machine with it. Treat a voucher as a credential: keep the vouchers folder out of git. |
+| Hardware | A BMC with Redfish over HTTPS (TCP 443) and virtual media on the USB-stick slot. Secure Boot and TPM on. Learn's validated list: Dell AX-650 and AX-750, Lenovo ThinkAgile MX650 V3 and V4, HPE ProLiant DL360 Gen11. The flow is proven on Dell AX-760 with iDRAC 7.30 (not on Learn's list). |
+| Credentials | Only Key Vault references in the file: the BMC login, the provisioning admin password (at least 12 characters with lower and upper case, a digit and a special character) and, optionally, the `edgeuser` password of the maintenance environment. The Key Vault uses the Azure RBAC permission model. |
+| Network and ports | Host to each BMC TCP 443; each BMC to the host TCP 445 (SMB); host to the provisioning network TCP 20001; host to the internet TCP 443; the machines to Azure TCP 443 and 80 with no HTTPS inspection. Arc gateway is not supported in the preview. |
 ## Quickstart
 
 Check the [Prerequisites](docs/prerequisites.md) first. Then, on a Windows management host that reaches the BMCs, in an elevated PowerShell 7 session:
@@ -41,7 +82,7 @@ cd azurelocal-ztp
 
 # 1. Copy a toolkit template outside the repo and fill it in (no secrets: Key Vault references only).
 #    ZTP only: infrastructure.ztp.example.yml. ZTP, then OS configuration and deployment: infrastructure.example.yml.
-Copy-Item <azurelocal-toolkit>\config\infrastructure\infrastructure.ztp.example.yml D:\ztp\infrastructure.yml
+Copy-Item <azurelocal-toolkit>\config\variables\examples\infrastructure.ztp.example.yml D:\ztp\infrastructure.yml
 
 # 2. Plan: changes nothing in Azure, on the BMCs or on the nodes
 Connect-AzAccount -Tenant <tenant-id>
@@ -55,8 +96,8 @@ Which template to start from:
 
 | You use | Start from |
 | --- | --- |
-| ZTP only, with nothing automated after it | The toolkit's ZTP-only template, [`infrastructure.ztp.example.yml`](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/infrastructure/infrastructure.ztp.example.yml) |
-| ZTP, then OS configuration and cluster deployment | The full template, [`infrastructure.example.yml`](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/infrastructure/infrastructure.example.yml) |
+| ZTP only, with nothing automated after it | The toolkit's ZTP-only template, [`infrastructure.ztp.example.yml`](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/variables/examples/infrastructure.ztp.example.yml) |
+| ZTP, then OS configuration and cluster deployment | The full template, [`infrastructure.example.yml`](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/variables/examples/infrastructure.example.yml) |
 
 Read the [Operator guide](docs/operator-guide.md) before you run it.
 
@@ -67,11 +108,11 @@ Read the [Operator guide](docs/operator-guide.md) before you run it.
 - **Restore stage.** `hardware.bios_during_provisioning` holds BIOS values for the install only. Boot applies them; Restore sets them back to `hardware.bios` (or the value saved before Boot), restarts the node, and waits until it's Connected again. Without the key, Restore does nothing.
 - **Network stage: verify-only.** It reads Azure's per-NIC report, finds the management port by MAC, and records `managementAddressVerified` with a reason that names the mode, the port, its MAC, what it has and what the file expects. It never sends or waits on a Microsoft job: `jobs/ApplyConfiguration` never started on two live runs. `-ApplyThroughAzure` keeps that path as an opt-in, documented as unreliable.
 - **Handoff schema 2.** The handoff carries what Azure generated: the site, the installed `solution.vsrVersion`, and per node the edge and Arc machine names and IDs, `managementAddressVerified`, `managementMode`, `biosRestored` and `networkAdapters[]` (every port as Azure reports it after the install, matched by MAC to the file). It no longer carries `sbe`, `bootstrap`, `timestamps`, `connectivity` or a top-level `arcMachineResourceGroup`.
-- **No SBE.** The OS install discovers its own SBE, and OS configuration stages it. A file with `hardware.sbe` or `ztp.node_preparation` still works; the run ignores them with a `Note:` line.
+- **No SBE in ZTP.** The OS install discovers its own SBE. An SBE is optional and never the default: OS configuration side-loads one only when a person asks for it (`hardware.sbe.delivery`). A file with `hardware.sbe` or `ztp.node_preparation` still works; the run ignores them with a `Note:` line.
 
 ## What's next: OS configuration
 
-ZTP doesn't set a static management address after the install, install OEM drivers, stage the SBE in `C:\SBE`, turn DHCP and the gateway off on the other NICs, set DNS or time on the host, or create the deployment admin. Those happen in OS configuration, [azurelocal-toolkit Phase 03: OS Configuration](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/), before Validate and Deploy. The toolkit's `Set-AzureLocalNodeConfiguration.ps1` does them over Arc Run Command, finding every port by MAC.
+ZTP doesn't set a static management address after the install, install OEM drivers, stage an SBE (optional, only on request), turn DHCP and the gateway off on the other NICs, set DNS or time on the host, or create the deployment admin. Those happen in OS configuration, [azurelocal-toolkit Phase 03: OS Configuration](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/), before Validate and Deploy. The toolkit's `Set-AzureLocalNodeConfiguration.ps1` does them over Arc Run Command, finding every port by MAC.
 
 **The management address after ZTP, by mode** ([Management address modes](docs/prerequisites.md#management-address-modes)):
 

@@ -8,8 +8,8 @@ The master file and its schema live in [azurelocal-toolkit](https://github.com/A
 
 The toolkit has two templates. Start from the one that matches what you do after ZTP:
 
-- **ZTP only**, with no automation after it: the [ZTP-only template](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/infrastructure/infrastructure.ztp.example.yml) (schema 5.3, `_metadata.scope: ztp`). It holds only what ZTP reads, and the toolkit's validator requires only those keys. The toolkit is adding it; it isn't published yet.
-- **ZTP, then OS configuration and deployment**: the [full template](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/infrastructure/infrastructure.example.yml). ZTP reads its part and ignores the rest.
+- **ZTP only**, with no automation after it: the [ZTP-only template](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/variables/examples/infrastructure.ztp.example.yml) (schema 5.3, `_metadata.scope: ztp`). It holds only what ZTP reads, and the toolkit's validator requires only those keys. The toolkit is adding it; it isn't published yet.
+- **ZTP, then OS configuration and deployment**: the [full template](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/variables/examples/infrastructure.example.yml). ZTP reads its part and ignores the rest.
 
 ZTP accepts `_metadata.scope` and ignores every key it doesn't read. To grow a ZTP-only file into the full one, add the sections and set `_metadata.scope: full` (or remove it).
 

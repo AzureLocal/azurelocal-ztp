@@ -16,8 +16,8 @@ A complete example with placeholder values is in [`examples/infrastructure.examp
 
 For a new file, start from a schema 5 template in azurelocal-toolkit instead of this layout:
 
-- **ZTP only.** You install the OS and register the machines with ZTP, and run no automation after it: start from the [ZTP-only template](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/infrastructure/infrastructure.ztp.example.yml) (schema 5.3, `_metadata.scope: ztp`). It holds only the keys ZTP reads. The toolkit is adding it; it isn't published yet.
-- **ZTP, then OS configuration and deployment.** Start from the [full template](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/infrastructure/infrastructure.example.yml). ZTP reads its part of it and ignores the rest.
+- **ZTP only.** You install the OS and register the machines with ZTP, and run no automation after it: start from the [ZTP-only template](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/variables/examples/infrastructure.ztp.example.yml) (schema 5.3, `_metadata.scope: ztp`). It holds only the keys ZTP reads. The toolkit is adding it; it isn't published yet.
+- **ZTP, then OS configuration and deployment.** Start from the [full template](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/variables/examples/infrastructure.example.yml). ZTP reads its part of it and ignores the rest.
 
 ZTP's key check accepts `_metadata.scope`: it ignores every key it doesn't read.
 
