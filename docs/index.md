@@ -63,7 +63,7 @@ features:
 The stages are Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Restore and Handoff.
 
 ::: tip What's next: OS configuration
-ZTP ends with the nodes ready for OS configuration, not for Validate. OEM drivers, an SBE (optional, only when a person asks for it), DHCP off on the other NICs, DNS and time on the host, and the deployment admin come next, in [azurelocal-toolkit Phase 03: OS Configuration](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/). ZTP-built nodes name their NICs `Port0` to `Port6`, so OS configuration scripts must find NICs by MAC. See [What's next](/operator-guide#whats-next-os-configuration).
+ZTP ends with the nodes ready for OS configuration, not for Validate. OEM drivers, the SBE package (a requirement that must be ready first; only copying it to the nodes is optional), DHCP off on the other NICs, DNS and time on the host, and the deployment admin come next, in [azurelocal-toolkit Phase 03: OS Configuration](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/). ZTP-built nodes name their NICs `Port0` to `Port6`, so OS configuration scripts must find NICs by MAC. See [What's next](/operator-guide#whats-next-os-configuration).
 :::
 
 ::: warning Preview

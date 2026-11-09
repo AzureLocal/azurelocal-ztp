@@ -178,7 +178,7 @@ Set-AzKeyVaultSecret -VaultName kv-example -Name maintenance-password -SecretVal
 
 3. Run the [plan](#step-2-run-the-plan). It shows the pinned version in the Azure stage (`-OsVersion`) before anything changes.
 
-ZTP doesn't check the build against an OEM SBE. An SBE is optional and never the default: OS configuration side-loads one only when a person asks for it (`hardware.sbe.delivery`). If you use one, pin a build your OEM validated the SBE with; without one, the machines keep the OEM drivers the OS already has. The handoff's `solution.vsrVersion` records the build actually installed.
+ZTP doesn't check the build against an OEM SBE. The vendor SBE package is a requirement that must be ready before OS configuration (the toolkit checks it in the pre-cluster gate); only the build-time side-load is optional, and OS configuration does it only when a person asks for it (`hardware.sbe.delivery`). Pin a build your OEM validated the SBE with. Without the side-load, the machines keep the OEM drivers the OS already has. The handoff's `solution.vsrVersion` records the build actually installed.
 
 To change the build of machines that are already provisioned, provision them again from `Boot`: delete their provisioned machines first, because a voucher can claim a machine only once. See [Resume a stopped run](#resume-a-stopped-run).
 
@@ -366,7 +366,7 @@ Before it writes the handoff, the run has checked each node:
 | The reserved address on the adapter with the management MAC | Network (Mode A). The handoff records it as `managementAddressVerified`. |
 | The `bios_during_provisioning` values set back | Restore. The handoff records them as `biosRestored`. |
 
-That's ZTP's result. It doesn't check drivers, an SBE (optional), DHCP on the other ports, DNS or time on the host, or the deployment admin; those belong to [OS configuration](#whats-next-os-configuration).
+That's ZTP's result. It doesn't check drivers, the SBE package, DHCP on the other ports, DNS or time on the host, or the deployment admin; those belong to [OS configuration](#whats-next-os-configuration).
 
 ## What to hand to the cluster deployment
 
@@ -452,7 +452,7 @@ ZTP doesn't do any of these. OS configuration does:
 | --- | --- |
 | Set the static management address by MAC (Modes B and C) | [Task 03: Static IP](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-03-configure-static-ip-address) |
 | Install the OEM drivers | [Phase 03](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/) |
-| Side-load an SBE into `C:\SBE` (optional: only when a person asks for it, never by default) | [Phase 03](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/) |
+| Side-load the SBE package into `C:\SBE` (optional: only when a person asks for it, never by default; the package itself must already be on a share) | [Phase 03](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/) |
 | Turn DHCP off on the other NICs, and disable the unused ones | [Task 04: Disable DHCP on all adapters](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-04-disable-dhcp-on-management-adapter), [Task 09: Disable unused adapters](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-09-disable-unused-network-adapters) |
 | Set DNS on the host | [Task 05: DNS](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-05-configure-dns-servers) |
 | Set time on the host | [Task 07: NTP](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-07-configure-time-synchronization-ntp) |

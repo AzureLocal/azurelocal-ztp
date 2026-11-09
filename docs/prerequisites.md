@@ -2,7 +2,7 @@
 
 > Everything that must be in place before a ZTP run, and every value the environment file needs. Each item says whether ZTP checks it, and where, or whether you do it.
 
-ZTP ends at the Handoff: each machine is Provisioned in Azure and Arc-connected, with its management address on the management port. OEM drivers, an SBE (optional, only when a person asks for it), DHCP off on the other ports, DNS and time on the host, and the deployment admin are OS configuration, which comes next ([Phase 03 OS Configuration](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/)). This page lists only what ZTP needs.
+ZTP ends at the Handoff: each machine is Provisioned in Azure and Arc-connected, with its management address on the management port. OEM drivers, copying the SBE package to the nodes (optional, only when a person asks for it), DHCP off on the other ports, DNS and time on the host, and the deployment admin are OS configuration, which comes next ([Phase 03 OS Configuration](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/)). This page lists what ZTP needs, plus one thing ZTP does not read but that must be ready before the next step: [the SBE package](#the-sbe-package).
 
 **Checked by ZTP** means the run fails, or warns, with a message that names the problem. **You do this** means ZTP doesn't check it, and a gap shows up later as a failed stage.
 
@@ -17,6 +17,7 @@ ZTP ends at the Handoff: each machine is Provisioned in Azure and Arc-connected,
 - [ ] DHCP answers on the provisioning network, and the ports in [Network](#network) are open.
 - [ ] The BMCs have Redfish and virtual media, and the BIOS settings are in the file ([Hardware](#hardware)).
 - [ ] Nothing on the machines needs to be kept: the run **reinstalls** every node you name.
+- [ ] Your hardware vendor's SBE package is downloaded and on a share the automation can read, ready before OS configuration ([The SBE package](#the-sbe-package)).
 
 Then run the plan (without `-Execute`). It reads the file, runs every check that doesn't change anything, and prints what it would do.
 
@@ -219,6 +220,22 @@ The Network stage needs no port to the nodes: it reads Azure's per-NIC report. Z
 | Dell: LOMs disabled in BIOS | A known trap: the embedded LOM ports can ship as `DisabledOs`, so the OS can't see the management ports. Set `EmbNic1Nic2: "Enabled"` in `hardware.bios`. | You do this. ZTP sets what the file says. |
 | The serial number | `nodes[].serial_number`, the machine's service tag on Dell (on the machine's label and the iDRAC dashboard). The maintenance environment writes the voucher to `\vouchers\<serial>\` and the voucher holds it; ZTP maps each voucher to its node by it. | Checked by ZTP: required; the Vouchers stage validates that the voucher holds the node's serial. A wrong serial shows as no voucher for that node. |
 
+## The SBE package
+
+Download your hardware vendor's Solution Builder Extension (SBE) package for your model and the Azure Local version you deploy, before you start. It is a requirement: you need it to update the cluster, and the toolkit reads it from a share and checks it before the cluster is created. ZTP does not read it and the OS install discovers its own SBE, but ZTP hands off to OS configuration, so **the SBE must be ready before OS configuration and ARM Validate**. To install it during the build, switch on the side-load in the file (`hardware.sbe.delivery`); it is off by default and the toolkit never does it unasked.
+
+| Item | Detail | Who |
+| --- | --- | --- |
+| The package on a share | `hardware.sbe.source_path`: a UNC share or folder with the three files as the vendor delivers them, `SBE_Discovery_<Vendor>.xml`, `SBE_<Vendor>_<Family>_<Version>.xml` and `SBE_<Vendor>_<Family>_<Version>.zip` | You do this. Checked by the toolkit's pre-cluster verification gate, not by ZTP |
+| Requirement and reason | `hardware.sbe.requirement` is `required`, or `not_applicable` with `hardware.sbe.not_applicable_reason` (hardware with no SBE, or a cluster that downloads it with the vendor credential) | You state it. The gate fails an empty reason |
+| Read account | `hardware.sbe.source_username` and `hardware.sbe.source_password` (a `keyvault://` reference), only when the account that runs the automation cannot read the share. `hardware.sbe.package_sha256` and `hardware.sbe.package_size_bytes` are optional pins | You do this. The password is read into memory and never written |
+| The checks | SB-001 to SB-006, all blocking: configured, share reachable, three files present, hashes unmodified, the hardware model is in the package's own supported models (a 17G-Intel package fails on AX-760 nodes; the right one is 16G-45n0c-Intel 5.0.2609.1611), and the version is validated for the target solution version | The toolkit gate (see [its SBE section](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/docs/pre-cluster-verification.md#the-sbe-package-sb--category-nodes)) |
+| The first cluster update | Reuses the same share: `Add-SolutionUpdate`, then `Start-SolutionUpdate` ([Import and rediscover updates](https://learn.microsoft.com/en-us/azure/azure-local/update/update-via-powershell-23h2?view=azloc-2610#step-3-import-and-rediscover-updates)) | You, after the cluster exists |
+| The build-time side-load | `hardware.sbe.delivery` is `winrm_copy` or `node_pull`; unset or `skip` copies nothing. This is the only optional part | OS configuration, when a person asks |
+
+Vendors differ, so "download first" does not fit every one. Dell AX and MC is a login-gated download, side-loaded unless the cluster has Dell support credentials; HPE is the Standard SBE from HPE's licence portal on some Gen11 models and the Minimal SBE plus a Windows Admin Center extension on others; Lenovo ThinkAgile MX Premier downloads and stages the package automatically; DataON has an SBE on S2D6, S2D7, AZS6 and AZS7 and otherwise a Windows Admin Center extension; hardware older than 2311.2, and Validated Nodes, may have no SBE. This comes from Microsoft Learn 2610 and vendor pages and is not yet verified cell by cell: see [Solution Builder Extension updates for Azure Local](https://learn.microsoft.com/en-us/azure/azure-local/update/solution-builder-extension?view=azloc-2610). The toolkit's per-vendor cells are in `config/oem/<vendor>.json`; most are marked unverified.
+
+The keys are defined in the master registry of azurelocal-toolkit (`config/variables/schema/master-registry.yaml`), not here.
 ## Values you need
 
 Every key ZTP reads, in schema 5 paths (`ConvertFrom-ZtpInfrastructureV5`, `Test-ZtpInfrastructureV5` and `Test-ZtpEnvironment` in `ZtpEnvironment.Common.ps1`). Example values only. "File check" is the check the run does before any stage. For the older layout's names, see the [environment file reference](environment-file.md); for the mapping, [Reading the master infrastructure.yml](infrastructure-schema-5.md).
