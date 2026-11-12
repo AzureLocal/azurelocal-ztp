@@ -1,5 +1,5 @@
 # Synthetic schema 5.2 infrastructure.yml for the tests: the same machines and values as environment.example.yml, written
-# in the master layout (azurelocal-toolkit config/infrastructure). Two nodes with six ports each: management on the two
+# in the master layout (azurelocal-toolkit config/variables). Two nodes with six ports each: management on the two
 # onboard LOMs (access ports, static), compute and the maintenance environment's way to Azure on two ConnectX ports,
 # storage on the other two. Placeholder values only: documentation addresses (RFC 5737), all-zero GUIDs and example
 # names. hardware.sbe is for OS configuration and deployment; ZTP doesn't read it.

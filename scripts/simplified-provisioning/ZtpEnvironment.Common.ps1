@@ -966,7 +966,7 @@ function Resolve-ZtpNodeSelection {
 }
 
 # ======================================================================================================================
-# Schema 5: the master infrastructure.yml (azurelocal-toolkit config/infrastructure). Read-ZtpInfrastructure detects the
+# Schema 5: the master infrastructure.yml (azurelocal-toolkit config/variables). Read-ZtpInfrastructure detects the
 # format, validates a schema 5 file (with the toolkit's AzlInfrastructure module when the toolkit sits next to this
 # repository, otherwise with the built-in checks here) and maps it onto the keys above, so every script reads one shape.
 # The mapping is in docs/infrastructure-schema-5.md.

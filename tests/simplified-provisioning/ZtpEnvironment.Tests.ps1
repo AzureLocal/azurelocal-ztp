@@ -985,13 +985,19 @@ Describe 'BIOS actions derived from the inventory (schema 5.4)' {
 
 # The toolkit clone these tests compare against: $env:AZL_TOOLKIT_ROOT, else azurelocal-toolkit next to this repository. Without it they are skipped.
 $ztpToolkitRoot = if ($env:AZL_TOOLKIT_ROOT) { $env:AZL_TOOLKIT_ROOT } else { Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) '..\azurelocal-toolkit' }
-$ztpHaveToolkit = Test-Path -LiteralPath (Join-Path $ztpToolkitRoot 'config\infrastructure\infrastructure.schema.json')
+# The toolkit is present when its folder is there. A toolkit without the schema or the templates where these tests look
+# (config/variables, the one place for them) fails below; it does not skip.
+$ztpHaveToolkit = Test-Path -LiteralPath (Join-Path $ztpToolkitRoot 'config') -PathType Container
 Describe 'Every ZTP setting is a key of the master schema (schema 5.4)' {
+    It 'finds the toolkit''s <_> under config/variables' -Skip:(-not $ztpHaveToolkit) -ForEach 'schema\infrastructure.schema.json', 'examples\infrastructure.ztp.example.yml', 'examples\infrastructure.example.yml' {
+        Join-Path $script:toolkitRoot "config\variables\$_" | Should -Exist
+    }
+
     BeforeAll {
         $script:savedToolkitRoot54b = $env:AZL_TOOLKIT_ROOT
         $env:AZL_TOOLKIT_ROOT = Join-Path $TestDrive 'no-toolkit-here'
         $script:toolkitRoot = if ($script:savedToolkitRoot54b) { $script:savedToolkitRoot54b } else { Join-Path $script:repoRoot '..\azurelocal-toolkit' }
-        $script:toolkitSchema = Join-Path $script:toolkitRoot 'config\infrastructure\infrastructure.schema.json'
+        $script:toolkitSchema = Join-Path $script:toolkitRoot 'config\variables\schema\infrastructure.schema.json'
         function Format-Bios { param($Bios) @($Bios.Keys | ForEach-Object { "$_=$($Bios[$_])" }) -join ',' }
         function Get-AssertText { param([string]$Path) try { Assert-ZtpEnvironment -Environment (Read-ZtpInfrastructure -Path $Path) -Source 'infra.yml' -InformationAction SilentlyContinue; '' } catch { $_.Exception.Message } }
         $script:newKeys = @(
@@ -1018,7 +1024,7 @@ Describe 'Every ZTP setting is a key of the master schema (schema 5.4)' {
     It 'reads the toolkit''s own ZTP and full templates with no problems and carries their new settings through' -Skip:(-not $ztpHaveToolkit) {
         $env:AZL_TOOLKIT_ROOT = $script:toolkitRoot   # validate with the toolkit's own module, as a real run does
         foreach ($template in 'infrastructure.ztp.example.yml', 'infrastructure.example.yml') {
-            $path = Join-Path $script:toolkitRoot "config\infrastructure\$template"
+            $path = Join-Path $script:toolkitRoot "config\variables\examples\$template"
             $copy = Join-Path $TestDrive "tk-$template"
             $data = ConvertFrom-Yaml (Get-Content -LiteralPath $path -Raw) -Ordered
             $data.provisioning.simplified['media_path'] = Join-Path $TestDrive "tk-data-$template/media"

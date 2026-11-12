@@ -2,7 +2,7 @@
 
 > How `Invoke-ZtpEnvironment.ps1` reads the master `infrastructure.yml`, the one environment file every Azure Local tool reads, and where each of its keys goes.
 
-The master file and its schema live in [azurelocal-toolkit](https://github.com/AzureLocal/azurelocal-toolkit/tree/main/config/infrastructure): `infrastructure.schema.json`, the examples (`examples/lom-management-ztp.yml` is a simplified-provisioning example with every port listed) and `README.md`, which describes every key. ZTP reads schema 5.x. Schema 5.2 adds the keys ZTP needs for each machine's ports, BIOS and run folders; schema 5.3 adds `bios_during_provisioning`, `networking.management.static_method` and `provisioning_dhcp_range`, `nodes[].maintenance_address`, `provisioning.simplified.maintenance_password` and `_metadata.scope`; schema 5.4 puts every other ZTP setting in the master file (see [Every setting is a key](#every-setting-is-a-key-schema-54)).
+The master file and its schema live in [azurelocal-toolkit](https://github.com/AzureLocal/azurelocal-toolkit/tree/main/config/variables): `infrastructure.schema.json`, the examples (`examples/lom-management-ztp.yml` is a simplified-provisioning example with every port listed) and `README.md`, which describes every key. ZTP reads schema 5.x. Schema 5.2 adds the keys ZTP needs for each machine's ports, BIOS and run folders; schema 5.3 adds `bios_during_provisioning`, `networking.management.static_method` and `provisioning_dhcp_range`, `nodes[].maintenance_address`, `provisioning.simplified.maintenance_password` and `_metadata.scope`; schema 5.4 puts every other ZTP setting in the master file (see [Every setting is a key](#every-setting-is-a-key-schema-54)).
 
 ## The two templates
 
