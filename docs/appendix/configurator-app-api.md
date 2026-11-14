@@ -412,7 +412,7 @@ These two calls, with `GetNetworkAdapters` and `GetArcBootstrapDeviceConfigurati
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `Network.NetworkAdapters[]` | `NetworkAdapterConfiguration` | Ports to change, matched by `MacAddress`. Verified live with `MacAddress`, `EnableDhcp`, `IpAddress`, `SubnetMask`, `Gateway`, `DnsAddressArray`, `VlanId`. |
-| `WebProxy` | `WebProxyConfiguration` | Not called. |
+| `WebProxy` | `WebProxyConfiguration` | Sent by ZTP's Device stage when `scenario.outbound_path` is `proxy`: `ConnectionUri` from `networking.outbound.proxy.url`, `BypassList` from `.bypass`, with the static address in the same request, or alone. **Not yet sent to a live maintenance environment.** The stage waits for the `WebProxy` step of the status tree to report `Succeeded`. |
 | `Time` | `TimeConfiguration` | Not called. |
 | `HostName` | `HostNameConfiguration` | Not called (ZTP sends none; the Azure claim sets the host name). |
 | `RemoteConfiguration` | `RemoteConfiguration` | Not called. |

@@ -38,7 +38,9 @@ BeforeAll {
                 $status = $sequence[[Math]::Min($global:devT_statusIndex, $sequence.Count - 1)]
                 $global:devT_statusIndex++
                 if ($status -eq 'Succeeded' -and $global:devT_pending) {
-                    foreach ($entry in @($global:devT_pending.Network.NetworkAdapters)) {
+                    # A request with only WebProxy changes no adapter.
+                    $pendingAdapters = if ($global:devT_pending.Contains('Network')) { @($global:devT_pending.Network.NetworkAdapters) } else { @() }
+                    foreach ($entry in $pendingAdapters) {
                         $a = @($global:devT_adapters | Where-Object { $_.MacAddress -eq $entry.MacAddress })[0]
                         foreach ($k in $entry.Keys) { $a[$k] = $entry[$k] }
                         if ($entry.EnableDhcp) { $a.IpAddress = ''; $a.SubnetMask = ''; $a.Gateway = '' }
@@ -61,7 +63,7 @@ BeforeAll {
         @($Address | Where-Object { $_ -in $global:devT_up })
     }
     $script:writeInputs = {
-        param([System.Collections.IDictionary]$Management, [string]$Maintenance = '192.0.2.111', [string]$ScanRange)
+        param([System.Collections.IDictionary]$Management, [string]$Maintenance = '192.0.2.111', [string]$ScanRange, [System.Collections.IDictionary]$WebProxy)
         $id = [guid]::NewGuid().ToString('N')
         $params = Join-Path $TestDrive "params-$id.json"
         $node = [ordered]@{ name = 'node-01'; service_tag = 'EXAMPLE1' }
@@ -71,6 +73,7 @@ BeforeAll {
         $entry = [ordered]@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11' }
         if ($Maintenance) { $entry.maintenance_address = $Maintenance }
         if ($ScanRange) { $entry.maintenance_scan_range = $ScanRange }
+        if ($WebProxy) { $entry.web_proxy = $WebProxy }
         @{ nodes = @($entry) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $nodes
         @{ ParameterFile = $params; NodesFile = $nodes }
     }
@@ -398,5 +401,83 @@ Describe 'Set-ZtpDeviceConfiguration.ps1 reaches the service on the port and as 
         $null = & $script:run (& $script:writeInputs (& $script:static)) @{ Port = 20011; UserName = 'lab-user' }
         $global:devT_calls[0].Uri | Should -Be 'https://192.0.2.111:20011/BootstrapOobeService/GetNetworkAdapters'
         $global:devT_calls[0].User | Should -Be 'lab-user'
+    }
+}
+
+Describe 'Set-ZtpDeviceConfiguration.ps1 sets the proxy of scenario.outbound_path proxy' {
+    BeforeEach {
+        $global:devT_calls = [System.Collections.Generic.List[object]]::new()
+        $global:devT_up = @('192.0.2.111', '192.0.2.11'); $global:devT_downAfterApply = @(); $global:devT_password = 'Password1'
+        $global:devT_status = @('Succeeded'); $global:devT_statusIndex = 0; $global:devT_pending = $null; $global:devT_other = @{}; $global:devT_swapAfterApply = @{}
+        $global:devT_sweeps = 0; $global:devT_appearAt = 1; $global:devT_probes = [System.Collections.Generic.List[object]]::new()
+        $global:devT_adapters = @(
+            (New-DevTAdapter -Name 'eno1' -Mac '00005e0053aa' -Dhcp $true -Ip '192.0.2.200' -Mask '255.255.255.0' -Gateway '192.0.2.1' -Dns '192.0.2.53' -Index 0)
+            (New-DevTAdapter -Name 'ens3f0np0' -Mac '00005e0053bb' -Dhcp $true -Ip '192.0.2.111' -Mask '255.255.255.0' -Gateway '192.0.2.1' -Dns '192.0.2.53' -Index 1)
+        )
+        $script:changeLog = Join-Path $TestDrive "device-changes-$([guid]::NewGuid().ToString('N')).jsonl"
+        $script:events = Join-Path $TestDrive "events-$([guid]::NewGuid().ToString('N')).jsonl"
+        $script:proxy = [ordered]@{ connection_uri = 'http://proxy.improbability.cloud:3128'; bypass_list = @('localhost', '192.0.2.*', 'node-01', '*.improbability.cloud') }
+        Mock Invoke-RestMethod { & $global:devT_handler ([string]$Uri) ([string]$Method) ([string]$Body) $Credential }
+        Mock Start-Sleep {}
+    }
+
+    It 'sends WebProxy (ConnectionUri, BypassList) with the static address in one request' {
+        $row = & $script:run (& $script:writeInputs (& $script:static) -WebProxy $script:proxy) @{ Execute = $true; Confirm = $false }
+        $post = @(& $script:posts)
+        $post.Count | Should -Be 1
+        $body = $post[0].Body | ConvertFrom-Json
+        $body.PSObject.Properties.Name | Should -Be @('Network', 'WebProxy')
+        $body.WebProxy.ConnectionUri | Should -Be 'http://proxy.improbability.cloud:3128'
+        @($body.WebProxy.BypassList) -join ',' | Should -Be 'localhost,192.0.2.*,node-01,*.improbability.cloud'
+        $row.Status | Should -Be 'Changed'
+        @(& $script:eventsOf | ForEach-Object state | Select-Object -Last 2) | Should -Be @('DeviceAddressSet', 'DeviceProxySet')
+    }
+
+    It 'sends only WebProxy when the static address is already on the management port' {
+        $global:devT_adapters[0] = New-DevTAdapter -Name 'eno1' -Mac '00005e0053aa' -Dhcp $false -Ip '192.0.2.11' -Mask '255.255.255.0' -Gateway '192.0.2.1' -Dns '192.0.2.53', '192.0.2.54'
+        $row = & $script:run (& $script:writeInputs (& $script:static) -WebProxy $script:proxy) @{ Execute = $true; Confirm = $false }
+        $body = (@(& $script:posts)[0]).Body | ConvertFrom-Json
+        $body.PSObject.Properties.Name | Should -Be @('WebProxy')
+        $row.Status | Should -Be 'Changed'
+        @(& $script:eventsOf | ForEach-Object state) | Should -Not -Contain 'DeviceAddressSet'
+    }
+
+    It 'sets the proxy on a dhcp node with a maintenance address, and plans it without -Execute' {
+        $m = & $script:static; $m.ip_assignment = 'dhcp'; $m.ip_address = ''
+        $out = @(& $script:run (& $script:writeInputs $m -WebProxy $script:proxy))
+        ($out | Where-Object { $_ -is [string] }) | Should -BeLike 'PLAN: node-01: POST SetArcBootstrapDeviceConfiguration to 192.0.2.111: web proxy http://proxy.improbability.cloud:3128 bypassing localhost,192.0.2.*,node-01,*.improbability.cloud; then wait up to 5 minutes for the WebProxy step to succeed.'
+        & $script:posts | Should -BeNullOrEmpty
+        $row = & $script:run (& $script:writeInputs $m -WebProxy $script:proxy) @{ Execute = $true; Confirm = $false }
+        $body = (@(& $script:posts)[0]).Body | ConvertFrom-Json
+        $body.PSObject.Properties.Name | Should -Be @('WebProxy')
+        $row.Status | Should -Be 'Changed'
+        $row.Address | Should -Be '192.0.2.200'
+    }
+
+    It 'waits for the WebProxy step of the status tree to succeed' {
+        $global:devT_adapters[0] = New-DevTAdapter -Name 'eno1' -Mac '00005e0053aa' -Dhcp $false -Ip '192.0.2.11' -Mask '255.255.255.0' -Gateway '192.0.2.1' -Dns '192.0.2.53', '192.0.2.54'
+        $global:devT_tree = @(
+            '{"Response":{"DetailedResponse":[{"Name":"NetworkConfig","Status":"NotApplicable"},{"Name":"WebProxy","Status":"InProgress"}],"Name":"Bootstrap","Status":"InProgress"},"Version":"V1"}'
+            '{"Response":{"DetailedResponse":[{"Name":"NetworkConfig","Status":"NotApplicable"},{"Name":"WebProxy","Status":"Succeeded"}],"Name":"Bootstrap","Status":"Succeeded"},"Version":"V1"}')
+        $global:devT_treeIndex = 0
+        Mock Invoke-RestMethod {
+            if ($Uri -like '*GetArcBootstrapDeviceConfigurationStatus') { $null = & $global:devT_handler ([string]$Uri) ([string]$Method) ([string]$Body) $Credential; $s = $global:devT_tree[[Math]::Min($global:devT_treeIndex, 1)]; $global:devT_treeIndex++; return ($s | ConvertFrom-Json) }
+            & $global:devT_handler ([string]$Uri) ([string]$Method) ([string]$Body) $Credential
+        }
+        $row = & $script:run (& $script:writeInputs (& $script:static) -WebProxy $script:proxy) @{ Execute = $true; Confirm = $false }
+        $row.Status | Should -Be 'Changed'
+        $global:devT_treeIndex | Should -Be 2
+    }
+
+    It 'stops a dhcp node with a proxy that it can neither reach nor scan for' {
+        $m = & $script:static; $m.ip_assignment = 'dhcp'; $m.ip_address = ''
+        { & $script:run (& $script:writeInputs $m -Maintenance '' -WebProxy $script:proxy) @{ Execute = $true; Confirm = $false } } | Should -Throw '*node-01: no maintenance_address, no maintenance_scan_range and no management ip_address*'
+        & $script:posts | Should -BeNullOrEmpty
+    }
+
+    It 'refuses a proxy without a bypass list before sending anything' {
+        $bad = [ordered]@{ connection_uri = 'http://proxy.improbability.cloud:3128'; bypass_list = @() }
+        { & $script:run (& $script:writeInputs (& $script:static) -WebProxy $bad) @{ Execute = $true; Confirm = $false } } | Should -Throw '*web_proxy has no bypass_list*'
+        & $script:posts | Should -BeNullOrEmpty
     }
 }

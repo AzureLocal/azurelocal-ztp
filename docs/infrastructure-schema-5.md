@@ -46,6 +46,7 @@ The older [environment-file layout](environment-file.md) still works and is depr
 | Subnet, gateway, DNS servers | `networking.management.subnet`, `gateway`, `dns_servers` |
 | Site range (only with `static_method: site`) | `networking.management.site_ip_range` |
 | How the maintenance environment reaches Azure | `networking.management.provisioning_network` (the ports with role `provisioning` carry it) |
+| Outbound path and proxy | `scenario.outbound_path`: `direct` (default; the site connectivity is `Public`) or `proxy` (the site connectivity is `Proxy`, and the Device stage sends `networking.outbound.proxy.url` and `.bypass` to each maintenance environment, as the Configurator App's proxy URL and bypass list). `arc_gateway`, `proxy_arc_gateway` and `private_path` stop the run: Microsoft doesn't support Arc gateway with simplified machine provisioning in the preview. Bypass list rules from Learn: each machine's address and NetBIOS name, the cluster's, the infrastructure addresses; `localhost`, not `<local>`; a wildcard such as `192.0.2.*`, not CIDR. |
 | Tenant, region | `azure.tenant_id`, `azure.location` |
 | Site display name, time zone | `site.name`, `site.time_zone` |
 | Subscription and resource group of the site and edge machines | `provisioning.simplified.subscription_id` and `resource_group`, else `azure.subscription_id` and `resource_group` |

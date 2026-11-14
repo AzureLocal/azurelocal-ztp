@@ -201,20 +201,34 @@ function Test-OobeStatic([object]$Adapter, [string]$Ip, [string]$Mask, [string]$
 }
 function Get-OobeStatus([object]$Response) {
     # GetArcBootstrapDeviceConfigurationStatus, verified live: { Response: { Name: Bootstrap, Status, DetailedResponse:
-    # [ { Name, Status } ] }, Version }. A flat status-like property is read too.
-    if ($null -eq $Response) { return [pscustomobject]@{ Text = 'no status'; Failed = $false } }
-    if ($Response -is [string]) { return [pscustomobject]@{ Text = $Response; Failed = ($Response -match 'Fail') } }
+    # [ { Name, Status } ] }, Version }. A flat status-like property is read too. Overall is the root status, Steps the children.
+    if ($null -eq $Response) { return [pscustomobject]@{ Text = 'no status'; Failed = $false; Overall = ''; Steps = @() } }
+    if ($Response -is [string]) { return [pscustomobject]@{ Text = $Response; Failed = ($Response -match 'Fail'); Overall = ''; Steps = @() } }
     $inner = Get-ZtpPropertyValue $Response 'Response'
     if ($null -ne $inner -and $inner -isnot [string]) {
         $overall = [string](Get-ZtpPropertyValue $inner 'Status' '')
         $steps = @(foreach ($s in @(Get-ZtpPropertyValue $inner 'DetailedResponse' @())) { if ($null -ne $s) { [pscustomobject]@{ Name = [string](Get-ZtpPropertyValue $s 'Name' ''); Status = [string](Get-ZtpPropertyValue $s 'Status' '') } } })
         $text = "$(Get-ZtpPropertyValue $inner 'Name' 'Bootstrap') $(if ($overall) { $overall } else { 'no status' })$(if ($steps) { " ($(@($steps | ForEach-Object { "$($_.Name) $($_.Status)" }) -join ', '))" })"
-        return [pscustomobject]@{ Text = $text; Failed = ($overall -match 'Fail' -or [bool]@($steps | Where-Object { $_.Status -match 'Fail' }).Count) }
+        return [pscustomobject]@{ Text = $text; Failed = ($overall -match 'Fail' -or [bool]@($steps | Where-Object { $_.Status -match 'Fail' }).Count); Overall = $overall; Steps = $steps }
     }
     $values = @(foreach ($k in 'Status', 'State', 'ConfigurationStatus', 'DeploymentStatus') { $v = Get-ZtpPropertyValue $Response $k; if ($null -ne $v -and "$v" -ne '') { "$k $v" } })
     $text = if ($values) { $values -join ', ' } else { ($Response | ConvertTo-Json -Compress -Depth 5) }
     if ($text.Length -gt 300) { $text = $text.Substring(0, 300) + '...' }
-    return [pscustomobject]@{ Text = $text; Failed = [bool](@($values | Where-Object { $_ -match 'Fail' }).Count) }
+    return [pscustomobject]@{ Text = $text; Failed = [bool](@($values | Where-Object { $_ -match 'Fail' }).Count); Overall = [string](Get-ZtpPropertyValue $Response 'Status' ''); Steps = @() }
+}
+function Test-OobeProxyDone([object]$Status) {
+    # The WebProxy step of the status tree reports Succeeded; a status without steps counts when the whole job did.
+    $step = @(@(Get-ZtpPropertyValue $Status 'Steps' @()) | Where-Object { $null -ne $_ -and $_.Name -eq 'WebProxy' }) | Select-Object -First 1
+    if ($step) { return $step.Status -eq 'Succeeded' }
+    return [string](Get-ZtpPropertyValue $Status 'Overall' '') -eq 'Succeeded'
+}
+function Get-OobeWebProxy([object]$Entry) {
+    # The node list's web_proxy (Invoke-ZtpEnvironment.ps1 writes it from networking.outbound.proxy) as the service's
+    # WebProxyConfiguration { ConnectionUri, BypassList }; $null when the node list sets no proxy.
+    $proxy = Get-ZtpPropertyValue $Entry 'web_proxy'
+    $uri = [string](Get-ZtpPropertyValue $proxy 'connection_uri' '')
+    if (-not $uri) { return $null }
+    [ordered]@{ ConnectionUri = $uri; BypassList = @(@(Get-ZtpPropertyValue $proxy 'bypass_list' @()) | Where-Object { $_ } | ForEach-Object { [string]$_ }) }
 }
 function Find-OobeManagementAdapter([string]$NodeName, [object[]]$Adapters, [string]$MacKey) {
     $match = @($Adapters | Where-Object { $_.Mac -eq $MacKey })
@@ -327,8 +341,9 @@ $wanted = @(foreach ($n in $selected) {
         $mgmt = Get-ZtpPropertyValue $n 'management'
         if ($null -eq $mgmt) { continue }
         $mode = ([string](Get-ZtpPropertyValue $mgmt 'ip_assignment' 'static')).ToLowerInvariant()
-        if ($mode -and $mode -ne 'static') { continue }
         $entry = @($listed | Where-Object { $_ -is [System.Collections.IDictionary] -and [string]$_['name'] -eq $name }) | Select-Object -First 1
+        # A node that gets only the proxy (not static) is found the same way.
+        if ($mode -and $mode -ne 'static' -and -not (Get-OobeWebProxy $entry)) { continue }
         if ($entry -and [string](Get-ZtpPropertyValue $entry 'maintenance_address' '')) { continue }
         try {
             $macKey = ConvertTo-ZtpMacKey ([string](Get-ZtpPropertyValue $mgmt 'mac_address' ''))
@@ -378,7 +393,11 @@ foreach ($n in $selected) {
         $macKey = ConvertTo-ZtpMacKey ([string](Get-ZtpPropertyValue $mgmt 'mac_address' ''))
         $row.MacAddress = Format-ZtpMac $macKey
         $ip = [string](Get-ZtpPropertyValue $mgmt 'ip_address' '')
-        if (-not $maintenance -and $mode -ne 'static') {
+        # The proxy and bypass list for the maintenance environment to reach Azure (scenario.outbound_path proxy).
+        $webProxy = Get-OobeWebProxy $entry
+        if ($webProxy -and -not @($webProxy.BypassList).Count) { throw "${name}: the node list's web_proxy has no bypass_list; the maintenance environment needs at least one entry with a proxy URL (networking.outbound.proxy.bypass)." }
+        $proxyText = if ($webProxy) { "web proxy $($webProxy.ConnectionUri) bypassing $(@($webProxy.BypassList) -join ',')" } else { '' }
+        if (-not $maintenance -and $mode -ne 'static' -and -not $webProxy) {
             $why = "${name}: $mode, and no maintenance_address in the node list; nothing to report in the maintenance environment."
             Write-ZtpLog $why
             if (-not $Execute) { "PLAN: $why" }
@@ -399,7 +418,8 @@ foreach ($n in $selected) {
         $nic = Find-OobeManagementAdapter $name $read.Adapters $macKey
         $row.Adapter = $nic.Name; $row.Address = $nic.Ip
 
-        if ($mode -ne 'static') {
+        $static = $mode -eq 'static'
+        if (-not $static -and -not $webProxy) {
             $text = "management port $($nic.Name) ($(Format-ZtpMac $macKey)) is $mode and reports $(Format-OobeAdapter $nic)"
             Write-ZtpLog "${name}: $text; the Device stage doesn't change it."
             if (-not $Execute) { "PLAN: ${name}: $mode; no change. The $text." }
@@ -407,49 +427,62 @@ foreach ($n in $selected) {
             $row.Status = 'Reported'; [pscustomobject]$row; continue
         }
 
-        $mask = [string](Get-ZtpPropertyValue $mgmt 'subnet_mask' '')
-        $gateway = [string](Get-ZtpPropertyValue $mgmt 'gateway' '')
-        $dns = @(@(Get-ZtpPropertyValue $mgmt 'dns_servers' @()) | Where-Object { $_ } | ForEach-Object { [string]$_ })
-        $vlanValue = Get-ZtpPropertyValue $mgmt 'vlan_id' 0
-        $vlan = if ($null -ne $vlanValue -and "$vlanValue" -ne '') { [int]"$vlanValue" } else { 0 }
-        $missing = @(@{ ip_address = $ip; subnet_mask = $mask; gateway = $gateway }.GetEnumerator() | Where-Object { -not $_.Value } | ForEach-Object Key | Sort-Object)
-        if ($missing) { throw "${name}: a static management address needs $($missing -join ', ') in the parameters file's management block." }
-        $wanted = "static $ip $mask gw $gateway$(if ($dns) { " DNS $($dns -join ',')" }) VLAN $vlan"
-        $already = Test-OobeStatic $nic $ip $mask $gateway $dns $vlan
-        $holders = @($read.Adapters | Where-Object { $_.Mac -ne $macKey -and $_.Ip -eq $ip -and -not $_.EnableDhcp })
-        if ($holders.Count) {
-            $h = $holders[0]
-            throw "${name}: the adapter $($h.Name) ($(Format-ZtpMac $h.Mac)) in the maintenance environment already holds the target static address $ip. ZTP doesn't release another port's address (that request shape isn't verified live), so nothing was changed. Free the address on that port, or correct ip_address or mac_address in the environment file, then rerun the Device stage."
+        $request = [ordered]@{}
+        $already = $false
+        if ($static) {
+            $mask = [string](Get-ZtpPropertyValue $mgmt 'subnet_mask' '')
+            $gateway = [string](Get-ZtpPropertyValue $mgmt 'gateway' '')
+            $dns = @(@(Get-ZtpPropertyValue $mgmt 'dns_servers' @()) | Where-Object { $_ } | ForEach-Object { [string]$_ })
+            $vlanValue = Get-ZtpPropertyValue $mgmt 'vlan_id' 0
+            $vlan = if ($null -ne $vlanValue -and "$vlanValue" -ne '') { [int]"$vlanValue" } else { 0 }
+            $missing = @(@{ ip_address = $ip; subnet_mask = $mask; gateway = $gateway }.GetEnumerator() | Where-Object { -not $_.Value } | ForEach-Object Key | Sort-Object)
+            if ($missing) { throw "${name}: a static management address needs $($missing -join ', ') in the parameters file's management block." }
+            $wanted = "static $ip $mask gw $gateway$(if ($dns) { " DNS $($dns -join ',')" }) VLAN $vlan"
+            $already = Test-OobeStatic $nic $ip $mask $gateway $dns $vlan
+            $holders = @($read.Adapters | Where-Object { $_.Mac -ne $macKey -and $_.Ip -eq $ip -and -not $_.EnableDhcp })
+            if ($holders.Count) {
+                $h = $holders[0]
+                throw "${name}: the adapter $($h.Name) ($(Format-ZtpMac $h.Mac)) in the maintenance environment already holds the target static address $ip. ZTP doesn't release another port's address (that request shape isn't verified live), so nothing was changed. Free the address on that port, or correct ip_address or mac_address in the environment file, then rerun the Device stage."
+            }
+            Write-ZtpLog "${name}: maintenance environment at ${maintenance}: management port $($nic.Name) ($(Format-ZtpMac $macKey)) reports $(Format-OobeAdapter $nic); wanted $wanted$(if ($webProxy) { " and the $proxyText" })."
+            if (-not $already) {
+                $adapters = [System.Collections.Generic.List[object]]::new()
+                $adapters.Add([ordered]@{ MacAddress = $nic.RawMac; EnableDhcp = $false; IpAddress = $ip; SubnetMask = $mask; Gateway = $gateway; DnsAddressArray = @($dns); VlanId = $(if ($nic.VlanIsText) { [string]$vlan } else { $vlan }) })
+                # The request shape verified live (2026-11-07): Network.NetworkAdapters only; the claim sets the host name.
+                $request.Network = [ordered]@{ NetworkAdapters = @($adapters) }
+            }
         }
-        Write-ZtpLog "${name}: maintenance environment at ${maintenance}: management port $($nic.Name) ($(Format-ZtpMac $macKey)) reports $(Format-OobeAdapter $nic); wanted $wanted."
-
-        $adapters = [System.Collections.Generic.List[object]]::new()
-        $adapters.Add([ordered]@{ MacAddress = $nic.RawMac; EnableDhcp = $false; IpAddress = $ip; SubnetMask = $mask; Gateway = $gateway; DnsAddressArray = @($dns); VlanId = $(if ($nic.VlanIsText) { [string]$vlan } else { $vlan }) })
-        # The request shape verified live (2026-11-07): Network.NetworkAdapters only; the claim sets the host name.
-        $request = [ordered]@{ Network = [ordered]@{ NetworkAdapters = @($adapters) } }
+        else {
+            $wanted = ''
+            Write-ZtpLog "${name}: maintenance environment at ${maintenance}: management port $($nic.Name) ($(Format-ZtpMac $macKey)) is $mode and reports $(Format-OobeAdapter $nic); the Device stage sets only the $proxyText."
+        }
+        # WebProxy (the service contract's WebProxyConfiguration: ConnectionUri, BypassList[]), sent whenever the node list
+        # names a proxy: the Configurator App's proxy URL and bypass list, which Learn gives at Arc registration.
+        if ($webProxy) { $request.WebProxy = $webProxy }
+        $wantedText = (@($(if ($request.Contains('Network')) { $wanted }), $proxyText) | Where-Object { $_ }) -join ' and '
 
         if (-not $Execute) {
-            if ($already) { "PLAN: ${name}: $($nic.Name) ($(Format-ZtpMac $macKey)) already reports $wanted in the maintenance environment; no change." }
+            if (-not $request.Count) { "PLAN: ${name}: $($nic.Name) ($(Format-ZtpMac $macKey)) already reports $wanted in the maintenance environment; no change." }
             else {
-                "PLAN: ${name}: POST SetArcBootstrapDeviceConfiguration to ${maintenance}: $($nic.Name) ($(Format-ZtpMac $macKey)) $wanted (reports $(Format-OobeAdapter $nic) now); then wait up to $TimeoutMinutes minutes for the adapter to report it."
+                "PLAN: ${name}: POST SetArcBootstrapDeviceConfiguration to ${maintenance}: $(if ($request.Contains('Network')) { "$($nic.Name) ($(Format-ZtpMac $macKey)) $wanted (reports $(Format-OobeAdapter $nic) now)" } else { $proxyText })$(if ($request.Contains('Network') -and $webProxy) { " and the $proxyText" }); then wait up to $TimeoutMinutes minutes for $(if ($request.Contains('Network')) { 'the adapter to report it' } else { 'the WebProxy step to succeed' })."
             }
-            $row.Status = if ($already) { 'AlreadySet' } else { 'Planned' }
+            $row.Status = if (-not $request.Count) { 'AlreadySet' } else { 'Planned' }
             [pscustomobject]$row; continue
         }
-        if ($already) {
+        if (-not $request.Count) {
             Write-ZtpLog "${name}: $($nic.Name) already reports $wanted; nothing to change."
             Send-DeviceEvent $name 'DeviceAddressAlreadySet' "$($nic.Name) ($(Format-ZtpMac $macKey)) already reports $wanted"
             $row.Status = 'AlreadySet'; $row.Address = $ip; [pscustomobject]$row; continue
         }
-        if (-not $PSCmdlet.ShouldProcess("maintenance environment of $name ($maintenance)", "Set $wanted on $($nic.Name)")) { continue }
+        if (-not $PSCmdlet.ShouldProcess("maintenance environment of $name ($maintenance)", "Set $wantedText on $($nic.Name)")) { continue }
 
         $null = Invoke-OobeCall $maintenance 'SetArcBootstrapDeviceConfiguration' 'POST' $request
-        Write-ZtpLog "${name}: SetArcBootstrapDeviceConfiguration sent: $($nic.Name) $wanted."
+        Write-ZtpLog "${name}: SetArcBootstrapDeviceConfiguration sent: $($nic.Name) $wantedText."
         Write-DeviceChange $name $maintenance $nic $request 'requested' ''
-        Send-DeviceEvent $name 'DeviceConfigurationSubmitted' "$($nic.Name) ($(Format-ZtpMac $macKey)) $wanted"
+        Send-DeviceEvent $name 'DeviceConfigurationSubmitted' "$($nic.Name) ($(Format-ZtpMac $macKey)) $wantedText"
 
         # When the management port carries the maintenance address, the service comes back on the static one.
-        $addresses = @($maintenance) + @(if ($ip -ne $maintenance) { $ip })
+        $addresses = @($maintenance) + @(if ($static -and $ip -and $ip -ne $maintenance) { $ip })
         $deadline = [datetime]::UtcNow.AddMinutes($TimeoutMinutes)
         $last = ''
         $done = $false
@@ -475,17 +508,23 @@ foreach ($n in $selected) {
                 Write-DeviceChange $name $maintenance $nic $request 'failed' $status.Text
                 throw "${name}: SetArcBootstrapDeviceConfiguration failed: $($status.Text)"
             }
-            if ($mine -and (Test-OobeStatic $mine $ip $mask $gateway $dns $vlan) -and -not @($now.Adapters | Where-Object { $_.Mac -ne $macKey -and $_.Ip -eq $ip -and -not $_.EnableDhcp }).Count) { $done = $true; break }
+            # Done when the static configuration shows on the management port (when one was asked for) and, with a proxy, when
+            # the status tree's WebProxy step reports Succeeded.
+            $networkDone = -not $static -or ($mine -and (Test-OobeStatic $mine $ip $mask $gateway $dns $vlan) -and -not @($now.Adapters | Where-Object { $_.Mac -ne $macKey -and $_.Ip -eq $ip -and -not $_.EnableDhcp }).Count)
+            $proxyDone = -not $webProxy -or ($verified.Address -and (Test-OobeProxyDone $status))
+            if ($networkDone -and $proxyDone) { $done = $true; break }
             if ([datetime]::UtcNow -ge $deadline) {
                 Write-DeviceChange $name $maintenance $nic $request 'timedOut' $status.Text
-                throw "${name}: the maintenance environment didn't report $wanted on $($nic.Name) within $TimeoutMinutes minutes; last: $text."
+                throw "${name}: the maintenance environment didn't report $wantedText on $($nic.Name) within $TimeoutMinutes minutes; last: $text."
             }
             Start-Sleep -Seconds $PollIntervalSeconds
         }
         Write-DeviceChange $name $maintenance $nic $request 'applied' $status.Text
-        Write-ZtpLog "${name}: $($nic.Name) reports $wanted in the maintenance environment."
-        Send-DeviceEvent $name 'DeviceAddressSet' "$($nic.Name) ($(Format-ZtpMac $macKey)) $wanted"
-        $row.Status = 'Changed'; $row.Address = $ip; $row.Released = @()
+        Write-ZtpLog "${name}: $($nic.Name) reports $wantedText in the maintenance environment."
+        if ($request.Contains('Network')) { Send-DeviceEvent $name 'DeviceAddressSet' "$($nic.Name) ($(Format-ZtpMac $macKey)) $wanted" }
+        elseif ($static) { Send-DeviceEvent $name 'DeviceAddressAlreadySet' "$($nic.Name) ($(Format-ZtpMac $macKey)) already reports $wanted" }
+        if ($webProxy) { Send-DeviceEvent $name 'DeviceProxySet' "$($nic.Name) ($(Format-ZtpMac $macKey)) $proxyText" }
+        $row.Status = 'Changed'; $row.Address = $(if ($static) { $ip } else { $nic.Ip }); $row.Released = @()
         [pscustomobject]$row
     }
     catch {

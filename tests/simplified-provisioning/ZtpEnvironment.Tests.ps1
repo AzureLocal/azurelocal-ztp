@@ -1377,3 +1377,106 @@ Describe 'Derived BIOS: hardware-safety rules (restore target, shared slots, per
         (Get-ZtpDerivedBios -Environment $both -Node $both.cluster_nodes[0]).Plan[0] | Should -BeLike "*the management port 'Embedded NIC 1' of nodes[[]0]*"
     }
 }
+
+Describe 'Outbound path and proxy (scenario.outbound_path, networking.outbound.proxy)' {
+    BeforeAll {
+        $script:savedToolkitRootOut = $env:AZL_TOOLKIT_ROOT
+        $env:AZL_TOOLKIT_ROOT = Join-Path $TestDrive 'no-toolkit-here'
+        $script:proxyEdit = { param($d)
+            $d.scenario['outbound_path'] = 'proxy'
+            $d.networking['outbound'] = [ordered]@{ proxy = [ordered]@{ url = 'http://proxy.improbability.cloud:3128'; bypass = @('localhost', '127.0.0.1', '192.0.2.*', 'node-01', 'node-02', 'iic-azl-cl01', '*.improbability.cloud') } }
+        }
+        function script:Invoke-Outbound {
+            param([string]$Name, [scriptblock]$Edit)
+            $root = New-TestRepo -Name "out-$Name" -Copy 'Invoke-ZtpEnvironment.ps1', 'ZtpEnvironment.Common.ps1'
+            $bin = Join-Path $root 'scripts/simplified-provisioning'
+            Set-Content -LiteralPath (Join-Path $bin 'Invoke-ZtpProvisioning.ps1') -Value '[CmdletBinding(SupportsShouldProcess)] param($ConfigPath, $NodeName, $BmcCredential, $EdgeUserPassword, $InfrastructureFile, $Node, $EventLogPath, $From, [switch]$ConfirmNotClustered, [switch]$SkipCertificateCheck, [switch]$RetryProvisionOs, [switch]$RebuildImages, [switch]$Execute)'
+            $infra = New-TestInfrastructureV5 -Name "out-$Name" -Edit $Edit
+            $text = Get-StepText (& (Join-Path $bin 'Invoke-ZtpEnvironment.ps1') -InfrastructureFile $infra *>&1)
+            [pscustomobject]@{
+                Text  = $text
+                Nodes = (Get-Content -LiteralPath (Join-Path $root 'config/simplified-provisioning/nodes.json') -Raw | ConvertFrom-Json).nodes
+                Bicep = (Get-Content -LiteralPath (Join-Path $bin 'bicep/main.parameters.json') -Raw | ConvertFrom-Json).parameters
+            }
+        }
+        function script:Get-OutboundProblem { param([scriptblock]$Edit, [string]$Name) try { Assert-ZtpEnvironment -Environment (Read-ZtpInfrastructure -Path (New-TestInfrastructureV5 -Name $Name -Edit $Edit)) -Source 'infra.yml' -InformationAction SilentlyContinue; '' } catch { $_.Exception.Message } }
+    }
+    AfterAll { $env:AZL_TOOLKIT_ROOT = $script:savedToolkitRootOut }
+
+    It 'maps the schema 5 keys through the loader: direct gives a Public site and no proxy' {
+        $e = Read-ZtpInfrastructure -Path (New-TestInfrastructureV5 -Name 'out-map-direct')
+        $e.network_intents.outbound.path | Should -Be 'direct'
+        $o = Get-ZtpOutbound -Environment $e
+        "$($o.Path) $($o.ConnectivityType) '$($o.ProxyUrl)' $(@($o.ProxyBypass).Count)" | Should -Be "direct Public '' 0"
+        $none = Read-ZtpInfrastructure -Path (New-TestInfrastructureV5 -Name 'out-map-none' -Edit { param($d) $d.scenario.Remove('outbound_path') })
+        (Get-ZtpOutbound -Environment $none).ConnectivityType | Should -Be 'Public' -Because 'no outbound_path is what ZTP always did'
+    }
+
+    It 'maps a proxy: the URL and the bypass list from networking.outbound.proxy' {
+        $e = Read-ZtpInfrastructure -Path (New-TestInfrastructureV5 -Name 'out-map-proxy' -Edit $script:proxyEdit)
+        @(Test-ZtpEnvironment -Environment $e) | Should -BeNullOrEmpty
+        $o = Get-ZtpOutbound -Environment $e
+        "$($o.Path) $($o.ConnectivityType) $($o.ProxyUrl)" | Should -Be 'proxy Proxy http://proxy.improbability.cloud:3128'
+        @($o.ProxyBypass) -join ',' | Should -Be 'localhost,127.0.0.1,192.0.2.*,node-01,node-02,iic-azl-cl01,*.improbability.cloud'
+    }
+
+    It 'writes a Public site and no web_proxy for direct' {
+        $r = Invoke-Outbound -Name 'direct'
+        $r.Bicep.connectivity_type.value | Should -Be 'Public'
+        foreach ($n in @($r.Nodes)) { $n.PSObject.Properties.Name | Should -Not -Contain 'web_proxy' }
+        $r.Text | Should -Match 'Outbound path: direct; site connectivity Public\.'
+    }
+
+    It 'writes a Proxy site and each node''s web_proxy (the Device stage sends it) for proxy' {
+        $r = Invoke-Outbound -Name 'proxy' -Edit $script:proxyEdit
+        $r.Bicep.connectivity_type.value | Should -Be 'Proxy'
+        @($r.Nodes).Count | Should -Be 2
+        foreach ($n in @($r.Nodes)) {
+            $n.web_proxy.connection_uri | Should -Be 'http://proxy.improbability.cloud:3128'
+            @($n.web_proxy.bypass_list) -join ',' | Should -Be 'localhost,127.0.0.1,192.0.2.*,node-01,node-02,iic-azl-cl01,*.improbability.cloud'
+        }
+        $r.Text | Should -Match 'Outbound path: proxy; site connectivity Proxy\. The Device stage sets the proxy http://proxy\.improbability\.cloud:3128'
+    }
+
+    It 'keeps a one-entry bypass list a list in the node list' {
+        $r = Invoke-Outbound -Name 'proxy-one' -Edit { param($d) & $script:proxyEdit $d; $d.networking.outbound.proxy['bypass'] = @('192.0.2.*') }
+        ($r.Nodes[0].web_proxy.bypass_list -is [array]) | Should -BeTrue
+        @($r.Nodes[0].web_proxy.bypass_list) | Should -Be @('192.0.2.*')
+    }
+
+    It 'refuses the Arc gateway paths, naming scenario.outbound_path' -ForEach 'arc_gateway', 'proxy_arc_gateway', 'private_path' {
+        $refused = $_
+        $message = Get-OutboundProblem -Name "out-refuse-$refused" -Edit { param($d) $d.scenario['outbound_path'] = $refused }.GetNewClosure()
+        $message | Should -BeLike "*scenario.outbound_path is '$refused'; Azure Arc gateway isn't supported with simplified machine provisioning*ZTP provisions with direct or proxy*"
+        $message | Should -Not -BeLike '*network_intents.outbound*' -Because 'messages use the schema 5 paths the operator wrote'
+    }
+
+    It 'names each proxy problem in schema 5 paths' {
+        $cases = @(
+            @{ Name = 'no-url'; Edit = { param($d) & $script:proxyEdit $d; $d.networking.outbound.proxy.Remove('url') }; Expect = '*networking.outbound.proxy.url is required when scenario.outbound_path is proxy*' }
+            @{ Name = 'creds'; Edit = { param($d) & $script:proxyEdit $d; $d.networking.outbound.proxy['url'] = 'http://user:pw@proxy.improbability.cloud:3128' }; Expect = '*networking.outbound.proxy.url must be http://<host>:<port>*without credentials*' }
+            @{ Name = 'pac'; Edit = { param($d) & $script:proxyEdit $d; $d.networking.outbound.proxy['url'] = 'http://proxy.improbability.cloud/proxy.pac' }; Expect = '*networking.outbound.proxy.url must be http://<host>:<port>*PAC file*' }
+            @{ Name = 'local'; Edit = { param($d) & $script:proxyEdit $d; $d.networking.outbound.proxy['url'] = 'http://proxy.iic.local:3128' }; Expect = '*is in a .local domain*' }
+            @{ Name = 'no-bypass'; Edit = { param($d) & $script:proxyEdit $d; $d.networking.outbound.proxy.Remove('bypass') }; Expect = '*networking.outbound.proxy.bypass must be a non-empty list when scenario.outbound_path is proxy*' }
+            @{ Name = 'local-token'; Edit = { param($d) & $script:proxyEdit $d; $d.networking.outbound.proxy['bypass'] = @('<local>') }; Expect = '*has <local>; use localhost*' }
+            @{ Name = 'cidr'; Edit = { param($d) & $script:proxyEdit $d; $d.networking.outbound.proxy['bypass'] = @('192.0.2.0/24') }; Expect = "*has '192.0.2.0/24'; CIDR isn't supported*" }
+            @{ Name = 'joined'; Edit = { param($d) & $script:proxyEdit $d; $d.networking.outbound.proxy['bypass'] = @('localhost,192.0.2.*') }; Expect = '*give one name or address per list entry*' }
+            @{ Name = 'bad-path'; Edit = { param($d) $d.scenario['outbound_path'] = 'Proxy' }; Expect = "*scenario.outbound_path must be direct or proxy (case matters), not 'Proxy'*" }
+        )
+        foreach ($c in $cases) { Get-OutboundProblem -Name "out-bad-$($c.Name)" -Edit $c.Edit | Should -BeLike $c.Expect -Because $c.Name }
+    }
+
+    It 'reads no proxy key for direct, even when the file has one' {
+        $e = Read-ZtpInfrastructure -Path (New-TestInfrastructureV5 -Name 'out-direct-with-proxy' -Edit { param($d) & $script:proxyEdit $d; $d.scenario['outbound_path'] = 'direct'; $d.networking.outbound.proxy['bypass'] = @('<local>') })
+        @(Test-ZtpEnvironment -Environment $e) | Should -BeNullOrEmpty
+        (Get-ZtpOutbound -Environment $e).ProxyUrl | Should -Be ''
+    }
+
+    It 'finds scenario.outbound_path and networking.outbound.proxy.url and .bypass in the toolkit schema' -Skip:(-not $ztpHaveToolkit) {
+        $toolkit = if ($script:savedToolkitRootOut) { $script:savedToolkitRootOut } else { Join-Path $script:repoRoot '..\azurelocal-toolkit' }
+        $schema = Get-Content -LiteralPath (Join-Path $toolkit 'config\variables\schema\infrastructure.schema.json') -Raw | ConvertFrom-Json -AsHashtable -Depth 100
+        $schema.properties.scenario.properties.outbound_path.enum | Should -Be @('direct', 'proxy', 'arc_gateway', 'proxy_arc_gateway', 'private_path')
+        $schema.properties.networking.properties.outbound.properties.proxy.properties.Keys | Should -Contain 'url'
+        $schema.properties.networking.properties.outbound.properties.proxy.properties.Keys | Should -Contain 'bypass'
+    }
+}

@@ -27,6 +27,12 @@ The keys Invoke-ZtpEnvironment.ps1 reads:
                                                           reaches Azure: dhcp, DHCP on the management network
                                                           (Mode A or B); static, none there (Mode C: another port
                                                           with role provisioning must have DHCP))
+    network_intents.outbound.path                        (optional; direct (default) or proxy: how the machines reach
+                                                          Azure. Schema 5: scenario.outbound_path. Arc gateway paths
+                                                          are refused: simplified provisioning doesn't support them)
+    network_intents.outbound.proxy.url, .bypass          (with path proxy; schema 5 networking.outbound.proxy: the site
+                                                          connectivity is Proxy and the Device stage sends the URL and
+                                                          bypass list to each maintenance environment)
     hardware.bios, cluster_nodes[].bios                  (optional; BIOS attribute -> string value: the machine's final
                                                           state, set by the Boot stage)
     hardware.bios_during_provisioning, cluster_nodes[].bios_during_provisioning (optional; temporary values for the
@@ -271,6 +277,34 @@ function Test-ZtpEnvironment {
     # the site's Manual setting and the claim's Manual adapter (site, for environments without the Device stage).
     $method = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.static_method'
     if ($null -ne $method -and "$method" -ne '' -and ([string]$method).ToLowerInvariant() -notin 'device', 'site') { $problems.Add("network_intents.management.static_method must be device or site, not '$method'.") }
+    # How the machines reach Azure. Simplified machine provisioning takes direct or proxy: Learn says Azure Arc gateway isn't
+    # supported with it in the preview, and private_path registers through an Arc gateway.
+    $outPath = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.outbound.path'
+    if ($null -ne $outPath -and "$outPath" -ne '') {
+        if ([string]$outPath -cin 'arc_gateway', 'proxy_arc_gateway', 'private_path') { $problems.Add("network_intents.outbound.path is '$outPath'; Azure Arc gateway isn't supported with simplified machine provisioning in the preview, and private_path registers through an Arc gateway. ZTP provisions with direct or proxy.") }
+        elseif ([string]$outPath -cnotin 'direct', 'proxy') { $problems.Add("network_intents.outbound.path must be direct or proxy (case matters), not '$outPath'.") }
+    }
+    if ([string]$outPath -ceq 'proxy') {
+        # Learn (Register Azure Local with Azure Arc, and Decision 10 of the network considerations): a plain proxy, no PAC file,
+        # no credentials, no .local domain; the bypass list holds each machine's address and NetBIOS name, the cluster's, and
+        # the infrastructure addresses, with localhost instead of <local> and wildcards instead of CIDR.
+        $proxyUrl = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.outbound.proxy.url'
+        if (-not (& $isText $proxyUrl)) { $problems.Add('network_intents.outbound.proxy.url is required when network_intents.outbound.path is proxy.') }
+        elseif ([string]$proxyUrl -notmatch '^https?://[A-Za-z0-9.-]+(:\d{1,5})?/?$') { $problems.Add("network_intents.outbound.proxy.url must be http://<host>:<port> (or https://), a plain proxy without credentials, path or PAC file, not '$proxyUrl'.") }
+        elseif (([uri][string]$proxyUrl).Host -like '*.local') { $problems.Add("network_intents.outbound.proxy.url '$proxyUrl' is in a .local domain, which Azure Local doesn't support for the proxy.") }
+        $bypass = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.outbound.proxy.bypass'
+        if ($bypass -isnot [System.Collections.IList] -or @($bypass).Count -eq 0 -or @($bypass | Where-Object { -not (& $isText $_) }).Count) {
+            $problems.Add('network_intents.outbound.proxy.bypass must be a non-empty list when network_intents.outbound.path is proxy: each machine''s address and NetBIOS name, the cluster''s, and the infrastructure addresses (the maintenance environment needs at least one entry with a proxy URL).')
+        }
+        else {
+            foreach ($b in @($bypass)) {
+                $t = ([string]$b).Trim()
+                if ($t -eq '<local>') { $problems.Add('network_intents.outbound.proxy.bypass has <local>; use localhost.') }
+                elseif ($t.Contains('/')) { $problems.Add("network_intents.outbound.proxy.bypass has '$t'; CIDR isn't supported, use a wildcard such as 192.0.2.*.") }
+                elseif ($t -match '[,;\s]') { $problems.Add("network_intents.outbound.proxy.bypass has '$t'; give one name or address per list entry.") }
+            }
+        }
+    }
     # Where the Device stage scans for a maintenance environment it has no address for (the DHCP pool of the provisioning network).
     $scan = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.provisioning_dhcp_range'
     if ($null -ne $scan) {
@@ -560,6 +594,29 @@ function Get-ZtpStaticMethod {
     $method = [string](Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.static_method')
     if ($method) { return $method.ToLowerInvariant() }
     return 'device'
+}
+
+function Get-ZtpOutbound {
+    <#
+    .SYNOPSIS
+    How the machines reach Azure, from network_intents.outbound (schema 5: scenario.outbound_path and
+    networking.outbound.proxy): Path (direct or proxy), the site's ConnectivityType (Public or Proxy), and for a proxy the
+    ProxyUrl and ProxyBypass list the Device stage sends to each maintenance environment. Test-ZtpEnvironment checks the
+    values first; this only reads them.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment)
+    $path = [string](Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.outbound.path')
+    if ($path -cne 'proxy') { return [pscustomobject]@{ Path = $(if ($path) { $path } else { 'direct' }); ConnectivityType = 'Public'; ProxyUrl = ''; ProxyBypass = @() } }
+    $listed = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.outbound.proxy.bypass'
+    $bypass = @($listed | Where-Object { $null -ne $_ -and ([string]$_).Trim() } | ForEach-Object { ([string]$_).Trim() })
+    [pscustomobject]@{
+        Path             = 'proxy'
+        ConnectivityType = 'Proxy'
+        ProxyUrl         = [string](Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.outbound.proxy.url')
+        ProxyBypass      = $bypass
+    }
 }
 
 function Get-ZtpManagementAssignment {
@@ -1156,6 +1213,16 @@ function ConvertFrom-ZtpInfrastructureV5 {
     # identity.local_admin (the deployment admin), networking.ntp_servers and hardware.sbe aren't mapped: OS configuration
     # and deployment read them; ZTP doesn't.
     $env_['network_intents'] = [ordered]@{ management = $mgmt }
+    # How the machines reach Azure: scenario.outbound_path, and the proxy of networking.outbound for the path proxy.
+    $outbound = [ordered]@{}
+    & $put $outbound 'path' (& $v 'scenario.outbound_path')
+    if ((& $v 'networking.outbound.proxy') -is [System.Collections.IDictionary]) {
+        $proxy = [ordered]@{}
+        & $put $proxy 'url' (& $v 'networking.outbound.proxy.url')
+        if ($null -ne (& $v 'networking.outbound.proxy.bypass')) { $proxy['bypass'] = & $v 'networking.outbound.proxy.bypass' }
+        $outbound['proxy'] = $proxy
+    }
+    if ($outbound.Count) { $env_.network_intents['outbound'] = $outbound }
     $env_['cluster_nodes'] = $nodes.ToArray()
 
     $ztp = [ordered]@{}
@@ -1228,6 +1295,8 @@ function ConvertTo-ZtpSchema5Message {
         'azure_identity.azure_tenant_id'               = 'azure.tenant_id'
         'azure_resources.location'                     = 'azure.location'
         'network_intents.management.'                  = 'networking.management.'
+        'network_intents.outbound.path'                = 'scenario.outbound_path'
+        'network_intents.outbound.'                    = 'networking.outbound.'
         'ztp.subscription_id'                          = 'azure.subscription_id (or provisioning.simplified.subscription_id)'
         'ztp.resource_group'                           = 'azure.resource_group (or provisioning.simplified.resource_group)'
         'ztp.site_name'                                = 'provisioning.simplified.site_name'

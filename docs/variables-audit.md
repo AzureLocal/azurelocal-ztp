@@ -18,7 +18,7 @@ This page walks every stage and script in `scripts/simplified-provisioning/` (Re
 | Layout and evidence | R6, M7, M8, H2, H3 | Sub-folder and file names under the controlled `media_path` and `evidence_path`; Sonar follows the log names. |
 | Internal polling and tuning | R4, R5, M5, B8, Bt4, Bt6, V2, D9 | Probe windows, poll intervals, cluster size: no environment has needed another value. |
 | Dell protocol, auto-detected | B19 | The iDRAC 7.30 boot-target workaround is chosen from the BMC's `AllowableValues`, not by the operator. A gap on an HPE or Lenovo BMC without `Usb`. |
-| Unsupported by the service path | A11, V5 | Connectivity `Public` (no proxy details in the site setting), and the Configurator App voucher fallback. |
+| Unsupported by the service path | V5 | The Configurator App voucher fallback. |
 
 ## Resolve (`Get-ZtpBootstrapIso.ps1`)
 
@@ -111,6 +111,7 @@ This page walks every stage and script in `scripts/simplified-provisioning/` (Re
 | D8 | Address, mask, gateway, DNS, VLAN sent | `nodes[].network_adapters[].ip_address`, `networking.management.*` | `cluster_nodes[].ip_address`, `network_intents.management.*` | none | controlled |
 | D9 | Skip the certificate check of the maintenance environment; probe timeout 500 ms; request timeout 30 s; poll interval from the Ready stage | none | none | fixed | HARD-CODED (kept): the maintenance environment's certificate is self-generated and can't be pinned; the timeouts are tuning |
 | D10 | The REST operations (`GetNetworkAdapters`, `SetArcBootstrapDeviceConfiguration`, ...) | none | none | fixed | HARD-CODED (kept): Microsoft's API |
+| D11 | The proxy and bypass list sent to each maintenance environment (`WebProxy`: `ConnectionUri`, `BypassList`), for every node, static or not, with the static address when there is one | `networking.outbound.proxy.url`, `.bypass`, with `scenario.outbound_path` `proxy` | `network_intents.outbound.proxy.url`, `.bypass` (node list `web_proxy`) | none: `direct` sends no proxy | controlled (new). The field names are the service contract's; not yet sent to a live maintenance environment |
 
 ## Azure and Ready (`Invoke-ZtpAzureProvisioning.ps1`, `Wait-ZtpMachineReady.ps1`, `bicep/main.bicep`, `Invoke-ZtpEnvironment.ps1`)
 
@@ -126,7 +127,7 @@ This page walks every stage and script in `scripts/simplified-provisioning/` (Re
 | A8 | Network setting: Manual or Automatic, with the range, gateway, DNS, VLAN | `networking.management.*`, `static_method`, the nodes' `ip_assignment` | `network_intents.management.*` | Automatic with `static_method: device` | controlled |
 | A9 | Time setting: Automatic or Manual NTP and the servers | `provisioning.simplified.ntp.configuration`, `server`, `alternate_server` | `ztp.ntp.*` | Automatic | controlled (new) |
 | A10 | Time zone | `site.time_zone` | `ztp.time_zone` | none (required) | controlled |
-| A11 | Connectivity setting `Public` | none | none | `Public` | HARD-CODED (kept): the site setting carries no proxy details, and Arc gateway is not supported with simplified provisioning (rule AZL-016); a proxy path needs a new Bicep shape first |
+| A11 | Connectivity setting: `Public` for `direct`, `Proxy` for `proxy`. `arc_gateway`, `proxy_arc_gateway` and `private_path` stop the key check: Arc gateway is not supported with simplified provisioning (rule AZL-016), and `private_path` registers through one | `scenario.outbound_path` | `network_intents.outbound.path` | `direct` (`Public`) | controlled. The site setting's own proxy properties are not published, so the URL and bypass list go to each maintenance environment (D11). `Proxy` is not yet proven live |
 | A12 | Security setting: reference the Key Vault (purpose `LocalAdminCredentials`) | `provisioning.simplified.use_key_vault_configuration` | `ztp.use_key_vault_configuration` | true | controlled (new) |
 | A13 | Role assignment: the Azure Local resource provider's Connected Machine Resource Manager role on the resource group | `provisioning.simplified.assign_hci_rp_role` | `ztp.assign_hci_rp_role` | true | controlled (new) |
 | A14 | Role assignment: each edge machine's constrained delegation (RBAC Administrator, conditioned to Connected Machine Resource Administrator) on the resource group and the Key Vault | `provisioning.simplified.assign_provisioning_roles` | `ztp.assign_provisioning_roles` | true | controlled (new) |

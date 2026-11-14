@@ -134,6 +134,9 @@ $runName = $Node -join '+'
 # Without a maintenance address, the Device stage scans this range for the maintenance environment and matches it by MAC.
 $scanRange = Get-ZtpEnvValue -Environment $env_ -Path 'network_intents.management.provisioning_dhcp_range'
 $scanText = if ($scanRange -is [System.Collections.IDictionary] -and $scanRange['start'] -and $scanRange['end']) { "$($scanRange['start'])-$($scanRange['end'])" } else { '' }
+# How the machines reach Azure (scenario.outbound_path): the site's connectivity setting, and for a proxy the URL and bypass
+# list the Device stage sends to each maintenance environment, as the Configurator App does.
+$outbound = Get-ZtpOutbound -Environment $env_
 @{ nodes = @($nodeList | ForEach-Object {
             $entry = [ordered]@{ name = [string]$_.name; service_tag = [string]$_.service_tag; bmc_address = [string]$_.idrac_ip; management_ip = [string]$_.ip_address }
             # For the handoff's per-port detail and the management address mode: the management port's MAC and
@@ -147,6 +150,8 @@ $scanText = if ($scanRange -is [System.Collections.IDictionary] -and $scanRange[
             $maintenance = [string](Get-ZtpEnvValue -Environment $_ -Path 'maintenance_address')
             if ($maintenance) { $entry.maintenance_address = $maintenance }
             elseif ($scanText) { $entry.maintenance_scan_range = $scanText }
+            # The proxy the maintenance environment uses to reach Azure (networking.outbound.proxy), set by the Device stage.
+            if ($outbound.ProxyUrl) { $entry.web_proxy = [ordered]@{ connection_uri = $outbound.ProxyUrl; bypass_list = @($outbound.ProxyBypass) } }
             # bios: what the Boot stage applies (the final state with the temporary values merged over it).
             $bios = Get-ZtpEnvironmentBios -Environment $env_ -Node $_ -Kind boot
             if ($bios.Count) { $entry.bios = $bios }
@@ -187,6 +192,7 @@ if ($restorePlan) { Write-Output "BIOS set back by the Restore stage after Netwo
 foreach ($line in @(Get-ZtpDerivedBiosPlan -Environment $env_ -Node $Node)) { Write-Output $line }
 $withoutMaintenance = @($nodeList | Where-Object { $_.name -in $Node -and -not (Get-ZtpEnvValue -Environment $_ -Path 'maintenance_address') } | ForEach-Object { [string]$_.name })
 if ($withoutMaintenance) { Write-Output "Device stage (static address in the maintenance environment): no maintenance address for $($withoutMaintenance -join ', '); it scans $(if ($scanText) { $scanText } else { "the management subnet $([string]$env_.network_intents.management.subnet)" }) for TCP 20001 and finds each node by its management MAC." }
+Write-Output "Outbound path: $($outbound.Path); site connectivity $($outbound.ConnectivityType)$(if ($outbound.ProxyUrl) { ". The Device stage sets the proxy $($outbound.ProxyUrl) and the bypass list ($(@($outbound.ProxyBypass) -join ', ')) in each maintenance environment" })."
 $staticMethod = Get-ZtpStaticMethod -Environment $env_
 Write-Output "Static management addresses set by: $(if ($staticMethod -eq 'device') { 'the Device stage, by MAC, before the claim (site network Automatic, no Manual adapter in the claim)' } else { 'the OS install, from the site''s Manual setting and the claim''s Manual adapter (static_method site)' }); the Network stage checks them after the install."
 $edgeSecret = Split-ZtpKeyVaultReference (Get-ZtpEnvValue -Environment $env_ -Path 'ztp.maintenance_password_secret')
@@ -267,8 +273,9 @@ $bicepParameters = [ordered]@{
         ntp_configuration_choice  = @{ value = [string](& $setting 'ztp.ntp.configuration' 'Automatic') }
         ntp_server                = @{ value = [string](& $setting 'ztp.ntp.server' '') }
         alternate_ntp_server      = @{ value = [string](& $setting 'ztp.ntp.alternate_server' '') }
-        # Public is the only connectivity ZTP provisions with: the site setting carries no proxy details (see docs/variables-audit.md).
-        connectivity_type         = @{ value = 'Public' }
+        # Public for scenario.outbound_path direct, Proxy for proxy. The proxy URL and bypass list go to each maintenance
+        # environment (the Device stage): the site setting's own proxy properties aren't published (see docs/variables-audit.md).
+        connectivity_type         = @{ value = $outbound.ConnectivityType }
     }
 }
 $bicepParameters | ConvertTo-Json -Depth 10 | Set-Content $parameters
