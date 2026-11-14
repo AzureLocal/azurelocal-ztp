@@ -50,4 +50,4 @@ You supply one thing: an environment file, started from one of the toolkit's tem
 | Know how the virtual USB boot and voucher read-back work | [Redfish virtual USB and voucher read-back](redfish-virtual-usb-vouchers.md) |
 | Know what the Azure template creates | [Azure provisioning from vouchers](azure-provisioning-vouchers.md) |
 
-The [Server preparation](server-preparation.md) and [Azure portal provisioning](azure-portal-provisioning.md) guides describe an earlier, manual route. They're kept for reference and are superseded by the operator guide.
+The [Azure portal provisioning](azure-portal-provisioning.md) guide describes an earlier, manual claim in the portal. It's kept for reference and is superseded by the operator guide. The earlier server preparation guide, and the scripts and `environment.yaml` configuration it used, are retired.

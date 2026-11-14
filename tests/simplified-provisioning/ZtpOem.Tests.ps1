@@ -38,6 +38,25 @@ Describe 'OEM definitions (config/oem)' {
         Set-Content (Join-Path $root 'old.json') '{ "oem": "P", "publisher": "P", "sbe": { "discoveryManifestUrl": "http://ignored" }, "bmc": { "kind": "x", "logServices": [] } }'
         (Get-ZtpOemConfig -Oem old -ConfigRoot $root).bmc.kind | Should -Be 'x' -Because 'an older definition with an sbe block still loads; the block is ignored'
     }
+    It 'carries the one-time USB boot of the BMC as data: Dell''s in dell.json, none for an OEM that doesn''t need it' {
+        $dell = Get-ZtpOemUsbBootOnce -Config (Get-ZtpOemConfig -Oem Dell)
+        $dell.ManagerAttributes['ServerBoot.1.BootOnce'] | Should -Be 'Enabled'
+        $dell.ManagerAttributes['ServerBoot.1.FirstBootDevice'] | Should -Be 'vFDD'
+        $dell.OverrideTarget | Should -Be 'Floppy'
+        Get-ZtpOemUsbBootOnce -Config (Get-ZtpOemConfig -Oem HPE) | Should -BeNullOrEmpty
+    }
+    It 'lets another vendor''s file supply its own boot-once values, and rejects a malformed block' {
+        $root = Join-Path $TestDrive 'oem-once'; $null = New-Item -ItemType Directory $root
+        Set-Content (Join-Path $root 'iic.json') '{ "oem": "IIC", "publisher": "Infinite Improbability Corp", "bmc": { "kind": "x", "logServices": [], "usbBootOnce": { "managerAttributes": { "Iic.OneTimeBoot": "UsbKey" } } } }'
+        $once = Get-ZtpOemUsbBootOnce -Config (Get-ZtpOemConfig -Oem iic -ConfigRoot $root)
+        @($once.ManagerAttributes.Keys) | Should -Be @('Iic.OneTimeBoot')
+        $once.ManagerAttributes['Iic.OneTimeBoot'] | Should -Be 'UsbKey'
+        $once.OverrideTarget | Should -BeNullOrEmpty
+        Set-Content (Join-Path $root 'bad.json') '{ "oem": "B", "publisher": "B", "bmc": { "kind": "x", "logServices": [], "usbBootOnce": { "managerAttributes": { "A": 1 } } } }'
+        { Get-ZtpOemConfig -Oem bad -ConfigRoot $root } | Should -Throw '*managerAttributes.A that is not a string*'
+        Set-Content (Join-Path $root 'empty.json') '{ "oem": "E", "publisher": "E", "bmc": { "kind": "x", "logServices": [], "usbBootOnce": { } } }'
+        { Get-ZtpOemConfig -Oem empty -ConfigRoot $root } | Should -Throw '*neither managerAttributes nor overrideTarget*'
+    }
     It 'contains no tenant, subscription or private address data' {
         foreach ($f in Get-ChildItem (Join-Path $global:ztpO_root 'config/oem') -Filter *.json) {
             (Get-Content $f.FullName -Raw) | Should -Not -Match '(?i)\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-(?!000000000000)[0-9a-f]{12}'

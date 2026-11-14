@@ -1,243 +1,60 @@
-# ZTP Deployment Scripts
+# Scripts
 
-This directory contains PowerShell scripts for Azure Local Zero-Touch Provisioning deployment operations.
+PowerShell 7 scripts of azurelocal-ztp. Everything is in [`simplified-provisioning/`](simplified-provisioning/README.md).
 
-## Directory Structure
-
-```
+```text
 scripts/
-├── common/                    # Shared modules and utilities
-│   ├── AzureLocalConfig.psm1  # Configuration management module
-│   └── RedfishUtils.psm1      # iDRAC Redfish API utilities
-├── tools/
-│   └── utilities/             # Individual operation scripts
-│       ├── Discover-Servers.ps1
-│       ├── Mount-AzureLocalISO.ps1
-│       ├── Set-ServerBootSource.ps1
-│       └── Restart-Servers.ps1
-├── examples/                  # Example and test scripts
-│   ├── ConfigExample.ps1      # Configuration usage examples
-│   └── Test-ZTPDeployment.ps1 # Pipeline validation script
-└── Trigger-ZTPDeployment.ps1  # Manual workflow trigger script
+└── simplified-provisioning/   # Entry point, orchestrator, stage scripts, BMC tools, Bicep
 ```
 
-## Simplified provisioning (virtual USB, vouchers, Azure)
+## Where to start
 
-`scripts/simplified-provisioning/` holds the stage scripts for Microsoft's Simplified machine provisioning without a physical USB stick: per-node virtual USB images, Redfish boot, voucher read-back, the static management address in the maintenance environment (Device), the Bicep-based Azure deployment, the wait-for-ready poller, the management address check (Network), the BIOS restore (Restore) and the handoff. The stages are Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Restore and Handoff. ZTP ends at the Handoff; OEM drivers, the SBE and the deployment admin are OS configuration, which comes next. Every script is a plan by default and changes hardware or Azure only with `-Execute`. See [simplified-provisioning/README.md](simplified-provisioning/README.md).
+| You want to | Run |
+| --- | --- |
+| Provision nodes end to end (plan, then `-Execute`) | `simplified-provisioning/Invoke-ZtpEnvironment.ps1 -InfrastructureFile <path>` |
+| Drive the stages yourself | `simplified-provisioning/Invoke-ZtpProvisioning.ps1` (see [Orchestrator reference](../docs/automated-bootstrap.md)) |
+| Look at or recover a node's BMC | The BMC tools: `Get-ZtpBmcJob.ps1`, `Get-ZtpBootSetting.ps1`, `Reset-ZtpBmc.ps1`, `Reset-ZtpBootSequence.ps1` (below) |
 
-## Key Scripts
+The entry point and the BMC tools read the one master `infrastructure.yml` (azurelocal-toolkit schema 5) that every Azure Local tool reads; the file has no default path. No script prompts: a credential comes from a `-Credential` parameter or from a secret reference in the file.
 
-### Trigger-ZTPDeployment.ps1
-Manually triggers the ZTP deployment pipeline via GitHub API.
+## BMC tools
 
-**Usage:**
-```powershell
-.\scripts\Trigger-ZTPDeployment.ps1 `
-    -GitHubToken "ghp_your_token" `
-    -RepositoryOwner "AzureLocal" `
-    -RepositoryName "azurelocal-ztp" `
-    -DryRun `
-    -WaitForCompletion
-```
+Small tools for the BMCs ZTP drives. Each takes `-InfrastructureFile` (required), `-NodeName` (default: every node in the file) and `-Credential` (default: `hardware.bmc.username` and `hardware.bmc.password` of the file, secret references read by the toolkit's resolver). They read only `nodes[].name`, `nodes[].bmc.ip_address`, `hardware.bmc` and, for `Reset-ZtpBootSequence.ps1`, `hardware.vendor`. Exit codes: 0 done (or planned with `-WhatIf`), 1 a BMC call failed, 2 an input is missing or not usable (nothing was sent).
 
-**Features:**
-- Trigger workflow with custom parameters
-- Optional wait for completion
-- Progress monitoring
-- Error handling
-
-### Individual Operation Scripts
-
-#### Discover-Servers.ps1
-Discovers hardware information from iDRAC endpoints.
+| Script | What it does | Changes |
+| --- | --- | --- |
+| `Get-ZtpBmcJob.ps1` | Lists each BMC's job queue (for example the BIOS jobs of the Boot and Restore stages); `-JobState`, `-RecentMinutes`, `-Wait` until no job is active | Nothing |
+| `Get-ZtpBootSetting.ps1` | Power state, boot mode, one-time override, boot order and boot options, with the stale (`Unavailable:`) entries counted | Nothing |
+| `Reset-ZtpBmc.ps1` | Restarts the BMC (`Manager.Reset`, `GracefulRestart` or `ForceRestart`); the host keeps running | The BMC, with `-WhatIf` |
+| `Reset-ZtpBootSequence.ps1` | Dell only: clears the iDRAC job queue, sets `SysPrepClean` with its BIOS job, clears a one-time override and restarts (`-NoRestart` stages it). Needs `-ConfirmNotClustered` | The node's UEFI boot entries, with `-WhatIf` |
 
 ```powershell
-.\scripts\tools\utilities\Discover-Servers.ps1 `
-    -ServerIPs "{idrac_ips}" `
-    -Credential $cred `
-    -Full
+./scripts/simplified-provisioning/Get-ZtpBootSetting.ps1 -InfrastructureFile D:\ztp\infrastructure.yml -NodeName iic-node-01
+./scripts/simplified-provisioning/Reset-ZtpBmc.ps1 -InfrastructureFile D:\ztp\infrastructure.yml -NodeName iic-node-01 -WhatIf
 ```
 
-#### Mount-AzureLocalISO.ps1
-Mounts ISO files to virtual media on iDRAC.
+## What replaced the older scripts
+
+Earlier versions of this folder had `common/`, `tools/` and `examples/`, with their own configuration loader (`environment.yaml`, `cluster-config.md`) and interactive prompts. They are retired. What does each job now:
+
+| Job | Where it is now |
+| --- | --- |
+| Reading the configuration | `simplified-provisioning/ZtpEnvironment.Common.ps1` (`Read-ZtpInfrastructure`) reads the master `infrastructure.yml`. The toolkit's templates (`config/variables/examples`) and its `Test-InfrastructureFile.ps1` replace `cluster-config.md`, `cluster-reference.env` and their generators and validators |
+| Secrets | The toolkit's secret resolver, `scripts/common/secrets/AzlSecret.psm1` (`keyvault://`, `env://`, `file://`, `command://`). Vaults and a check that the secrets the file names exist: the toolkit's `Deploy-KeyVaults.ps1` |
+| Hardware discovery (serial numbers, MACs, inventory) | azurelocal-toolkit `Invoke-HardwareDiscovery.ps1`, `Get-HardwareInventory.ps1`, `Update-InfrastructureYml-FromDiscovery.ps1` |
+| Maintenance ISO download, share, mount, boot source, restart, watch | `Get-ZtpBootstrapIso.ps1`, `Publish-MaintenanceIso.ps1`, `Mount-ZtpVirtualUsb.ps1` (`Mount`, `Eject`, `Status`, `-Restart`), `Start-MaintenanceBoot.ps1`, `Wait-ZtpBootstrapComplete.ps1`, `Start-ZtpMonitor.ps1` |
+| Resource group | `Invoke-ZtpAzureProvisioning.ps1` (`provisioning.simplified.create_resource_group`); outside ZTP the toolkit's `Deploy-ResourceGroups.ps1` |
+| BOSS virtual disk, gold-image ISO mount | azurelocal-toolkit `Invoke-ResetBossVirtualDisk.ps1`, `Invoke-MountGoldImageISO.ps1` |
+| Azure tenant and on-premises server inventory | azurelocal-toolkit `scripts/common/discovery/` (`Inventory-AzureTenant.ps1`, `Get-TenantInfo.ps1`, `Get-OnPremInventory.ps1`) |
+| Service principals and role assignments | azurelocal-toolkit `New-CicdBootstrap.ps1` (the automation identity) and `Assign-AzureLocalRBAC.ps1`. ZTP needs no Arc onboarding principal: the claim registers the machines with Arc |
+| Cluster shutdown | azurelocal-toolkit `scripts/common/utilities/tools/Stop-AzureLocalCluster.ps1` |
+| Running from a pipeline | [`examples/pipelines/`](../examples/README.md) and [Running from a pipeline](../docs/automation-pipelines.md) |
+
+## Tests
 
 ```powershell
-# Using interactive credentials
-.\scripts\tools\utilities\Mount-AzureLocalISO.ps1 `
-    -ServerIPs "{idrac_ips}" `
-    -Credential $cred `
-    -IsoSharePath "{share_network_path}\{iso_filename}"
-
-# Using Azure Key Vault (automatic from config)
-.\scripts\tools\utilities\Mount-AzureLocalISO.ps1 `
-    -IsoSharePath "{share_network_path}\{iso_filename}"
+Import-Module Pester -RequiredVersion 5.9.1
+Invoke-Pester ./tests
 ```
 
-#### Set-ServerBootSource.ps1
-Configures boot source for next boot.
-
-```powershell
-.\scripts\tools\utilities\Set-ServerBootSource.ps1 `
-    -ServerIPs "{idrac_ips}" `
-    -Credential $cred `
-    -BootSource "Cd"
-```
-
-#### Restart-Servers.ps1
-Restarts servers via iDRAC.
-
-```powershell
-.\scripts\tools\utilities\Restart-Servers.ps1 `
-    -ServerIPs "{idrac_ips}" `
-    -Credential $cred `
-    -ForceRestart
-```
-
-## Configuration Management
-
-All scripts use centralized configuration from `config/environment.yaml` or `config/environment.json`.
-
-### Loading Configuration
-```powershell
-Import-Module ".\scripts\common\AzureLocalConfig.psm1"
-$config = Get-AzureLocalConfig
-
-# Get values
-$subscriptionId = $config.GetValue('azure.mgmt_subscription_id')
-$nodeIPs = $config.GetNodeIPs()
-```
-
-### Quick Access
-```powershell
-# Get single values quickly
-$clusterName = Get-ConfigValue 'resources.cluster_name'
-```
-
-## Prerequisites
-
-### PowerShell Modules
-```powershell
-# Required for configuration
-Install-Module -Name powershell-yaml -Force
-
-# Required for Azure operations
-Install-Module -Name Az -Force
-```
-
-### Permissions
-- GitHub Personal Access Token (for trigger script)
-- Azure subscription access
-- iDRAC network access
-- File share permissions
-
-## Usage Patterns
-
-### Test Configuration
-```powershell
-.\scripts\examples\Test-ZTPDeployment.ps1 -DryRun
-```
-
-### Manual Operations
-```powershell
-# Load config
-Import-Module ".\scripts\common\AzureLocalConfig.psm1"
-$config = Get-AzureLocalConfig
-
-# Get credentials
-$cred = Get-Credential -Message "Enter iDRAC credentials"
-
-# Run individual operations
-.\scripts\tools\utilities\Discover-Servers.ps1 -ServerIPs $config.GetIdracIPs() -Credential $cred
-```
-
-### Full Pipeline Trigger
-```powershell
-.\scripts\Trigger-ZTPDeployment.ps1 `
-    -GitHubToken $env:GITHUB_TOKEN `
-    -RepositoryOwner "AzureLocal" `
-    -RepositoryName "azurelocal-ztp" `
-    -SkipDiscovery `
-    -WaitForCompletion
-```
-
-## Logging
-
-All scripts generate detailed logs in the `logs/` directory:
-
-```
-logs/
-├── ztp-deployment/           # Pipeline logs
-├── discovery/               # Hardware discovery
-├── mount/                   # ISO mount operations
-├── reboot/                  # Restart operations
-└── verification/            # Verification steps
-```
-
-## Error Handling
-
-Scripts include comprehensive error handling:
-- Network connectivity checks
-- Credential validation
-- Operation timeouts
-- Detailed error messages
-- Structured logging
-
-## Security
-
-- Credentials never logged in plain text
-- Secure credential handling
-- Key Vault integration for secrets
-- No hardcoded sensitive data
-
-## Testing
-
-Use the test script to validate setup:
-```powershell
-.\scripts\examples\Test-ZTPDeployment.ps1 -DryRun
-```
-
-This validates:
-- Configuration loading
-- Script dependencies
-- Directory structure
-- Network connectivity (optional)
-
-## Troubleshooting
-
-### Common Issues
-
-**Configuration not found:**
-- Verify `config/environment.yaml` exists
-- Check file permissions
-- Validate YAML/JSON syntax
-
-**Module import errors:**
-- Install required PowerShell modules
-- Check PowerShell execution policy
-- Verify module paths
-
-**Network connectivity:**
-- Test iDRAC IP reachability
-- Verify firewall rules
-- Check DNS resolution
-
-**Authentication failures:**
-- Validate iDRAC credentials
-- Check Key Vault access
-- Verify Azure permissions
-
-### Debug Mode
-Most scripts support verbose logging:
-```powershell
-$VerbosePreference = "Continue"
-.\script.ps1 -Verbose
-```
-
-## Contributing
-
-When adding new scripts:
-1. Follow PowerShell best practices
-2. Include comprehensive help documentation
-3. Add error handling and logging
-4. Update this README
-5. Test with dry-run mode
+The tests mock every Redfish, Azure and HTTP call; nothing leaves the machine. Set `AZL_TOOLKIT_ROOT` to an azurelocal-toolkit clone (or keep one next to this repository) to also run the checks against the toolkit's schema and templates.

@@ -70,9 +70,10 @@ if (`$global:ztpRunBehavior.ContainsKey('$script')) { & `$global:ztpRunBehavior[
             VoucherDirectory = $script:vouchers; SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroupName = 'rg-example'
             ParameterFile = 'main.parameters.json'; StageScriptRoot = $script:stubRoot; StatePath = $script:statePath
             InformationAction = 'SilentlyContinue'; WarningAction = 'SilentlyContinue'; EventLogPath = (Join-Path $TestDrive 'events.jsonl'); HandoffPath = (Join-Path $TestDrive 'handoff.json')
-            ClusterInputsPath = (Join-Path $TestDrive 'inputs.yaml')
+            ClusterInputsPath = (Join-Path $TestDrive 'inputs.yaml'); Oem = 'Dell'
         }
         foreach ($k in $Arguments.Keys) { $base[$k] = $Arguments[$k] }
+        foreach ($k in @($base.Keys)) { if ($base[$k] -is [string] -and $base[$k] -eq '<unset>') { $base.Remove($k) } }
         & $script:orchestrator @base
     }
     $script:called = { @($global:ztpRunCalls | ForEach-Object Script) }
@@ -103,6 +104,23 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
     It 'refuses -Execute without -ConfirmNotClustered before any stage runs' {
         { & $script:invoke @{ Execute = $true; BmcCredential = $script:bmc } } | Should -Throw '*ConfirmNotClustered*'
         $global:ztpRunCalls.Count | Should -Be 0
+    }
+
+    It 'has no built-in vendor: -Oem has no default, and the Boot and Bootstrap stages stop without it before anything runs' {
+        $oem = @((Get-Command $script:orchestrator).ScriptBlock.Ast.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'Oem' })
+        $oem.Count | Should -Be 1
+        $oem[0].DefaultValue | Should -BeNullOrEmpty
+        { & $script:invoke @{ Oem = '<unset>' } } | Should -Throw '*Stage Boot: no value for Oem*'
+        { & $script:invoke @{ Oem = '<unset>'; Stage = 'Bootstrap' } } | Should -Throw '*Stage Bootstrap: no value for Oem*'
+        $global:ztpRunCalls.Count | Should -Be 0
+        $wait = (Get-Command (Join-Path (Split-Path $script:orchestrator) 'Wait-ZtpBootstrapComplete.ps1')).Parameters['Oem']
+        @($wait.Attributes | Where-Object { $_ -is [System.Management.Automation.ParameterAttribute] -and $_.Mandatory }).Count | Should -BeGreaterThan 0
+    }
+
+    It 'passes the vendor (-Oem) to the Boot and Bootstrap stage scripts' {
+        $null = & $script:invoke @{ Oem = 'Lenovo'; Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false }
+        ($global:ztpRunCalls | Where-Object Script -EQ 'Start-MaintenanceBoot.ps1').Params.Oem | Should -Be 'Lenovo'
+        ($global:ztpRunCalls | Where-Object Script -EQ 'Wait-ZtpBootstrapComplete.ps1').Params.Oem | Should -Be 'Lenovo'
     }
 
     It 'requires the BMC credential to act on the Boot stage' {
@@ -448,7 +466,7 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
 
     It 'ignores the SBE settings of an older settings file, with a note, instead of failing' {
         $config = Join-Path $TestDrive 'settings-old.json'
-        @{ NodesFile = $script:nodesFile; SourcePath = 'D:\Media\from-file.iso'; ImageDirectory = $script:images; ShareHost = '192.0.2.20'; VoucherDirectory = $script:vouchers; SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroupName = 'rg-example'; ParameterFile = 'main.parameters.json'; SbeModel = 'AX760'; SbeSolutionVersion = 'latest'; SbePackagePath = 'D:\sbe.zip' } | ConvertTo-Json | Set-Content -LiteralPath $config
+        @{ NodesFile = $script:nodesFile; SourcePath = 'D:\Media\from-file.iso'; ImageDirectory = $script:images; ShareHost = '192.0.2.20'; VoucherDirectory = $script:vouchers; SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroupName = 'rg-example'; ParameterFile = 'main.parameters.json'; Oem = 'Dell'; SbeModel = 'AX760'; SbeSolutionVersion = 'latest'; SbePackagePath = 'D:\sbe.zip' } | ConvertTo-Json | Set-Content -LiteralPath $config
         $out = (& $script:orchestrator -ConfigPath $config -StageScriptRoot $script:stubRoot -StatePath $script:statePath -WarningAction SilentlyContinue 6>&1 | ForEach-Object { "$_" }) -join "`n"
         $out | Should -BeLike '*SbeModel in*ignored: SBE belongs to OS configuration.*'
         $out | Should -BeLike '*SbePackagePath in*ignored: SBE belongs to OS configuration.*'
@@ -509,7 +527,7 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
 
     It 'reads its settings from -ConfigPath, lets a parameter win and rejects unknown keys' {
         $config = Join-Path $TestDrive 'settings.json'
-        @{ NodesFile = $script:nodesFile; SourcePath = 'D:\Media\from-file.iso'; ImageDirectory = $script:images; ShareHost = '192.0.2.20'; ImageNamePrefix = 'usb-'; VoucherDirectory = $script:vouchers; SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroupName = 'rg-example'; ParameterFile = 'main.parameters.json' } | ConvertTo-Json | Set-Content -LiteralPath $config
+        @{ NodesFile = $script:nodesFile; SourcePath = 'D:\Media\from-file.iso'; ImageDirectory = $script:images; ShareHost = '192.0.2.20'; ImageNamePrefix = 'usb-'; Oem = 'Dell'; VoucherDirectory = $script:vouchers; SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroupName = 'rg-example'; ParameterFile = 'main.parameters.json' } | ConvertTo-Json | Set-Content -LiteralPath $config
         $null = & $script:orchestrator -ConfigPath $config -SourcePath 'D:\Media\from-parameter.iso' -StageScriptRoot $script:stubRoot -StatePath $script:statePath -InformationAction SilentlyContinue -WarningAction SilentlyContinue
         $global:ztpRunCalls[0].Params.SourcePath | Should -Be 'D:\Media\from-parameter.iso'
         $global:ztpRunCalls[0].Params.ImageNamePrefix | Should -Be 'usb-'

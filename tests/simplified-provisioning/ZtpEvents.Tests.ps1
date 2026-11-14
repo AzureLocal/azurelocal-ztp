@@ -297,7 +297,7 @@ Describe 'Wait-ZtpBootstrapComplete.ps1' {
         $global:ztpE_run = {
             param([hashtable]$Extra = @{})
             $a = @{ NodeName = 'node-01'; NodesFile = $global:ztpE_nodes; ImageDirectory = $TestDrive; Credential = $global:ztpE_bmc; SubscriptionId = '00000000-0000-0000-0000-000000000000'
-                EventLogPath = $global:ztpE_events; PollSeconds = 15; MaxPollSeconds = 60; InformationAction = 'SilentlyContinue'; WarningAction = 'SilentlyContinue'; Execute = $true }
+                EventLogPath = $global:ztpE_events; Oem = 'Dell'; PollSeconds = 15; MaxPollSeconds = 60; InformationAction = 'SilentlyContinue'; WarningAction = 'SilentlyContinue'; Execute = $true }
             foreach ($k in $Extra.Keys) { $a[$k] = $Extra[$k] }
             & (Join-Path $global:ztpE_scripts 'Wait-ZtpBootstrapComplete.ps1') @a
         }

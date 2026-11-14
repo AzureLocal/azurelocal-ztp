@@ -7,8 +7,9 @@ shows its state.
 Mount: Redfish VirtualMedia.InsertMedia of //<ShareHost>/<ShareName>/<ImageNamePrefix><node>.img on the manager's
 USB-stick (RemovableDisk) slot over CIFS with WriteProtected=false (with -RfsWriteAttribute, which iDRAC 7.30 needs, the
 manager attribute RFS.<n>.WriteProtected = Read Write instead), then a read-back that proves the image is attached, then a
-one-time boot to that slot (Usb where the BMC offers it; on iDRAC 7.30 ServerBoot.1.FirstBootDevice=vFDD plus the
-Once/Floppy override, confirmed before the reset) and, with -Restart, a power-cycle (ForceRestart when on, On
+one-time boot to that slot (Usb where the BMC offers it; otherwise what the OEM definition's bmc.usbBootOnce says, for
+iDRAC 7.30 in config/oem/dell.json ServerBoot.1.FirstBootDevice=vFDD plus the Once/Floppy override, confirmed before the
+reset) and, with -Restart, a power-cycle (ForceRestart when on, On
 when off). The image stays inserted after the maintenance environment installs itself on the boot disk: its setup
 service writes the ownership voucher back to the one writable USB drive it finds (\vouchers\<serial>\), so the slot must
 stay attached and writable until Wait-ZtpVoucher.ps1 sees the voucher.
@@ -53,6 +54,10 @@ One BMC address instead of the node list (exactly one -NodeName).
 BMC account (required with -Execute).
 .PARAMETER SkipCertificateCheck
 Accept the BMC's self-signed certificate.
+.PARAMETER Oem
+OEM definition in config/oem (config/oem/<Oem>.json; hardware.vendor of the infrastructure file). Its bmc.usbBootOnce
+says how to boot the USB-stick slot once on a BMC that offers no Usb override target. No default: without it such a BMC
+fails the mount before the restart.
 .PARAMETER Execute
 Make the changes; without it only the plan is printed.
 .EXAMPLE
@@ -80,6 +85,7 @@ param(
     [string]$BmcAddress,
     [pscredential]$Credential,
     [switch]$SkipCertificateCheck,
+    [ValidatePattern('^[A-Za-z0-9_-]{1,40}$')][string]$Oem,
     [switch]$Execute
 )
 
@@ -87,6 +93,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'ZtpVirtualUsb.Common.ps1')
 if (-not (Get-Command New-ZtpRedfishSession -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'ZtpRedfish.Common.ps1') }
+. (Join-Path $PSScriptRoot 'ZtpOem.Common.ps1')
 
 
 if ($Action -eq 'Mount' -and [string]::IsNullOrWhiteSpace($ShareHost)) { throw '-ShareHost is required to mount.' }
@@ -104,7 +111,7 @@ if (-not $Execute) {
             'Mount' {
                 if ($RfsWriteAttribute -and -not $ReadOnly) { "PLAN: $node set RFS.<n>.WriteProtected = Read Write" }
                 "PLAN: $node insert $(& $imageUrl $node) on the USB-stick (RemovableDisk) slot over CIFS, WriteProtected=$writeProtected"
-                "PLAN: $node verify Inserted, Image and WriteProtected=$writeProtected; one-time boot to the USB-stick slot (Usb, or vFDD and Once/Floppy on iDRAC 7.30)"
+                "PLAN: $node verify Inserted, Image and WriteProtected=$writeProtected; one-time boot to the USB-stick slot (Usb, or bmc.usbBootOnce of the OEM definition $(if ($Oem) { $Oem } else { '<none given>' }))"
                 if ($Restart) { "PLAN: $node power-cycle (ForceRestart, or On when off)" }
             }
             'Eject' {
@@ -134,6 +141,8 @@ function Set-ZtpRfsWriteProtection {
 }
 
 if (-not $Credential) { throw '-Credential (the BMC account) is required with -Execute.' }
+# How a BMC without a Usb override target boots its USB-stick slot once: data of the OEM definition, not of this script.
+$usbBootOnce = if ($Action -eq 'Mount' -and $Oem) { Get-ZtpOemUsbBootOnce -Config (Get-ZtpOemConfig -Oem $Oem) } else { $null }
 $targets = @(Get-ZtpBmcTarget -NodeName $NodeName -Nodes $Nodes -NodesFile $NodesFile -BmcAddress $BmcAddress)
 foreach ($target in $targets) {
     $node = [string]$target.Node
@@ -240,25 +249,36 @@ foreach ($target in $targets) {
         elseif ([bool]$reported -ne $writeProtected) {
             throw "$($node): the image is attached with WriteProtected=$reported, not $writeProtected (retry with -RfsWriteAttribute; the maintenance environment cannot write the voucher to a read-only drive)."
         }
-        # iDRAC 7.30 doesn't offer Usb as an override target, and accepts the request without effect. Its USB-stick slot boots as virtual floppy.
+        # A BMC that doesn't offer Usb as an override target (iDRAC 7.30 accepts the request without effect) boots its
+        # USB-stick slot once the way its OEM definition says (bmc.usbBootOnce; iDRAC: virtual floppy, vFDD).
         $allowed = @()
         if ($system.PSObject.Properties['Boot'] -and $system.Boot.PSObject.Properties['BootSourceOverrideTarget@Redfish.AllowableValues']) { $allowed = @($system.Boot.'BootSourceOverrideTarget@Redfish.AllowableValues') }
         if ($allowed.Count -gt 0 -and $allowed -notcontains 'Usb') {
-            $null = Invoke-ZtpRedfish -Session $session -Path "$($manager.'@odata.id')/Attributes" -Method Patch -Body @{ Attributes = @{ 'ServerBoot.1.BootOnce' = 'Enabled'; 'ServerBoot.1.FirstBootDevice' = 'vFDD' } }
+            if (-not $usbBootOnce) {
+                $source = if ($Oem) { "the OEM definition config/oem/$($Oem.ToLowerInvariant()).json has no bmc.usbBootOnce" } else { 'no -Oem was given' }
+                throw "$($node): the BMC offers no Usb boot override target ($($allowed -join ', ')) and $source, so ZTP doesn't know how to boot the USB-stick slot once. Add bmc.usbBootOnce (managerAttributes and/or overrideTarget) to the OEM definition of hardware.vendor. Not restarting."
+            }
+            if ($usbBootOnce.ManagerAttributes.Count) {
+                $null = Invoke-ZtpRedfish -Session $session -Path "$($manager.'@odata.id')/Attributes" -Method Patch -Body @{ Attributes = $usbBootOnce.ManagerAttributes }
+            }
             # The iDRAC applies that attribute in the background. A reset before it lands boots the disk instead (seen on a
             # second node on 2026-11-05), so also set the standard one-time override to the same slot, and don't reset
             # until the system reports it.
-            if ($allowed -contains 'Floppy') {
-                $null = Invoke-ZtpRedfish -Session $session -Path $system.'@odata.id' -Method Patch -Body @{ Boot = @{ BootSourceOverrideEnabled = 'Once'; BootSourceOverrideTarget = 'Floppy' } }
+            $onceTarget = $usbBootOnce.OverrideTarget
+            if ($onceTarget) {
+                $expected = "Once/$onceTarget"
+                if ($allowed -contains $onceTarget) {
+                    $null = Invoke-ZtpRedfish -Session $session -Path $system.'@odata.id' -Method Patch -Body @{ Boot = @{ BootSourceOverrideEnabled = 'Once'; BootSourceOverrideTarget = $onceTarget } }
+                }
+                $deadline = (Get-Date).AddSeconds(120); $override = ''
+                do {
+                    $now = Invoke-ZtpRedfish -Session $session -Path $system.'@odata.id'
+                    $override = "$($now.Boot.BootSourceOverrideEnabled)/$($now.Boot.BootSourceOverrideTarget)"
+                    if ($override -eq $expected) { break }
+                    Start-Sleep -Seconds 5
+                } while ((Get-Date) -lt $deadline)
+                if ($override -ne $expected) { throw "$($node): the one-time boot to the virtual USB slot didn't take; the system reports $override. Not restarting." }
             }
-            $deadline = (Get-Date).AddSeconds(120); $override = ''
-            do {
-                $now = Invoke-ZtpRedfish -Session $session -Path $system.'@odata.id'
-                $override = "$($now.Boot.BootSourceOverrideEnabled)/$($now.Boot.BootSourceOverrideTarget)"
-                if ($override -eq 'Once/Floppy') { break }
-                Start-Sleep -Seconds 5
-            } while ((Get-Date) -lt $deadline)
-            if ($override -ne 'Once/Floppy') { throw "$($node): the one-time boot to the virtual USB slot didn't take; the system reports $override. Not restarting." }
         }
         else {
             $null = Invoke-ZtpRedfish -Session $session -Path $system.'@odata.id' -Method Patch -Body @{ Boot = @{ BootSourceOverrideEnabled = 'Once'; BootSourceOverrideTarget = 'Usb' } }

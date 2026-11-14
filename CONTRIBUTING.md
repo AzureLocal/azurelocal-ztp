@@ -55,7 +55,7 @@ This project uses [Conventional Commits](https://www.conventionalcommits.org/):
 
 Examples:
 - `feat(redfish): add HPE iLO 6 virtual media support`
-- `fix(scripts): handle non-200 response from Mount-AzureLocalISO`
+- `fix(scripts): handle non-200 response from Mount-ZtpVirtualUsb`
 - `docs(guides): align with azloc-2604 RP list`
 
 ## Development Guidelines

@@ -1,123 +1,13 @@
-# Azure Local Configuration System
+# Configuration
 
-This directory contains the centralized configuration system for Azure Local ZTP deployments. Instead of hardcoding values in scripts, all configuration is stored in structured files that can be easily updated and version controlled.
+Your environment's values are not here. They are in one master `infrastructure.yml` (azurelocal-toolkit schema 5) that you keep outside this repository and pass to every script with `-InfrastructureFile`. Start from a toolkit template: the [ZTP-only template](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/variables/examples/infrastructure.ztp.example.yml) or the [full template](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/variables/examples/infrastructure.example.yml). How ZTP reads it, key by key: [Master infrastructure.yml (schema 5)](../docs/infrastructure-schema-5.md). The file holds secret references only (`keyvault://<vault>/<secret>` and the toolkit's other forms), never a secret.
 
-## Configuration Files
+This folder holds what the scripts need besides that file:
 
-### environment.yaml (Recommended)
-- Human-readable format with comments
-- Supports complex data structures
-- Better for configuration management
-- Requires PowerShell-YAML module (recommended) or uses basic parsing
+| Path | What it is |
+| --- | --- |
+| `oem/<vendor>.json` | OEM definitions: the BMC kind, the log services and signal patterns the Bootstrap watch reads, and the BIOS slot attributes. Picked by `hardware.vendor`. No SBE settings. |
+| `simplified-provisioning/ztp-provisioning.example.json` and `.schema.json` | Settings of `Invoke-ZtpProvisioning.ps1` when you drive the orchestrator directly (keys are its parameter names; no secrets). `Invoke-ZtpEnvironment.ps1` writes the real one from the infrastructure file. |
+| `simplified-provisioning/nodes.example.json` and `.schema.json` | The node list of the stage scripts (`name`, `service_tag`, `bmc_address` and the optional keys). `Invoke-ZtpEnvironment.ps1` writes the real one. |
 
-### environment.json
-- Machine-friendly format
-- No comments support
-- Native PowerShell JSON support
-- Smaller file size
-
-Both formats contain identical data and are automatically detected by the configuration module.
-
-## Simplified-provisioning inputs
-
-The simplified-provisioning scripts do not read `environment.yaml`. Their inputs are explicit parameters plus two documented files with neutral examples: `config/simplified-provisioning/nodes.example.json` (node `name`, `service_tag` and `bmc_address`; copy to `nodes.json`) and `scripts/simplified-provisioning/bicep/main.example.parameters.json` (Azure parameters). Real copies are git-ignored. The stage orchestrator `scripts/simplified-provisioning/Invoke-ZtpProvisioning.ps1` also reads its settings from `config/simplified-provisioning/ztp-provisioning.example.json` (copy to `ztp-provisioning.json`; keys are the script's parameter names, no secrets: the BMC credential and passwords stay parameters). `config/oem/<oem>.json` holds the OEM definitions the Bootstrap watch reads: only the BMC layer (BMC kind, log services, signal patterns), no SBE settings.
-
-## Usage
-
-### Basic Usage
-```powershell
-# Import the configuration module
-Import-Module ".\scripts\common\AzureLocalConfig.psm1"
-
-# Load configuration (auto-detects YAML or JSON)
-$config = Get-AzureLocalConfig
-
-# Access values using dot notation
-$subscriptionId = $config.GetValue('azure.mgmt_subscription_id')
-$clusterName = $config.GetValue('resources.cluster_name')
-```
-
-### Convenience Functions
-```powershell
-# Quick access to single values
-$adminUser = Get-ConfigValue 'deployment.local_admin_username'
-$nodeIPs = Get-ConfigValue 'nodes.node_01.ip'
-```
-
-### Specialized Methods
-```powershell
-# Get all node hostnames
-$hostnames = $config.GetNodeHostnames()
-
-# Get all iDRAC IPs
-$idracIPs = $config.GetIdracIPs()
-
-# Get node details by hostname
-$node = $config.GetNodeByHostname('{node_hostname_1}')
-
-# Get network configuration section
-$networking = $config.GetSection('networking')
-```
-
-## Configuration Structure
-
-```
-azure:                    # Azure identity and subscriptions
-resources:               # Azure resource names and IDs
-keyvault:               # Key Vault configuration
-active_directory:       # AD domain and server details
-nodes:                  # Physical node configurations
-arc_nodes:              # Azure Arc resource IDs
-networking:             # Network configuration
-storage:                # Storage (Pure) configuration
-deployment:             # Deployment credentials and settings
-hardware:               # Hardware specifications
-switch_ports:           # Network switch port mappings
-ztp:                    # ZTP-specific settings
-scripts:                # Script directory paths
-```
-
-## Examples
-
-See `scripts/examples/ConfigExample.ps1` for complete usage examples.
-
-## Updating Configuration
-
-1. Edit `environment.yaml` or `environment.json`
-2. Update values as needed for different environments
-3. Commit changes to version control
-4. All scripts automatically use updated values
-
-## Security Notes
-
-- Sensitive values like passwords are marked as `[SECURED]`
-- Use Azure Key Vault for actual credential storage
-- Never commit real credentials to version control
-- Use the Key Vault integration functions for secure credential retrieval
-
-## Migration from Hardcoded Values
-
-When updating existing scripts:
-
-1. Replace hardcoded values with configuration lookups
-2. Use `Get-ConfigValue` for simple values
-3. Use `$config.GetValue()` for complex access patterns
-4. Test scripts with new configuration system
-
-Example migration:
-```powershell
-# Before
-$subscriptionId = "{mgmt_subscription_id}"
-
-# After
-$subscriptionId = Get-ConfigValue 'azure.mgmt_subscription_id'
-```
-
-## Benefits
-
-- **Single Source of Truth**: All configuration in one place
-- **Environment Flexibility**: Easy switching between dev/test/prod
-- **Version Control**: Configuration changes are tracked
-- **Consistency**: All scripts use identical values
-- **Maintainability**: Updates require changes in only one file
-- **Security**: Sensitive data can be externalized to Key Vault
+Real copies of the generated files are git-ignored. The older configuration layer (`environment.yaml`, `environment.json`, `cluster/cluster-config.md`, `cluster-reference.env` and the `AzureLocalConfig.psm1` loader) is retired.

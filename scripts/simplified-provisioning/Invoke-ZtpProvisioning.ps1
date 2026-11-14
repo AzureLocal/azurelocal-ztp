@@ -85,7 +85,9 @@ Resolve: also consider preview trains.
 .PARAMETER MaxBootstrapTrain
 Resolve: highest train to consider.
 .PARAMETER Oem
-OEM definition in config/oem (default Dell): the BMC log services and signals the Bootstrap watch reads.
+OEM definition in config/oem (config/oem/<Oem>.json): the BMC log services and signals the Bootstrap watch reads, and how
+the Boot stage boots the USB-stick slot once (bmc.usbBootOnce). No default: the vendor is a deployment fact.
+Invoke-ZtpEnvironment.ps1 passes hardware.vendor of the infrastructure file; the Boot and Bootstrap stages stop without it.
 .PARAMETER EventLogPath
 Bootstrap: JSON-lines event file (Sonar follows it).
 .PARAMETER BootstrapTimeoutMinutes
@@ -204,7 +206,7 @@ param(
     [string]$BootstrapVersion = 'latest',
     [switch]$IncludePreview,
     [ValidatePattern('^$|^\d{4}$')][string]$MaxBootstrapTrain,
-    [ValidatePattern('^[A-Za-z0-9_-]{1,40}$')][string]$Oem = 'Dell',
+    [ValidatePattern('^[A-Za-z0-9_-]{1,40}$')][string]$Oem,
     [string]$EventLogPath = (Join-Path (Get-Location) 'ztp-events.jsonl'),
     [ValidateRange(1, 1440)][int]$BootstrapTimeoutMinutes = 120,
     [ValidateRange(1, 1440)][int]$BootstrapVoucherTimeoutMinutes = 90,
@@ -447,6 +449,7 @@ function Get-ZtpStageCall {
             $p = [ordered]@{ ImageDirectory = $ImageDirectory; ImageNamePrefix = $ImageNamePrefix; ShareName = $ShareName; ShareHost = $ShareHost; NodeName = $NodeName; NodesFile = $NodesFile; Restart = [bool]$ConfirmNotClustered; ConfirmNotClustered = [bool]$ConfirmNotClustered }
             if ($BmcCredential) { $p.Credential = $BmcCredential }
             if ($ShareAccountName) { $p.AccountName = $ShareAccountName }
+            if ($Oem) { $p.Oem = $Oem }
             if ($BiosTimeoutMinutes -ne 30) { $p.BiosTimeoutMinutes = $BiosTimeoutMinutes }   # 30 is the stage script's own default
             if ($RfsWriteAttribute) { $p.RfsWriteAttribute = $true }
             if ($SkipCertificateCheck) { $p.SkipCertificateCheck = $true }
@@ -564,13 +567,13 @@ function Assert-ZtpStageInput {
     $need = [ordered]@{}
     switch ($Name) {
         'Resolve' { if ($BootstrapCacheDirectory) { $need.BootstrapCacheDirectory = $BootstrapCacheDirectory } }
-        'Bootstrap' { if ($VoucherFolder) { $need.VoucherFolder = $VoucherFolder } else { $need.ImageDirectory = $ImageDirectory; if ($ForExecute) { $need.BmcCredential = $BmcCredential } }; if (-not $SkipAzureCheck -and $ForExecute) { $need.SubscriptionId = $SubscriptionId } }
+        'Bootstrap' { $need.Oem = $Oem; if ($VoucherFolder) { $need.VoucherFolder = $VoucherFolder } else { $need.ImageDirectory = $ImageDirectory; if ($ForExecute) { $need.BmcCredential = $BmcCredential } }; if (-not $SkipAzureCheck -and $ForExecute) { $need.SubscriptionId = $SubscriptionId } }
         'Device' { $need.ParameterFile = $ParameterFile }
         'Network' { $need.SubscriptionId = $SubscriptionId; $need.ResourceGroupName = $ResourceGroupName; $need.ParameterFile = $ParameterFile }
         'Handoff' { $need.SubscriptionId = $SubscriptionId; $need.ResourceGroupName = $ResourceGroupName }
         'Restore' { if ($ForExecute -and @(Get-ZtpRestoreNeed).Count) { $need.BmcCredential = $BmcCredential; $need.SubscriptionId = $SubscriptionId; $need.ResourceGroupName = $ResourceGroupName; $need.ParameterFile = $ParameterFile; $need.VoucherDirectory = $VoucherDirectory } }
         'Media' { if (-not $BootstrapCacheDirectory) { $need.SourcePath = $SourcePath }; $need.ImageDirectory = $ImageDirectory }
-        'Boot' { $need.ImageDirectory = $ImageDirectory; $need.ShareHost = $ShareHost; if ($ForExecute) { $need.BmcCredential = $BmcCredential } }
+        'Boot' { $need.Oem = $Oem; $need.ImageDirectory = $ImageDirectory; $need.ShareHost = $ShareHost; if ($ForExecute) { $need.BmcCredential = $BmcCredential } }
         'Vouchers' { $need.VoucherDirectory = $VoucherDirectory; if (-not $VoucherFolder) { $need.ImageDirectory = $ImageDirectory }; if ($ForExecute) { $need.BmcCredential = $BmcCredential } }
         { $_ -in 'Azure', 'Ready' } { $need.SubscriptionId = $SubscriptionId; $need.ResourceGroupName = $ResourceGroupName; $need.ParameterFile = $ParameterFile; $need.VoucherDirectory = $VoucherDirectory }
     }

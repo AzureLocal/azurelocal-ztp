@@ -32,7 +32,18 @@ Docs: [Prerequisites](../../docs/prerequisites.md), [Automated bootstrap](../../
 | Handoff | `Convert-ZtpHandoffToClusterInputs.ps1` | The `arc_machine_names` block and `release.azure_local_version` for the cluster deployment environment file, YAML or JSON (`-Only arc_machine_names, release`). Reads handoff schema 2 and 1; a schema 1 `sbe` block is ignored. |
 | Monitor | `Start-ZtpMonitor.ps1` | Writes a Sonar config for the event file and the edge machines and starts AzureLocal Sonar. |
 
-Shared code (dot-sourced, no secrets in output): `ZtpVirtualUsb.Common.ps1` (image writer and reader, voucher validation, node list), `ZtpRedfish.Common.ps1` (small Redfish client), `ZtpAzure.Common.ps1` (ARM transport, status logic, OS image catalog), `ZtpHttp.Transport.ps1` (the one HTTP seam), `ZtpBootstrap.Common.ps1` (ISO resolution, resumable download, zip and image checks), `ZtpOem.Common.ps1` (OEM definitions loader: the BMC layer for the Bootstrap watch), `ZtpBios.Common.ps1` (BIOS settings from the node list, value comparison), `ZtpEnvironment.Common.ps1` (the environment file: key check, schema 5 mapping, run folders), `ZtpEvents.Common.ps1` (events, state machine, signal readers).
+## BMC tools
+
+Outside the stages, for looking at or recovering the BMCs ZTP drives. Each takes the master `infrastructure.yml` (`-InfrastructureFile`, required, schema 5), `-NodeName` and `-Credential`; without `-Credential` the login is `hardware.bmc.username` and `.password` of the file (secret references), read by the toolkit's resolver (`Resolve-AzlBmcCredential`, azurelocal-toolkit `scripts/common/redfish/AzlRedfishCore.psm1`, found under `AZL_TOOLKIT_ROOT` or next to this repository). They never prompt. With neither a `-Credential` nor a login in the file they stop with exit code 2. Exit codes: 0 done or planned, 1 a BMC call failed, 2 an input is missing or not usable.
+
+| Script | What it does |
+|--------|--------------|
+| `Get-ZtpBmcJob.ps1` | Read-only: each BMC's job queue (`<manager>/Jobs`, else `/redfish/v1/JobService/Jobs`), with `-JobState`, `-RecentMinutes` and `-Wait` until no job is active. |
+| `Get-ZtpBootSetting.ps1` | Read-only: power state, boot mode, one-time override, boot order and boot options per node; `Unavailable:` options are counted as stale. |
+| `Reset-ZtpBmc.ps1` | `Manager.Reset` (`GracefulRestart` or `ForceRestart`, if the BMC offers it): restarts the BMC, not the host. `-WhatIf` plans without a credential. |
+| `Reset-ZtpBootSequence.ps1` | Dell iDRAC only (`hardware.vendor` Dell): clears the job queue (`JID_CLEARALL`), sets `SysPrepClean=Yes` with its BIOS job, clears a one-time override, restarts (`-NoRestart` stages it). Needs `-ConfirmNotClustered`; `-WhatIf` plans without a credential. |
+
+Shared code (dot-sourced, no secrets in output): `ZtpVirtualUsb.Common.ps1` (image writer and reader, voucher validation, node list), `ZtpRedfish.Common.ps1` (small Redfish client), `ZtpAzure.Common.ps1` (ARM transport, status logic, OS image catalog), `ZtpHttp.Transport.ps1` (the one HTTP seam), `ZtpBootstrap.Common.ps1` (ISO resolution, resumable download, zip and image checks), `ZtpOem.Common.ps1` (OEM definitions loader: the BMC layer for the Bootstrap watch), `ZtpBios.Common.ps1` (BIOS settings from the node list, value comparison), `ZtpEnvironment.Common.ps1` (the environment file: key check, schema 5 mapping, run folders), `ZtpEvents.Common.ps1` (events, state machine, signal readers), `ZtpBmcTool.Common.ps1` (the BMC tools' inputs: nodes and BMC addresses through `Read-ZtpInfrastructure`, the login through the toolkit's resolver, exit codes).
 
 ## Design rules
 
@@ -51,7 +62,8 @@ Shared code (dot-sourced, no secrets in output): `ZtpVirtualUsb.Common.ps1` (ima
 ## Tests
 
 ```powershell
-Invoke-Pester ./tests/simplified-provisioning
+Import-Module Pester -RequiredVersion 5.9.1
+Invoke-Pester ./tests
 Invoke-ScriptAnalyzer -Path ./scripts/simplified-provisioning -Recurse -Severity Error, Warning
 ```
 

@@ -1,19 +1,19 @@
 # Azure Local ZTP Portal Provisioning Guide
 
 > [!WARNING]
-> **Superseded.** This guide describes claiming machines by hand in the Azure portal after the manual [Server preparation](server-preparation.md) route. The [Operator guide](operator-guide.md) now does the claim from a Bicep template, waits for "Ready to cluster", and prepares the nodes for Validate. Use this page only if you choose to claim in the portal; its Configurator App and log collection steps still apply.
+> **Superseded.** This guide describes claiming machines by hand in the Azure portal after the servers are in the maintenance environment. The [Operator guide](operator-guide.md) now does the claim from a Bicep template, waits for "Ready to cluster", and prepares the nodes for Validate. Use this page only if you choose to claim in the portal; its Configurator App and log collection steps still apply.
 
 > [!NOTE]
 > **Note**
-> This guide covers the Azure Portal provisioning phase of Zero-Touch Provisioning (ZTP) for Azure Local. It picks up after the servers have been bootstrapped into the maintenance environment using the [Server Preparation Guide](server-preparation.md).
+> This guide covers the Azure Portal provisioning phase of Zero-Touch Provisioning (ZTP) for Azure Local. It picks up after the servers have been bootstrapped into the maintenance environment by the ZTP Boot and Bootstrap stages (see the [Operator guide](operator-guide.md)).
 >
 ## Overview
 
-This guide covers Phase 2 of Azure Local Zero-Touch Provisioning (ZTP). After completing the server preparation phase, the servers are running the maintenance environment and are ready to be provisioned from Azure.
+This guide covers Phase 2 of Azure Local Zero-Touch Provisioning (ZTP). After the Boot and Bootstrap stages, the servers are running the maintenance environment and are ready to be provisioned from Azure.
 
 The complete ZTP workflow consists of three main phases:
 
-1. **Server Preparation** ([Server Preparation Guide](server-preparation.md)) - Configure environment and prepare servers ✅
+1. **Boot into the maintenance environment** (the Boot and Bootstrap stages of the [Operator guide](operator-guide.md)) ✅
 2. **Azure Portal Provisioning** (This guide) - Collect vouchers, create sites, and provision machines via Azure
 3. **Cluster Deployment** - Deploy Azure Local instance via Azure portal or ARM template
 
@@ -30,8 +30,8 @@ The complete ZTP workflow consists of three main phases:
 
 Before beginning this phase, ensure the following:
 
-- **Server Preparation Complete:**
-    - All servers are running the maintenance environment (completed via [Server Preparation Guide](server-preparation.md))
+- **Maintenance environment running:**
+    - All servers are running the maintenance environment (the Boot and Bootstrap stages of the [Operator guide](operator-guide.md))
     - Console shows "Maintenance environment setup completed successfully" on each server
     - Virtual media has been unmounted (cleanup step)
 
@@ -306,6 +306,6 @@ curl -fsSL "https://aka.ms/ztp/cleanup.sh" | bash -s -- \
 
 ## Document References
 
-- [Server Preparation Guide](server-preparation.md) — Phase 1: Server preparation and bootstrap
+- [Operator guide](operator-guide.md) — The whole run, including the Boot and Bootstrap stages
 - [Automation Pipelines](automation-pipelines.md) — Workflow documentation and design
 - [Microsoft Simplified Machine Provisioning](https://learn.microsoft.com/en-us/azure/azure-local/deploy/simplified-machine-provisioning) — Official Microsoft documentation

@@ -8,6 +8,11 @@
     "systemId": "System.Embedded.1",
     "virtualMediaSlot": "RemovableDisk",
     "rfsWriteAttribute": true,
+    "usbBootOnce": {
+      "managerAttributes": { "ServerBoot.1.BootOnce": "Enabled", "ServerBoot.1.FirstBootDevice": "vFDD" },
+      "overrideTarget": "Floppy",
+      "status": "iDRAC 7.30 offers no Usb boot override target; its USB-stick slot boots as virtual floppy (vFDD). Proven on AX-760."
+    },
     "logServices": [
       { "id": "Lclog", "path": "/redfish/v1/Managers/iDRAC.Embedded.1/LogServices/Lclog/Entries" },
       { "id": "Sel", "path": "/redfish/v1/Managers/iDRAC.Embedded.1/LogServices/Sel/Entries" }

@@ -1,6 +1,6 @@
 <!--
 Thanks for contributing to azurelocal-ztp! Please fill in the sections below.
-Use a Conventional Commit style title (e.g. feat(scripts): add Discover-Servers parameter).
+Use a Conventional Commit style title (e.g. feat(scripts): add Get-ZtpBmcJob parameter).
 -->
 
 ## Summary

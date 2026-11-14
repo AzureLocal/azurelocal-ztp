@@ -44,6 +44,7 @@ Addresses, names and identifiers in examples are documentation values: `192.0.2.
   - [Boot override, power and reset](#boot-override-power-and-reset)
   - [Manager attributes: the RFS write-protection attribute](#manager-attributes-the-rfs-write-protection-attribute)
   - [Log services](#log-services)
+  - [Redfish calls of the BMC tools](#redfish-calls-of-the-bmc-tools)
   - [Redfish calls ZTP does not make](#redfish-calls-ztp-does-not-make)
 - [The Configurator app REST service](#the-configurator-app-rest-service)
 - [Plain HTTP downloads](#plain-http-downloads)
@@ -66,6 +67,7 @@ Addresses, names and identifiers in examples are documentation values: `192.0.2.
 | Network | `Set-ZtpManagementAddress.ps1` | [networkAdapters](#network-adapters-and-applyconfiguration) (GET); `jobs/ApplyConfiguration` (PUT, GET) only with `-ApplyThroughAzure` | none | none | Verify-only by default |
 | Restore | `Restore-ZtpBios.ps1` | [Arc machines](#arc-machines-and-extensions) (wait for Connected again) | [BIOS](#bios-attributes-and-pending-settings), [reset](#boot-override-power-and-reset) | none | |
 | Handoff | `New-ZtpHandoff.ps1` | [Edge machines](#edge-machines), [jobs/ProvisionOs](#jobs-provisionos), [networkAdapters](#network-adapters-and-applyconfiguration) (GET) | none | none | Writes files only |
+| No stage: BMC tools | `Get-ZtpBmcJob.ps1`, `Get-ZtpBootSetting.ps1`, `Reset-ZtpBmc.ps1`, `Reset-ZtpBootSequence.ps1` | none | [The BMC tools' calls](#redfish-calls-of-the-bmc-tools) | none | Run by a person, never by the orchestrator |
 
 The Network stage does **not** use the Configurator service. After the OS install the maintenance environment is gone and the machine is reached through Azure's per-NIC report.
 
@@ -387,7 +389,7 @@ iDRAC 7.30 quirks, all **Observed** and handled in the script:
 | --- | --- | --- |
 | `GET /redfish/v1/Managers/{id}/Attributes` | Finds the `RFS.<n>.WriteProtected` attributes. | **Used by ZTP**. |
 | `PATCH /redfish/v1/Managers/{id}/Attributes` with `{ "Attributes": { "RFS.1.WriteProtected": "Read Write" } }` | Makes the remote file share writable so the maintenance environment can write its voucher back; set back to `Read Only` on eject. | **Used by ZTP** (`-RfsWriteAttribute`, default on for Dell). |
-| `PATCH /redfish/v1/Managers/{id}/Attributes` with `{ "Attributes": { "ServerBoot.1.BootOnce": "Enabled", "ServerBoot.1.FirstBootDevice": "vFDD" } }` | The iDRAC-specific one-time boot to the virtual floppy. The iDRAC applies it in the background, so ZTP also sets the standard override and waits for it. A reset before it lands boots the disk instead (**Observed** on a second node, 2026-11-05). | **Used by ZTP**, proven live. |
+| `PATCH /redfish/v1/Managers/{id}/Attributes` with `{ "Attributes": { "ServerBoot.1.BootOnce": "Enabled", "ServerBoot.1.FirstBootDevice": "vFDD" } }` | The iDRAC-specific one-time boot to the virtual floppy. The attributes, and the `Floppy` override set with them, come from `bmc.usbBootOnce` of `config/oem/dell.json`, not from the script; another vendor's file supplies its own. The iDRAC applies it in the background, so ZTP also sets the standard override and waits for it. A reset before it lands boots the disk instead (**Observed** on a second node, 2026-11-05). | **Used by ZTP**, proven live. |
 
 ### Log services
 
@@ -396,15 +398,25 @@ iDRAC 7.30 quirks, all **Observed** and handled in the script:
 | `GET /redfish/v1/Managers/{id}/LogServices/Lclog/Entries?$top=25` | After the restart, ZTP watches the Lifecycle log for 10 minutes for `OSE1002` ("C: boot completed"), which iDRAC logs when the installed Windows starts its service module. The maintenance environment does not run it, so the entry means the machine booted its installed OS, and ZTP stops. A BMC without `Lclog` gives a warning and the check is skipped. | **Used by ZTP** (`Mount-ZtpVirtualUsb.ps1`). |
 | `GET .../LogServices/{Lclog,Sel}/Entries` | The Bootstrap stage reads new entries and matches them against the OEM signal patterns (booted from media, completion, reset). | **Used by ZTP** (`Get-ZtpBmcReading`). The Dell paths are Dell conventions: `signalsStatus` in the profile says **unverified against the maintenance environment**. |
 
+### Redfish calls of the BMC tools
+
+The BMC tools in `scripts/simplified-provisioning/` are not stages: a person runs them to look at or recover a BMC. They read `nodes[].bmc.ip_address` and the `hardware.bmc` login of the infrastructure file and use the same [session](#session).
+
+| Call | What it does | Evidence |
+| --- | --- | --- |
+| `GET <manager>/Jobs` and each member, else `GET /redfish/v1/JobService/Jobs` | Lists the job queue. | **Used by** `Get-ZtpBmcJob.ps1` (read only). The `<manager>/Jobs` path is the iDRAC job queue; mocked in tests. |
+| `GET /redfish/v1/Systems/{id}` (`Boot`), `GET .../BootOptions` and each member | Reads the override, boot order and boot options. | **Used by** `Get-ZtpBootSetting.ps1` (read only); mocked in tests. |
+| `POST /redfish/v1/Managers/{id}/Actions/Manager.Reset` (`GracefulRestart`, `ForceRestart`) | Restarts the BMC; the host keeps running. | **Used by** `Reset-ZtpBmc.ps1`, with `-WhatIf`; mocked in tests. |
+| `POST /redfish/v1/Dell/Managers/{id}/DellJobService/Actions/DellJobService.DeleteJobQueue` (`JID_CLEARALL`), `PATCH .../Bios/Settings` (`SysPrepClean` `Yes`), `POST <manager>/Jobs` (`TargetSettingsURI`), `PATCH /redfish/v1/Systems/{id}` (`BootSourceOverrideEnabled` `Disabled`), `ComputerSystem.Reset` | Dell only: clears the job queue and makes the BIOS rebuild its UEFI boot entries at the next POST. | **Used by** `Reset-ZtpBootSequence.ps1`, with `-WhatIf` and `-ConfirmNotClustered`. Dell iDRAC conventions, carried over from the earlier lab tool; mocked in tests. |
+
 ### Redfish calls ZTP does not make
 
 | Call | What it would do | Evidence |
 | --- | --- | --- |
 | `GET /redfish/v1/UpdateService/FirmwareInventory` | Lists firmware versions of the BIOS, BMC, NICs and storage controllers. | **Not made by ZTP.** A standard Redfish resource; ZTP has no evidence of how iDRAC 7.30 answers it. |
 | `POST /redfish/v1/UpdateService/Actions/UpdateService.SimpleUpdate` | Updates firmware from a URI. | **Not made by ZTP**; firmware is out of scope. |
-| `GET /redfish/v1/Systems/{id}/Storage`, `.../EthernetInterfaces`, `/Chassis/{id}/NetworkAdapters` | Reads storage controllers, NIC ports and their MACs. | **Not made by ZTP**: the MACs come from the environment file, and the node inventory scripts under `scripts/common/discovery/` are separate tools. |
+| `GET /redfish/v1/Systems/{id}/Storage`, `.../EthernetInterfaces`, `/Chassis/{id}/NetworkAdapters` | Reads storage controllers, NIC ports and their MACs. | **Not made by ZTP**: the MACs come from the infrastructure file, which the azurelocal-toolkit's hardware discovery (`Invoke-HardwareDiscovery.ps1`) fills. |
 | `POST /redfish/v1/Systems/{id}/Actions/ComputerSystem.Reset` with `GracefulShutdown`, `PushPowerButton` | Other reset types. | **Not made by ZTP**: it uses `On` and `ForceRestart` only. |
-| `DELETE`/`POST /redfish/v1/Managers/{id}/Actions/Manager.Reset` | Resets the BMC. | **Not made by ZTP**; `Reset-iDRAC.ps1` in `scripts/common/utilities/tools/` is a separate tool. |
 
 ## The Configurator app REST service
 

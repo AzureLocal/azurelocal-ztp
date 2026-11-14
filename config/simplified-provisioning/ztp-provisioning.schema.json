@@ -11,7 +11,7 @@
     "BootstrapVersion": { "type": "string", "default": "latest", "description": "latest, a train (2610), a build (10.2610.0.3061) or an https download URL on a Microsoft download host." },
     "IncludePreview": { "type": "boolean", "default": false, "description": "Also consider preview trains (a month above 12). Off by default." },
     "MaxBootstrapTrain": { "type": "string", "pattern": "^$|^[0-9]{4}$", "description": "Highest train (YYMM) to consider." },
-    "Oem": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,40}$", "default": "Dell", "description": "A definition in config/oem: the BMC log services and signals the Bootstrap watch reads." },
+    "Oem": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,40}$", "description": "A definition in config/oem (config/oem/<Oem>.json): the BMC log services and signals the Bootstrap watch reads, and the boot-once attributes the Boot stage sets. No default: the vendor is a deployment fact (hardware.vendor of the infrastructure file); the Bootstrap stage stops without it." },
     "NodesFile": { "type": "string", "description": "Node list, see nodes.example.json." },
     "NodeName": { "type": "array", "items": { "type": "string" }, "description": "Nodes to provision; default every node of NodesFile." },
     "SourcePath": { "type": "string", "description": "A maintenance ISO (or folder with its contents) you already have; used when BootstrapCacheDirectory is not set." },

@@ -63,12 +63,21 @@ These are iDRAC 7.30 behaviors, not generic Redfish. `Mount-ZtpVirtualUsb.ps1` h
 | --- | --- |
 | `InsertMedia` rejects the field `WriteProtected=false` with `IDRAC.2.9.SYS458`. | Sets the manager attribute `RFS.<n>.WriteProtected = Read Write` with a Redfish PATCH on `/redfish/v1/Managers/iDRAC.Embedded.1/Attributes`, then inserts without the field. Eject sets it back to `Read Only`. |
 | After that insert, Redfish still reports `WriteProtected=True`, although the share is opened for write. | Warns and continues. The voucher appearing in the image proves write access. |
-| The allowable boot override targets don't include `Usb`. The USB-stick slot boots as virtual floppy (`vFDD`). | Sets the iDRAC attributes `ServerBoot.1.FirstBootDevice = vFDD` and `ServerBoot.1.BootOnce = Enabled`. |
+| The allowable boot override targets don't include `Usb`. The USB-stick slot boots as virtual floppy (`vFDD`). | Sets the attributes `bmc.usbBootOnce` of `config/oem/dell.json` names: `ServerBoot.1.FirstBootDevice = vFDD` and `ServerBoot.1.BootOnce = Enabled`. |
 | The iDRAC applies that attribute in the background. A reset before it lands boots the disk instead. | Also sets the standard one-time override to `Once/Floppy`, and waits up to 2 minutes until the system reports it. No reset without it. |
 | A node can boot its installed OS anyway. | Watches the iDRAC log for 10 minutes after the reset. If `OSE1002` appears (logged on these runs as "C: boot completed"), the stage fails for that node. |
 | Eject can return HTTP 500 (`VRM0010`) just after the node writes to the image. | Retries up to 6 times, 30 seconds apart. |
 
 If a run fails during Boot, check each node before you retry: the virtual media is ejected and the one-time boot override is cleared. Use `Mount-ZtpVirtualUsb.ps1 -Action Status` to read them and `-Action Eject` to eject.
+
+Four BMC tools help when that isn't enough. Each takes `-InfrastructureFile` and `-NodeName`, and reads the BMC login from `-Credential` or the file's `hardware.bmc` secret references; the changing ones support `-WhatIf`. Stop the run before you use a changing one, and resume it afterwards.
+
+| Symptom | Tool |
+| --- | --- |
+| A BIOS change of the Boot or Restore stage doesn't land, or the iDRAC refuses a BIOS change because a job is pending | `Get-ZtpBmcJob.ps1` lists the job queue; `-Wait` waits until no job is active |
+| The node doesn't boot from its image, or a stopped run left a one-time override | `Get-ZtpBootSetting.ps1` shows the override, the boot order and the boot options |
+| The BMC stops answering, returns stale data, or keeps a slot it can't eject | `Reset-ZtpBmc.ps1` restarts the BMC (not the host) |
+| The boot list is cluttered with `Unavailable:` entries of an earlier install (Dell) | `Reset-ZtpBootSequence.ps1 -ConfirmNotClustered` makes the BIOS rebuild its UEFI boot entries; only on nodes ZTP will reinstall |
 
 ## The Device scan finds no node
 

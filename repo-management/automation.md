@@ -110,6 +110,8 @@ Manual `workflow_dispatch` workflow that prepares a self-hosted GitHub runner wi
 
 Manual `workflow_dispatch` workflow that bootstraps the cluster configuration files (`config/cluster/cluster-config.md` → `config/environment.{json,yaml}`) from a runtime template and validates the result.
 
+**Retired.** The configuration it built (`cluster-config.md`, `environment.{json,yaml}`) and the scripts that read it are gone. The configuration is now the master `infrastructure.yml` (azurelocal-toolkit schema 5), checked by the toolkit's `Test-InfrastructureFile.ps1` and by the plan run of `Invoke-ZtpEnvironment.ps1`. Don't implement this stub.
+
 ---
 
 ## ztp-deployment.yml
@@ -117,6 +119,8 @@ Manual `workflow_dispatch` workflow that bootstraps the cluster configuration fi
 ### Intended behavior (carried over from private-preview design)
 
 Manual `workflow_dispatch` workflow that runs the end-to-end automation against a target cluster: discover BMCs, mount the maintenance environment ISO via Redfish, set boot order, restart, collect vouchers, and (optionally) drive Azure portal provisioning steps.
+
+Its manual trigger script (`scripts/Trigger-ZTPDeployment.ps1`) is retired. The pipeline examples in `examples/pipelines/` (plan, approval, execute of `Invoke-ZtpEnvironment.ps1`) are the current way to run ZTP from a pipeline.
 
 This is the primary differentiator vs the official Microsoft documentation, which requires manual USB media creation and per-machine boot.
 

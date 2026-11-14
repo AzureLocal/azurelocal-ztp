@@ -31,7 +31,8 @@ Folder of the per-node images (the ones mounted on the BMCs).
 .PARAMETER ImageNamePrefix
 Image file-name prefix.
 .PARAMETER Oem
-OEM definition in config/oem (default Dell).
+OEM definition in config/oem (config/oem/<Oem>.json), from hardware.vendor of the infrastructure file. Required: there is no
+built-in vendor.
 .PARAMETER Credential
 BMC account (read-only use here). Not needed with -VoucherFolder.
 .PARAMETER VoucherFolder
@@ -77,7 +78,7 @@ param(
     [string]$NodesFile,
     [string]$ImageDirectory,
     [ValidatePattern('^[A-Za-z0-9._-]{0,40}$')][string]$ImageNamePrefix = 'ztp-usb-',
-    [ValidatePattern('^[A-Za-z0-9_-]{1,40}$')][string]$Oem = 'Dell',
+    [Parameter(Mandatory)][ValidatePattern('^[A-Za-z0-9_-]{1,40}$')][string]$Oem,
     [pscredential]$Credential,
     [string]$VoucherFolder,
     [ValidatePattern('^$|^[0-9a-fA-F-]{36}$')][string]$SubscriptionId,

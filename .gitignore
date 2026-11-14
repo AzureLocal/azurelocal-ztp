@@ -59,16 +59,11 @@ logs/*.log
 .env.local
 .env.*.local
 
-# Generated config (built from cluster-config.md at pipeline time)
-# These contain environment-specific values and should NOT be committed.
-# Run Generate-ConfigFromMD.ps1 to regenerate from cluster-config.md.
+# Files of the retired configuration layer. Nothing reads them any more; they stay ignored so a leftover copy with real
+# values can't be committed. The configuration is the master infrastructure.yml, kept outside the repository.
 config/environment.yaml
 config/environment.json
-
-# Cluster reference with real values (template is committed, actual .env is not)
 config/cluster-reference.env
-
-# Cluster config (contains secrets, never commit)
 config/cluster/cluster-config.md
 
 # Temporary files

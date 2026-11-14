@@ -85,7 +85,6 @@ export default defineConfig({
         text: 'Legacy and other guides',
         collapsed: true,
         items: [
-          { text: 'Server preparation (superseded)', link: '/server-preparation' },
           { text: 'Azure portal provisioning (superseded)', link: '/azure-portal-provisioning' },
           { text: 'Single-node S2D deployment', link: '/single-node-s2d-deployment' }
         ]

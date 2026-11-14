@@ -47,6 +47,9 @@ Accept the BMC's self-signed certificate.
 JSON-lines file each BIOS change is appended to (the run's evidence folder). Optional.
 .PARAMETER BiosTimeoutMinutes
 How long to wait for a node's BIOS to report its new values after the reset.
+.PARAMETER Oem
+Passed to Mount-ZtpVirtualUsb.ps1: the OEM definition in config/oem (hardware.vendor) whose bmc.usbBootOnce boots the
+USB-stick slot once on a BMC without a Usb override target. No default.
 .PARAMETER Execute
 Make the changes; without it only the plan is printed.
 .EXAMPLE
@@ -72,6 +75,7 @@ param(
     [switch]$SkipCertificateCheck,
     [string]$BiosLogPath,
     [ValidateRange(1, 240)][int]$BiosTimeoutMinutes = 30,
+    [ValidatePattern('^[A-Za-z0-9_-]{1,40}$')][string]$Oem,
     [switch]$Execute
 )
 
@@ -99,6 +103,7 @@ $usbArgs = @{
     ShareHost = $ShareHost; ShareName = $ShareName; ImageNamePrefix = $ImageNamePrefix; ReadOnly = $ReadOnlyMedia
     RfsWriteAttribute = $RfsWriteAttribute; Restart = $Restart; ConfirmNotClustered = $ConfirmNotClustered; SkipCertificateCheck = $SkipCertificateCheck
 }
+if ($Oem) { $usbArgs.Oem = $Oem }
 if ($NodesFile) { $usbArgs.NodesFile = $NodesFile }
 elseif ($Nodes) { $usbArgs.Nodes = $Nodes }
 

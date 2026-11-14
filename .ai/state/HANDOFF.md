@@ -6,7 +6,22 @@
   (possibly a different tool) starts by reading it.
 -->
 
-## Last session (2026-11-07, refactor: ZTP ends after Network and Restore, at the Handoff)
+## Last session (2026-11-14, refactor: the old configuration layer is retired)
+
+- **What changed and why (owner requirement: one infrastructure file feeds every tool, no prompts, no default path):**
+  - Removed `scripts/common` (`AzureLocalConfig.psm1`, `RedfishUtils.psm1`, `discovery/`, `service-principals/`, `utilities/helpers/*` including `config-loader.ps1` and `keyvault-helper.ps1`, `utilities/tools/*`), `scripts/tools`, `scripts/examples`, `scripts/Trigger-ZTPDeployment.ps1`, `config/cluster-reference.env.template`, `config/cluster/cluster-config.md.template` and `docs/server-preparation.md` (64 files). `scripts/README.md` has the table of what does each job now (simplified provisioning or azurelocal-toolkit).
+  - Four BMC tools replace the ones nothing else did: `Get-ZtpBmcJob.ps1` (was `Get-iDRACJobs.ps1`), `Get-ZtpBootSetting.ps1` (was `Get-BootSettings.ps1`), `Reset-ZtpBmc.ps1` (was `Reset-iDRAC.ps1`), `Reset-ZtpBootSequence.ps1` (was `Reset-BootSequence.ps1`), with `ZtpBmcTool.Common.ps1`. Mandatory `-InfrastructureFile` (schema 5 only), read through `Read-ZtpInfrastructure -ToolkitModulePath none`; the BMC login is `-Credential` or `hardware.bmc` secret references through the toolkit's `Resolve-AzlBmcCredential`; exit 2 when neither; exit 0/1/2; `-WhatIf` on the two that change something; `Reset-ZtpBootSequence.ps1` needs `-ConfirmNotClustered` and `hardware.vendor` Dell.
+  - No built-in vendor (coordinator, pass H): `-Oem` of `Invoke-ZtpProvisioning.ps1` and `Wait-ZtpBootstrapComplete.ps1` lost its `Dell` default (orchestrator: the Boot and Bootstrap stages need it; the watch: mandatory). The iDRAC boot-once attributes moved from `Mount-ZtpVirtualUsb.ps1` to `config/oem/dell.json` `bmc.usbBootOnce` (`Get-ZtpOemUsbBootOnce` in `ZtpOem.Common.ps1`); new `-Oem` on `Mount-ZtpVirtualUsb.ps1` and `Start-MaintenanceBoot.ps1`. A BMC without a `Usb` override target and no `usbBootOnce` fails before the restart.
+  - Docs: README, scripts READMEs, config README, api-reference (new section "Redfish calls of the BMC tools"), troubleshooting (BMC tools table), overview, azure-portal-provisioning (links), VitePress nav, CHANGELOG, automation.md (retired workflow stubs), .gitignore comment.
+- **Tests:** Pester 5.9.1, whole `tests` folder in a separate `pwsh -NoProfile`, `AZL_TOOLKIT_ROOT` = the toolkit clone: 592 tests, 591 passed, 0 failed, 1 skipped (as before), 14 of 14 files loaded (main before: 554, 553 passed, 1 skipped). New: `ZtpBmcTool.Tests.ps1` (30), 2 in `ZtpOem.Tests.ps1`, 4 in `ZtpVirtualUsb.Tests.ps1`, 2 in `ZtpProvisioning.Tests.ps1`. One earlier full run had a flaky failure in `ZtpBios.Tests.ps1` (the Boot BIOS order file written from parallel runspaces); it passed alone 4 of 4 times and in the final run. PSScriptAnalyzer (Error, Warning) on the new files: clean.
+- **Branch:** `old-layout` (worktree), committed, not pushed.
+- **Open:**
+  1. The toolkit's registry (`tools.ztp.parameters`) still lists the removed scripts' parameters and lacks the four BMC tools.
+  2. `Read-ZtpInfrastructure` still accepts the older environment-file layout (`docs/environment-file.md`, `examples/infrastructure.example.yml`); retiring that is a separate step.
+  3. `Invoke-ZtpEnvironment.ps1` reads its secrets with `Get-AzKeyVaultSecret`, not the toolkit's resolver (keyvault:// only).
+  4. The BMC tools are proven against mocks only, not on an iDRAC.
+
+## Previous session (2026-11-07, refactor: ZTP ends after Network and Restore, at the Handoff)
 
 - **What changed and why (owner decisions 2026-11-07):**
   - **Prepare removed.** `Initialize-ZtpNode.ps1` and its tests are gone, and so is `-From Prepare`. OEM drivers, `C:\SBE`, DHCP off on the other NICs, DNS/time and the deployment admin are OS configuration (azurelocal-toolkit Phase 03; https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/).

@@ -81,6 +81,7 @@ The full list, with who checks what, is on the [Prerequisites](docs/prerequisite
 | SBE package | Your hardware vendor's Solution Builder Extension package, downloaded before you start and available on a share the toolkit can read (`hardware.sbe.source_path`). A requirement, not for ZTP but for what follows: it must be ready before OS configuration and ARM Validate. You need it to update the cluster, and the toolkit checks it (SB-001 to SB-006). Installing it during the build is the only optional part. Vendors differ; see the SBE paragraph above and [Prerequisites](docs/prerequisites.md#the-sbe-package). |
 | Credentials | Only Key Vault references in the file: the BMC login, the provisioning admin password (at least 12 characters with lower and upper case, a digit and a special character) and, optionally, the `edgeuser` password of the maintenance environment. The Key Vault uses the Azure RBAC permission model. |
 | Network and ports | Host to each BMC TCP 443; each BMC to the host TCP 445 (SMB); host to the provisioning network TCP 20001; host to the internet TCP 443; the machines to Azure TCP 443 and 80 with no HTTPS inspection. Arc gateway is not supported in the preview. |
+
 ## Quickstart
 
 Check the [Prerequisites](docs/prerequisites.md) first. Then, on a Windows management host that reaches the BMCs, in an elevated PowerShell 7 session:
@@ -182,15 +183,18 @@ npm run docs:dev
 ├── docs/                          # VitePress documentation; diagrams/ holds the draw.io flow chart and its PNG
 ├── examples/                      # Example environment file (older layout) and pipelines (placeholders only)
 ├── scripts/
-│   ├── simplified-provisioning/   # Entry point, orchestrator, stage scripts, Bicep
-│   └── common/                    # Earlier BMC, discovery and utility scripts
+│   └── simplified-provisioning/   # Entry point, orchestrator, stage scripts, BMC tools, Bicep
 ├── config/
 │   ├── oem/                       # OEM definitions: BMC kind, log services and signal patterns
 │   └── simplified-provisioning/   # Example and schema of the orchestrator inputs (generated files are git-ignored)
 └── tests/simplified-provisioning/ # Pester 5 tests with recorded fixtures (no hardware, no Azure)
 ```
 
-Run the tests with `Invoke-Pester ./tests/simplified-provisioning`.
+Run the tests with Pester 5.9.1: `Import-Module Pester -RequiredVersion 5.9.1; Invoke-Pester ./tests`.
+
+**BMC tools.** Besides the stages, `scripts/simplified-provisioning/` has four tools for the BMCs ZTP drives: `Get-ZtpBmcJob.ps1` (the job queue), `Get-ZtpBootSetting.ps1` (boot order, override and options), `Reset-ZtpBmc.ps1` (restart the BMC) and `Reset-ZtpBootSequence.ps1` (Dell: rebuild the UEFI boot entries). Like every script here they take `-InfrastructureFile`, never prompt, and take the BMC login from `-Credential` or from the file's `hardware.bmc` secret references. See [scripts/README.md](scripts/README.md).
+
+The earlier configuration layer (`scripts/common`, `scripts/tools`, `scripts/examples`, `environment.yaml` and `cluster-config.md`) is retired; [scripts/README.md](scripts/README.md#what-replaced-the-older-scripts) says what does each of its jobs now.
 
 ## Contributing
 

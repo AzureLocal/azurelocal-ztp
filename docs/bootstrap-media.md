@@ -68,7 +68,7 @@ The Resolve stage records the ISO's version, URL and SHA256 as its evidence: in 
 
 ## The OEM layer: `config/oem/<oem>.json`
 
-Adding an OEM is adding a file, not code. The file holds the BMC layer only, for the Bootstrap watch: the BMC kind, its log services and the log patterns that signal a boot from the media, completion and a reset. `ZtpOem.Common.ps1` loads it. Dell is complete; Lenovo, HPE and Supermicro carry the layout with empty signal patterns, marked unverified.
+Adding an OEM is adding a file, not code. The file holds the BMC layer only, for the Bootstrap watch: the BMC kind, its log services and the log patterns that signal a boot from the media, completion and a reset, and, for a BMC that offers no `Usb` boot override target, how to boot the USB-stick slot once (`bmc.usbBootOnce`). `ZtpOem.Common.ps1` loads it. Dell is complete; Lenovo, HPE and Supermicro carry the layout with empty signal patterns, marked unverified.
 
 ```json
 { "oem": "Dell", "publisher": "Dell",

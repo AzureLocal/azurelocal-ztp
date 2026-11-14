@@ -625,3 +625,58 @@ Describe 'Mount-ZtpVirtualUsb.ps1 on a BMC of another make' {
         ($global:usbCalls | Where-Object { $_ -isnot [string] -and $_.Path -like '*ComputerSystem.Reset' }).Body.ResetType | Should -Be 'ForceRestart'
     }
 }
+
+Describe 'Mount-ZtpVirtualUsb.ps1 on a BMC without a Usb boot override target: the OEM definition says how to boot once' {
+    BeforeAll {
+        $script:originalSystem = ${function:global:Get-ZtpRedfishSystem}
+        $script:originalRedfish = ${function:global:Invoke-ZtpRedfish}
+        $script:dellOnce = (Get-Content -LiteralPath (Join-Path $script:root '../../config/oem/dell.json') -Raw | ConvertFrom-Json).bmc.usbBootOnce
+        function global:Get-ZtpRedfishSystem { param($Session, [string]$SystemId) [pscustomobject]@{ '@odata.id' = '/system'; Boot = [pscustomobject]@{ 'BootSourceOverrideTarget@Redfish.AllowableValues' = @('None', 'Pxe', 'Floppy', 'Cd', 'Hdd') } } }
+        $global:usbFallback = $script:originalRedfish
+        function global:Invoke-ZtpRedfish {
+            param($Session, [string]$Path, [string]$Method = 'Get', [hashtable]$Body, [int]$MaxAttempts)
+            if ($Path -eq '/system' -and $Method -eq 'Patch') { $global:usbOverride = "$($Body.Boot.BootSourceOverrideEnabled)/$($Body.Boot.BootSourceOverrideTarget)" }
+            $r = & $global:usbFallback -Session $Session -Path $Path -Method $Method -Body $Body
+            if ($Path -eq '/system' -and $Method -eq 'Get') {
+                $parts = "$global:usbOverride/".Split('/')
+                return [pscustomobject]@{ PowerState = $global:usbPower; Boot = [pscustomobject]@{ BootSourceOverrideEnabled = $parts[0]; BootSourceOverrideTarget = $parts[1] } }
+            }
+            $r
+        }
+    }
+    AfterAll {
+        Set-Item -Path Function:global:Get-ZtpRedfishSystem -Value $script:originalSystem
+        Set-Item -Path Function:global:Invoke-ZtpRedfish -Value $script:originalRedfish
+        Remove-Variable usbOverride, usbFallback -Scope Global -ErrorAction SilentlyContinue
+    }
+    BeforeEach {
+        $global:usbCalls.Clear(); $global:usbSlot = $null; $global:usbPower = 'On'; $global:usbReportProtection = $true; $global:usbForceProtected = $false
+        $global:usbOverride = 'Disabled/None'
+        Mock Start-Sleep {}
+    }
+
+    It 'sets the manager attributes and the override target of config/oem/dell.json with -Oem Dell, and waits until the system reports the one-time override' {
+        $row = & $script:mountUsb -Nodes $script:nodes -Credential $script:bmcCredential -NodeName node-01 -ShareHost 192.0.2.10 -Oem Dell -Execute -Confirm:$false
+        $row.Action | Should -Be 'Mounted'
+        $attributes = @($global:usbCalls | Where-Object { $_ -isnot [string] -and $_.Path -eq '/manager/Attributes' -and $_.Method -eq 'Patch' })
+        $attributes.Count | Should -Be 1
+        foreach ($p in $script:dellOnce.managerAttributes.PSObject.Properties) { $attributes[0].Body.Attributes[$p.Name] | Should -Be $p.Value }
+        ($global:usbCalls | Where-Object { $_ -isnot [string] -and $_.Path -eq '/system' -and $_.Method -eq 'Patch' }).Body.Boot.BootSourceOverrideTarget | Should -Be $script:dellOnce.overrideTarget
+        $global:usbOverride | Should -Be "Once/$($script:dellOnce.overrideTarget)"
+    }
+
+    It 'stops before any boot change or restart without -Oem: there is no built-in vendor' {
+        { & $script:mountUsb -Nodes $script:nodes -Credential $script:bmcCredential -NodeName node-01 -ShareHost 192.0.2.10 -Restart -ConfirmNotClustered -Execute -Confirm:$false } | Should -Throw '*offers no Usb boot override target*no -Oem was given*Not restarting*'
+        @($global:usbCalls | Where-Object { $_ -isnot [string] -and ($_.Path -eq '/manager/Attributes' -or $_.Path -eq '/system') -and $_.Method -eq 'Patch' }).Count | Should -Be 0
+        @($global:usbCalls | Where-Object { $_ -isnot [string] -and $_.Path -like '*ComputerSystem.Reset' }).Count | Should -Be 0
+    }
+
+    It 'stops, naming the file, when the OEM definition has no bmc.usbBootOnce' {
+        { & $script:mountUsb -Nodes $script:nodes -Credential $script:bmcCredential -NodeName node-01 -ShareHost 192.0.2.10 -Oem HPE -Execute -Confirm:$false } | Should -Throw '*config/oem/hpe.json has no bmc.usbBootOnce*'
+    }
+
+    It 'has no Dell attribute names left in the script' {
+        $text = Get-Content -LiteralPath $script:mountUsb -Raw
+        $text | Should -Not -Match "'ServerBoot\.1\.|'vFDD'"
+    }
+}
