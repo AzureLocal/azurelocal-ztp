@@ -1,5 +1,5 @@
 {
-  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.AzureStackHCI/edgeMachines/node-01/jobs/ProvisionOs",
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-iic-azl-01/providers/Microsoft.AzureStackHCI/edgeMachines/node-01/jobs/ProvisionOs",
   "name": "ProvisionOs",
   "properties": {
     "deploymentMode": "Deploy",
@@ -27,7 +27,7 @@
       "onboardingConfiguration": {
         "arcVirtualMachineId": "00000000-0000-0000-0000-000000000000",
         "location": "eastus",
-        "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1",
+        "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-iic-azl-01/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1",
         "tenantId": "00000000-0000-0000-0000-000000000000",
         "type": "HybridComputeMachine"
       },

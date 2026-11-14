@@ -21,7 +21,7 @@ Every row carries an **evidence label** so you can tell what ZTP does today from
 | **Read from Microsoft docs** | A Microsoft Learn page or API spec says so; ZTP does not make the call (or makes it only in the shape the page shows). The page is linked or named. |
 | **Not made by ZTP** | The call exists, and ZTP could make it, but no ZTP script does. Listed so you can see what is possible; it carries no ZTP evidence at all. |
 
-Addresses, names and identifiers in examples are documentation values: `192.0.2.x` and `198.51.100.x`, all-zero GUIDs, `rg-example`, `node-01`, MAC `00-00-5E-00-53-xx`.
+Addresses, names and identifiers in examples are documentation values: `192.0.2.x` and `198.51.100.x`, all-zero GUIDs, `rg-iic-azl-01`, `node-01`, MAC `00-00-5E-00-53-xx`.
 
 ## Contents
 
@@ -76,9 +76,9 @@ The Network stage does **not** use the Configurator service. After the OS instal
 | Target | How | Where it is set |
 | --- | --- | --- |
 | Azure | The operator's own Az PowerShell context (`Connect-AzAccount`, `Set-AzContext`). Every ARM call goes through `Invoke-AzRestMethod`, or an Az cmdlet, under that context. No token is read, stored or printed. | You sign in before the run. The role assignments the run needs are in [Prerequisites](../prerequisites.md). |
-| Key Vault | `Get-AzKeyVaultSecret` under the same context: the BMC login, and when set, the `edgeuser` password. | `ztp.bmc_secret.*`, `ztp.maintenance_password_secret` in the environment file. |
-| BMC | A Redfish session (`POST /redfish/v1/SessionService/Sessions`, then the `X-Auth-Token` header). If the BMC refuses a session, ZTP falls back to HTTP Basic. The session is deleted at the end of each script. | The BMC login from Key Vault. `ztp.verify_bmc_certificate` (default off) controls the certificate check. |
-| Maintenance environment | HTTP Basic as `edgeuser` over TLS, certificate check skipped (the service signs its own certificate). The password is the one the image was built with, otherwise the published default. | `provisioning.simplified.maintenance_password` (older layout `ztp.maintenance_password_secret`); port and user name under `provisioning.simplified.maintenance_environment`. See [Appendix B](./configurator-app-api.md#how-ztp-uses-this-service). |
+| Secrets | azurelocal-toolkit's resolver (`scripts/common/secrets/AzlSecret.psm1`, `Get-AzlSecretValue`): the BMC login, and when set, the `edgeuser` password. A `keyvault://` reference is read with `Get-AzKeyVaultSecret` under the same context; `env://`, `file://` and `command://` need no Azure call. | `hardware.bmc.username`, `.password`, `provisioning.simplified.maintenance_password` in the infrastructure file. |
+| BMC | A Redfish session (`POST /redfish/v1/SessionService/Sessions`, then the `X-Auth-Token` header). If the BMC refuses a session, ZTP falls back to HTTP Basic. The session is deleted at the end of each script. | The BMC login (`hardware.bmc`), read through the toolkit's secret resolver. `hardware.bmc.verify_certificate` (default off) controls the certificate check. |
+| Maintenance environment | HTTP Basic as `edgeuser` over TLS, certificate check skipped (the service signs its own certificate). The password is the one the image was built with, otherwise the published default. | `provisioning.simplified.maintenance_password`; port and user name under `provisioning.simplified.maintenance_environment`. See [Appendix B](./configurator-app-api.md#how-ztp-uses-this-service). |
 
 The vouchers never touch a file on the management host in the claim path: the Bicep template receives them as a secure run-time object in memory.
 
@@ -163,17 +163,17 @@ A re-run does not re-claim a machine that already has an edge machine: the scrip
   "location": "eastus",
   "identity": { "type": "SystemAssigned" },
   "properties": {
-    "arcMachineResourceGroupId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/AzLocal-ManagedResources-rg-example-0000",
+    "arcMachineResourceGroupId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/AzLocal-ManagedResources-rg-iic-azl-01-0000",
     "arcMachineResourceId": "<managed resource group>/providers/Microsoft.HybridCompute/machines/node-01",
     "siteDetails": {
-      "siteResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.Edge/sites/site-example",
+      "siteResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-iic-azl-01/providers/Microsoft.Edge/sites/iic-site-01",
       "deviceConfiguration": { "hostName": "node-01" }
     },
     "ownershipVoucherDetails": { "ownerKeyType": "MicrosoftManaged", "ownershipVoucher": "<base64 of the voucher .pem, in memory only>" },
     "provisioningDetails": {
       "osProfile": { "osType": "HCI", "vsrVersion": "12.2609.1003.7" },
       "userDetails": [ { "userName": "administrator", "secretType": "KeyVault",
-        "secretLocation": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example-sec/providers/Microsoft.KeyVault/vaults/kv-example/secrets/provisioning-admin" } ]
+        "secretLocation": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-iic-sec-01/providers/Microsoft.KeyVault/vaults/kv-iic-mgmt-01/secrets/provisioning-admin" } ]
     }
   }
 }
@@ -193,7 +193,7 @@ A re-run does not re-claim a machine that already has an edge machine: the scrip
     "provisioningState": "Succeeded",
     "machineState": "Purposed",
     "connectivityStatus": "Connected",
-    "arcMachineResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1",
+    "arcMachineResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-iic-azl-01/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1",
     "lifecycleDetails": {
       "lifecycleStatus": { "status": "Provisioned", "message": "Machine has been successfully provisioned." },
       "lifecycleStages": [
@@ -237,7 +237,7 @@ Other documented properties ZTP does not set or read: `machineState` values `Cre
     "provisioningRequest": {
       "osProfile": { "osType": "HCI", "vsrVersion": "12.2609.1003.7" },
       "userDetails": [ { "userName": "administrator", "secretType": "KeyVault",
-        "secretLocation": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example-sec/providers/Microsoft.KeyVault/vaults/kv-example/secrets/provisioning-admin" } ],
+        "secretLocation": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-iic-sec-01/providers/Microsoft.KeyVault/vaults/kv-iic-mgmt-01/secrets/provisioning-admin" } ],
       "target": "HCI"
     }
   }
@@ -301,7 +301,7 @@ ZTP never writes to an Arc machine or to its extensions.
 
 | Call | What it does | Evidence |
 | --- | --- | --- |
-| `Get-AzKeyVaultSecret` | Reads the BMC login, the `edgeuser` password when one is named, and (in the Azure stage) whether the provisioning administrator secret exists. The value stays in memory as a `SecureString`. | **Used by ZTP** (`Invoke-ZtpEnvironment.ps1`, `Invoke-ZtpAzureProvisioning.ps1`). |
+| `Get-AzKeyVaultSecret` | Through azurelocal-toolkit's secret resolver, reads a `keyvault://` reference: the BMC login and the `edgeuser` password when one is named. In the Azure stage, lists the vault to see whether the provisioning administrator secret exists. The value stays in memory as a `SecureString`. | **Used by ZTP** (`Invoke-ZtpEnvironment.ps1` through the resolver, `Invoke-ZtpAzureProvisioning.ps1`). |
 | `Set-AzKeyVaultSecret` | Writes the provisioning administrator secret, the same shape as the portal's (the password as the value, no content type, no expiry, no tags), but only when it is missing and `-AdminPassword` was passed. | **Used by ZTP**, only with `-Execute`. |
 | `Get-AzResourceGroup`, `New-AzResourceGroup` | Reads the resource group and creates it when `provisioning.simplified.create_resource_group` is true (the default). | **Used by ZTP** (`Invoke-ZtpEnvironment.ps1`), only with `-Execute` for the create. |
 | `Set-AzContext`, `Get-AzContext` | Selects the tenant and subscription for the process only (`-Scope Process`). | **Used by ZTP**. |

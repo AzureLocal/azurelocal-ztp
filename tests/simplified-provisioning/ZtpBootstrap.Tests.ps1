@@ -49,7 +49,7 @@ Describe 'Get-ZtpBootstrapBuildFromUrl' {
         (Get-ZtpBootstrapBuildFromUrl -Url "$global:ztpT_blobHost/10.2610.0.3061/roe-10.2610.0.3061.zip") | ForEach-Object { $_.Version, $_.Kind } | Should -Be @('10.2610.0.3061', 'Zip')
         $iso = Get-ZtpBootstrapBuildFromUrl -Url 'https://azurestackreleases.download.prss.microsoft.com/dbazure/AzureLocal/OS-Composition-Linux/10.2507.0.3021/provision-os.iso'
         $iso.Version | Should -Be '10.2507.0.3021'; $iso.Kind | Should -Be 'Iso'
-        Get-ZtpBootstrapBuildFromUrl -Url 'https://example.com/readme.html' | Should -BeNullOrEmpty
+        Get-ZtpBootstrapBuildFromUrl -Url 'https://improbability.cloud/readme.html' | Should -BeNullOrEmpty
     }
 }
 
@@ -165,7 +165,7 @@ Describe 'Resolve-ZtpBootstrapBuild' {
     }
     It 'accepts a Microsoft download URL and refuses any other host or a bad version word' {
         (Resolve-ZtpBootstrapBuild -Version $global:ztpT_zipUrl).Channel | Should -Be 'Pinned'
-        { Resolve-ZtpBootstrapBuild -Version 'https://example.com/roe-10.2610.0.3061.zip' } | Should -Throw '*outside the Microsoft download hosts*'
+        { Resolve-ZtpBootstrapBuild -Version 'https://improbability.cloud/roe-10.2610.0.3061.zip' } | Should -Throw '*outside the Microsoft download hosts*'
         { Resolve-ZtpBootstrapBuild -Version 'newest' } | Should -Throw '*-Version must be latest*'
     }
     It 'fails with the probed range in the message when no train is published' {

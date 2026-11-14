@@ -148,12 +148,13 @@ Describe 'The BMC tools: inputs, never a prompt' {
         $global:bmcT_calls.Count | Should -Be 0
     }
 
-    It 'stops with exit code 2 on a file in the older environment-file layout' {
+    It 'stops with exit code 2 on a file that is not schema 5 (the retired environment-file layout), pointing at the toolkit''s example' {
         $old = Join-Path $TestDrive 'old-layout.yml'
         Set-Content -LiteralPath $old -Value @('cluster_nodes:', '  - { name: iic-node-01, idrac_ip: 198.51.100.11 }')
         $r = & $script:run $script:jobTool @{ InfrastructureFile = $old; Credential = $script:login }
         $r.Exit | Should -Be 2
-        $r.Errors | Should -Match 'older environment-file layout'
+        $r.Errors | Should -Match "isn't an infrastructure file in schema 5"
+        $r.Errors | Should -Match 'config/variables/examples/infrastructure\.example\.yml'
         $global:bmcT_calls.Count | Should -Be 0
     }
 

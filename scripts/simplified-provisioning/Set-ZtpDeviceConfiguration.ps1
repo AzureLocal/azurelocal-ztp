@@ -234,7 +234,7 @@ function Find-OobeManagementAdapter([string]$NodeName, [object[]]$Adapters, [str
     $match = @($Adapters | Where-Object { $_.Mac -eq $MacKey })
     if ($match.Count -eq 1) { return $match[0] }
     $found = @($Adapters | ForEach-Object { "$($_.Name) $(Format-ZtpMac $_.Mac)" }) -join '; '
-    if ($match.Count -eq 0) { throw "${NodeName}: no network adapter in the maintenance environment reports the management MAC $(Format-ZtpMac $MacKey). Found: $(if ($found) { $found } else { 'none' }). Fix the MAC in the environment file." }
+    if ($match.Count -eq 0) { throw "${NodeName}: no network adapter in the maintenance environment reports the management MAC $(Format-ZtpMac $MacKey). Found: $(if ($found) { $found } else { 'none' }). Fix the MAC in the infrastructure file." }
     throw "${NodeName}: $($match.Count) network adapters in the maintenance environment report the management MAC $(Format-ZtpMac $MacKey): $found."
 }
 
@@ -442,7 +442,7 @@ foreach ($n in $selected) {
             $holders = @($read.Adapters | Where-Object { $_.Mac -ne $macKey -and $_.Ip -eq $ip -and -not $_.EnableDhcp })
             if ($holders.Count) {
                 $h = $holders[0]
-                throw "${name}: the adapter $($h.Name) ($(Format-ZtpMac $h.Mac)) in the maintenance environment already holds the target static address $ip. ZTP doesn't release another port's address (that request shape isn't verified live), so nothing was changed. Free the address on that port, or correct ip_address or mac_address in the environment file, then rerun the Device stage."
+                throw "${name}: the adapter $($h.Name) ($(Format-ZtpMac $h.Mac)) in the maintenance environment already holds the target static address $ip. ZTP doesn't release another port's address (that request shape isn't verified live), so nothing was changed. Free the address on that port, or correct ip_address or mac_address in the infrastructure file, then rerun the Device stage."
             }
             Write-ZtpLog "${name}: maintenance environment at ${maintenance}: management port $($nic.Name) ($(Format-ZtpMac $macKey)) reports $(Format-OobeAdapter $nic); wanted $wanted$(if ($webProxy) { " and the $proxyText" })."
             if (-not $already) {

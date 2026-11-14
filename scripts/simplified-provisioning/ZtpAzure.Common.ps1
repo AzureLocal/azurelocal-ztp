@@ -379,7 +379,7 @@ function Get-ZtpArcMachineAddress {
     .SYNOPSIS
     The IPv4 addresses an Arc machine reports for the adapter with a MAC address (properties.networkProfile), skipping
     link-local ones. After simplified provisioning the OS takes its management address from DHCP; this is where to find it
-    when the node doesn't answer on the address the environment file gives it yet.
+    when the node doesn't answer on the address the infrastructure file gives it yet.
     #>
     [CmdletBinding()]
     param(

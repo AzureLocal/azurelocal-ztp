@@ -1,5 +1,5 @@
 {
-  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.AzureStackHCI/edgeMachines/node-01",
+  "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-iic-azl-01/providers/Microsoft.AzureStackHCI/edgeMachines/node-01",
   "identity": {
     "principalId": "00000000-0000-0000-0000-000000000000",
     "tenantId": "00000000-0000-0000-0000-000000000000",
@@ -8,8 +8,8 @@
   "location": "eastus",
   "name": "node-01",
   "properties": {
-    "arcMachineResourceGroupId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/AzLocal-ManagedResources-rg-example-0000",
-    "arcMachineResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1",
+    "arcMachineResourceGroupId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/AzLocal-ManagedResources-rg-iic-azl-01-0000",
+    "arcMachineResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-iic-azl-01/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1",
     "cloudId": "00000000-0000-0000-0000-000000000000",
     "connectivityStatus": "Connected",
     "lastSyncTimestamp": "2026-10-10T18:09:26.2608708Z",
@@ -120,7 +120,7 @@
         "description": "ProvisionOs",
         "id": "00000000-0000-0000-0000-000000000000",
         "name": "ProvisionOs",
-        "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.AzureStackHCI/edgeMachines/node-01/jobs/ProvisionOs",
+        "resourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-iic-azl-01/providers/Microsoft.AzureStackHCI/edgeMachines/node-01/jobs/ProvisionOs",
         "status": "Succeeded",
         "type": "ProvisionOs"
       }
@@ -132,7 +132,7 @@
         "azureMachineId": "00000000-0000-0000-0000-000000000000",
         "id": "00000000-0000-0000-0000-000000000000",
         "manufacturer": "Dell Inc.",
-        "modelName": "Example-Model",
+        "modelName": "IIC-Model",
         "serialNumber": "SERIAL01",
         "validationStatus": "Valid",
         "version": "2.0"
@@ -147,7 +147,7 @@
         {
           "secretType": "KeyVault",
           "userName": "administrator",
-          "secretLocation": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example-sec/providers/Microsoft.KeyVault/vaults/kv-example/secrets/provisioning-admin"
+          "secretLocation": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-iic-sec-01/providers/Microsoft.KeyVault/vaults/kv-iic-mgmt-01/secrets/provisioning-admin"
         }
       ]
     },
@@ -157,28 +157,28 @@
         "extensions": [
           {
             "extensionName": "LcmController",
-            "extensionResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1/extensions/AzureEdgeLifecycleManager",
+            "extensionResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-iic-azl-01/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1/extensions/AzureEdgeLifecycleManager",
             "managedBy": "Azure",
             "state": "Succeeded",
             "typeHandlerVersion": "30.2607.0.1310"
           },
           {
             "extensionName": "EdgeRemoteSupport",
-            "extensionResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1/extensions/AzureEdgeRemoteSupport",
+            "extensionResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-iic-azl-01/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1/extensions/AzureEdgeRemoteSupport",
             "managedBy": "Azure",
             "state": "Succeeded",
             "typeHandlerVersion": "1.0.13.2"
           },
           {
             "extensionName": "DeviceManagementExtension",
-            "extensionResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1/extensions/AzureEdgeDeviceManagement",
+            "extensionResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-iic-azl-01/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1/extensions/AzureEdgeDeviceManagement",
             "managedBy": "Azure",
             "state": "Succeeded",
             "typeHandlerVersion": "1.2607.2.3111"
           },
           {
             "extensionName": "TelemetryAndDiagnostics",
-            "extensionResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1/extensions/AzureEdgeTelemetryAndDiagnostics",
+            "extensionResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-iic-azl-01/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1/extensions/AzureEdgeTelemetryAndDiagnostics",
             "managedBy": "Azure",
             "state": "Succeeded",
             "typeHandlerVersion": "2.0.50.0"
@@ -191,7 +191,7 @@
         "cpuSockets": 2,
         "manufacturer": "Dell Inc.",
         "memoryCapacityInGb": 256,
-        "model": "Example-Model",
+        "model": "IIC-Model",
         "processorType": "IntelTDX"
       },
       "lastUpdated": "2026-10-10T18:09:26.2613282Z",
@@ -236,19 +236,19 @@
           "timeZone": "Eastern Standard Time"
         }
       },
-      "siteResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.Edge/sites/site-example"
+      "siteResourceId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-iic-azl-01/providers/Microsoft.Edge/sites/iic-site-01"
     }
   },
   "systemData": {
     "createdAt": "2026-10-10T17:25:07.1154498Z",
-    "createdBy": "operator@example.com",
+    "createdBy": "operator@improbability.cloud",
     "createdByType": "User",
     "lastModifiedAt": "2026-10-10T18:12:08.8335381Z",
     "lastModifiedBy": "00000000-0000-0000-0000-000000000000",
     "lastModifiedByType": "Application"
   },
   "tags": {
-    "project": "example"
+    "project": "iic-azl"
   },
   "type": "microsoft.azurestackhci/edgemachines"
 }

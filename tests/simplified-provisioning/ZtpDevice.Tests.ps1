@@ -66,11 +66,11 @@ BeforeAll {
         param([System.Collections.IDictionary]$Management, [string]$Maintenance = '192.0.2.111', [string]$ScanRange, [System.Collections.IDictionary]$WebProxy)
         $id = [guid]::NewGuid().ToString('N')
         $params = Join-Path $TestDrive "params-$id.json"
-        $node = [ordered]@{ name = 'node-01'; service_tag = 'EXAMPLE1' }
+        $node = [ordered]@{ name = 'node-01'; service_tag = 'IICSN0001' }
         if ($Management) { $node.management = $Management }
         @{ parameters = @{ nodes = @{ value = @($node) } } } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $params
         $nodes = Join-Path $TestDrive "nodes-$id.json"
-        $entry = [ordered]@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11' }
+        $entry = [ordered]@{ name = 'node-01'; service_tag = 'IICSN0001'; bmc_address = '198.51.100.11' }
         if ($Maintenance) { $entry.maintenance_address = $Maintenance }
         if ($ScanRange) { $entry.maintenance_scan_range = $ScanRange }
         if ($WebProxy) { $entry.web_proxy = $WebProxy }
@@ -142,11 +142,11 @@ Describe 'Set-ZtpDeviceConfiguration.ps1' {
     }
 
     It 'signs in with -EdgeUserPassword when the image was built with one' {
-        $global:devT_password = 'Example-Not-A-Secret-1'
-        $edge = ConvertTo-SecureString 'Example-Not-A-Secret-1' -AsPlainText -Force
+        $global:devT_password = 'Iic-Not-A-Secret-1'
+        $edge = ConvertTo-SecureString 'Iic-Not-A-Secret-1' -AsPlainText -Force
         $row = & $script:run (& $script:writeInputs (& $script:static)) @{ EdgeUserPassword = $edge; Execute = $true; Confirm = $false }
         $row.Status | Should -Be 'Changed'
-        @($global:devT_calls | ForEach-Object Password | Select-Object -Unique) | Should -Be @('Example-Not-A-Secret-1')
+        @($global:devT_calls | ForEach-Object Password | Select-Object -Unique) | Should -Be @('Iic-Not-A-Secret-1')
     }
 
     It 'matches the management MAC whatever its separators and case, and sends the data contract in PascalCase' {
@@ -203,10 +203,10 @@ Describe 'Set-ZtpDeviceConfiguration.ps1' {
     It 'fails before any request when two nodes share a static address' {
         $id = [guid]::NewGuid().ToString('N')
         $params = Join-Path $TestDrive "params-dup-$id.json"
-        $mk = { param($n) $m = & $script:static; $m.mac_address = "00-00-5E-00-53-0$n"; [ordered]@{ name = "node-0$n"; service_tag = "EXAMPLE$n"; management = $m } }
+        $mk = { param($n) $m = & $script:static; $m.mac_address = "00-00-5E-00-53-0$n"; [ordered]@{ name = "node-0$n"; service_tag = "IICSN000$n"; management = $m } }
         @{ parameters = @{ nodes = @{ value = @((& $mk 1), (& $mk 2)) } } } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $params
         $nodes = Join-Path $TestDrive "nodes-dup-$id.json"
-        @{ nodes = @(@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11'; maintenance_address = '192.0.2.111' }, @{ name = 'node-02'; service_tag = 'EXAMPLE2'; bmc_address = '198.51.100.12'; maintenance_address = '192.0.2.112' }) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $nodes
+        @{ nodes = @(@{ name = 'node-01'; service_tag = 'IICSN0001'; bmc_address = '198.51.100.11'; maintenance_address = '192.0.2.111' }, @{ name = 'node-02'; service_tag = 'IICSN0002'; bmc_address = '198.51.100.12'; maintenance_address = '192.0.2.112' }) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $nodes
         { & $script:run @{ ParameterFile = $params; NodesFile = $nodes } @{ Execute = $true; Confirm = $false } } | Should -Throw '*nodes node-01, node-02 share the management ip_address 192.0.2.11*'
         $global:devT_calls.Count | Should -Be 0
     }

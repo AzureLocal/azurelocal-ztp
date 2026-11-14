@@ -1,13 +1,13 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-Turns ztp-handoff.json into the block the cluster deployment solution wants in its environment file: arc_machine_names
+Turns ztp-handoff.json into the block the cluster deployment solution wants in its infrastructure file: arc_machine_names
 (node host name -> Arc machine name), plus the installed solution version.
 .DESCRIPTION
 The cluster deployment needs arc_machine_names[<host name>] to build the Arc node resource IDs (and its pre-Deploy Arc-name
 gate reads the same map); ZTP names each Arc machine after its node unless the infrastructure file says otherwise, and the
 handoff records the name Azure actually has. The output is plain YAML (default) or JSON, printed and optionally written to
--OutputPath, for the operator to paste into their environment file. Pure conversion: no Azure, no hardware, no file other
+-OutputPath, for the operator to paste into their infrastructure file. Pure conversion: no Azure, no hardware, no file other
 than -OutputPath is touched.
 Keys: arc_machine_names; release { azure_local_version (the solution build installed) }. Only arc_machine_names is required
 by the cluster deployment inputs. ZTP carries no SBE: the SBE belongs to OS configuration and deployment, so an older

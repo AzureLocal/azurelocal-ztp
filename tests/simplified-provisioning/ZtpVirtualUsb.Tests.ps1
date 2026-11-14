@@ -549,15 +549,15 @@ if ($env:ZTP_TEST_FAIL_NODE -eq $NodeName[0]) { throw "$($NodeName[0]): booted i
 Describe 'Node list and BMC targets' {
     It 'reads a JSON nodes file with the nodes key or a bare array' {
         $wrapped = Join-Path $TestDrive 'nodes-wrapped.json'
-        Set-Content -LiteralPath $wrapped -Value '{ "nodes": [ { "name": "node-01", "service_tag": "EXAMPLE1", "bmc_address": "198.51.100.11" } ] }'
+        Set-Content -LiteralPath $wrapped -Value '{ "nodes": [ { "name": "node-01", "service_tag": "IICSN0001", "bmc_address": "198.51.100.11" } ] }'
         $bare = Join-Path $TestDrive 'nodes-bare.json'
-        Set-Content -LiteralPath $bare -Value '[ { "name": "node-02", "serial": "EXAMPLE2", "bmc_ip": "198.51.100.12" } ]'
+        Set-Content -LiteralPath $bare -Value '[ { "name": "node-02", "serial": "IICSN0002", "bmc_ip": "198.51.100.12" } ]'
         $one = @(Get-ZtpNodeList -NodesFile $wrapped -RequireSerial)
         $one[0].Name | Should -Be 'node-01'
-        $one[0].Serial | Should -Be 'EXAMPLE1'
+        $one[0].Serial | Should -Be 'IICSN0001'
         $one[0].BmcAddress | Should -Be '198.51.100.11'
         $two = @(Get-ZtpNodeList -NodesFile $bare)
-        $two[0].Serial | Should -Be 'EXAMPLE2'
+        $two[0].Serial | Should -Be 'IICSN0002'
         $two[0].BmcAddress | Should -Be '198.51.100.12'
     }
 

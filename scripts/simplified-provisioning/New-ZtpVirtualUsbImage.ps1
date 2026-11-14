@@ -44,7 +44,8 @@ Build the images; without it only the plan is printed.
 .OUTPUTS
 PSCustomObject { Node, ImagePath, SizeBytes, Sha256, EdgeUserPasswordSet }
 .EXAMPLE
-./New-ZtpVirtualUsbImage.ps1 -SourcePath D:\Media\roe\provision-os.iso -NodeName node-01,node-02 -OutputDirectory D:\ZtpVirtualUsb -EdgeUserPassword (Read-Host -AsSecureString 'edgeuser password') -Execute
+./New-ZtpVirtualUsbImage.ps1 -SourcePath D:\Media\roe\provision-os.iso -NodeName node-01,node-02 -OutputDirectory D:\ZtpVirtualUsb -EdgeUserPassword (Get-AzKeyVaultSecret -VaultName kv-iic-mgmt-01 -Name maintenance-password).SecretValue -Execute
+(Invoke-ZtpEnvironment.ps1 passes the password it reads from provisioning.simplified.maintenance_password through the toolkit's resolver.)
 .EXAMPLE
 ./New-ZtpVirtualUsbImage.ps1 -SourcePath D:\Media\roe\extracted -OutputPath D:\ZtpVirtualUsb\ztp-usb.img -Execute
 #>

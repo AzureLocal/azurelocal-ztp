@@ -6,9 +6,10 @@
 # - A self-hosted Windows runner on the management network with shell = "pwsh", running as a service under a local
 #   administrator account, with the prerequisites in docs/prerequisites.md. Give it the tags "windows" and "ztp".
 # - In the runner's config.toml, [runners.custom_build_dir] enabled = true, so GIT_CLONE_PATH below is allowed. The run's
-#   state is in ztp.media_path of the environment file, outside the clone, on every job and every run.
+#   state is in provisioning.simplified.media_path of the infrastructure file, outside the clone, on every job and every run.
 # - The runner host has a managed identity (Azure VM or Azure Arc-enabled server) with the roles in
-#   docs/automation-pipelines.md. No secret is stored in GitLab: the environment file references Key Vault.
+#   docs/automation-pipelines.md. No secret is stored in GitLab: the infrastructure file holds secret references,
+#   read with -Execute by azurelocal-toolkit's resolver (set AZL_TOOLKIT_ROOT on the runner, or clone the toolkit next to ZTP).
 # - If your tier has them, protect the environment azurelocal-ztp-execute and require deployment approvals.
 
 workflow:
@@ -18,7 +19,7 @@ workflow:
 variables:
   INFRASTRUCTURE_FILE:
     value: 'D:\ztp\environments\example\infrastructure.yml'
-    description: Environment file path on the runner
+    description: Infrastructure file path on the runner
   ZTP_NODES:
     value: all
     description: Nodes, comma-separated, or all

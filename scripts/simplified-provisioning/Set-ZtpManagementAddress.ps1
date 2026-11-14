@@ -37,11 +37,11 @@ Sign in first (Connect-AzAccount). The edge machine is named after the node, as 
 .PARAMETER SubscriptionId
 Subscription of the edge machines (for example 00000000-0000-0000-0000-000000000000).
 .PARAMETER ResourceGroupName
-Resource group of the edge machines (for example rg-example).
+Resource group of the edge machines (for example rg-iic-azl-01).
 .PARAMETER ParameterFile
 The parameters file of bicep/main.bicep (JSON, or a .bicepparam compiled with az bicep build-params). Each node's
 management block gives ip_assignment, mac_address, ip_address, subnet_mask, gateway, dns_servers and vlan_id;
-Invoke-ZtpEnvironment.ps1 writes it from the environment file. A node without one is reported and left alone.
+Invoke-ZtpEnvironment.ps1 writes it from the infrastructure file. A node without one is reported and left alone.
 .PARAMETER Node
 Nodes to handle (default: every node in the parameters file).
 .PARAMETER ApiVersion
@@ -61,11 +61,11 @@ jobs/ApplyConfiguration, and wait for the jobs. Without it (the default) the sta
 .PARAMETER Execute
 Record the result in -EventLogPath; with -ApplyThroughAzure, also change the adapters. Without it only the plan is printed.
 .EXAMPLE
-./Set-ZtpManagementAddress.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example -ParameterFile ./bicep/main.parameters.json
+./Set-ZtpManagementAddress.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-iic-azl-01 -ParameterFile ./bicep/main.parameters.json
 .EXAMPLE
-./Set-ZtpManagementAddress.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example -ParameterFile ./bicep/main.parameters.json -EventLogPath D:\ZtpEvidence\ztp-events.jsonl -Execute
+./Set-ZtpManagementAddress.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-iic-azl-01 -ParameterFile ./bicep/main.parameters.json -EventLogPath D:\ZtpEvidence\ztp-events.jsonl -Execute
 .EXAMPLE
-./Set-ZtpManagementAddress.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example -ParameterFile ./bicep/main.parameters.json -Node node-01 -ChangeLogPath D:\ZtpEvidence\network-changes.jsonl -ApplyThroughAzure -Execute
+./Set-ZtpManagementAddress.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-iic-azl-01 -ParameterFile ./bicep/main.parameters.json -Node node-01 -ChangeLogPath D:\ZtpEvidence\network-changes.jsonl -ApplyThroughAzure -Execute
 #>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'The parameters are read inside the helper functions.')]
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
@@ -194,7 +194,7 @@ function Find-ManagementAdapter([string]$NodeName, [object[]]$Rows, [string]$Mac
     $match = @($Rows | Where-Object { $_.Mac -eq $MacKey })
     if ($match.Count -eq 1) { return $match[0] }
     $found = @($Rows | ForEach-Object { "$($_.AdapterName) $(Format-ZtpMac $_.Mac)$(if ($_.Description) { " ($($_.Description))" })" }) -join '; '
-    if ($match.Count -eq 0) { throw "${NodeName}: no network adapter of edge machine $NodeName reports the management MAC $(Format-ZtpMac $MacKey). Found: $(if ($found) { $found } else { 'none' }). Fix the MAC in the environment file." }
+    if ($match.Count -eq 0) { throw "${NodeName}: no network adapter of edge machine $NodeName reports the management MAC $(Format-ZtpMac $MacKey). Found: $(if ($found) { $found } else { 'none' }). Fix the MAC in the infrastructure file." }
     throw "${NodeName}: $($match.Count) network adapters report the management MAC $(Format-ZtpMac $MacKey): $found."
 }
 

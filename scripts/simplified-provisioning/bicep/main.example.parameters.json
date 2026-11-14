@@ -5,9 +5,9 @@
     "location": { "value": "eastus" },
     "tags": { "value": { "workload": "example" } },
     "azl_rp_app_object_id": { "value": "00000000-0000-0000-0000-000000000000" },
-    "key_vault_name": { "value": "kv-example" },
-    "key_vault_resource_group": { "value": "rg-example-sec" },
-    "site_name": { "value": "site-example" },
+    "key_vault_name": { "value": "kv-iic-mgmt-01" },
+    "key_vault_resource_group": { "value": "rg-iic-sec-01" },
+    "site_name": { "value": "iic-site-01" },
     "site_display_name": { "value": "Example site" },
     "configuration_name": { "value": "default" },
     "admin_username": { "value": "azladmin" },
@@ -15,8 +15,8 @@
     "time_zone": { "value": "UTC" },
     "nodes": {
       "value": [
-        { "name": "node-01", "service_tag": "EXAMPLE1" },
-        { "name": "node-02", "service_tag": "EXAMPLE2" }
+        { "name": "node-01", "service_tag": "IICSN0001" },
+        { "name": "node-02", "service_tag": "IICSN0002" }
       ]
     },
     "apply_site_settings": { "value": true },

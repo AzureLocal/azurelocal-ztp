@@ -53,7 +53,7 @@ export default defineConfig({
           { text: 'Monitoring a run', link: '/monitoring' },
           { text: 'Master infrastructure.yml (schema 5)', link: '/infrastructure-schema-5' },
           { text: 'Variables audit', link: '/variables-audit' },
-          { text: 'Environment file reference', link: '/environment-file' }
+          { text: 'Infrastructure file reference', link: '/environment-file' }
         ]
       },
       {

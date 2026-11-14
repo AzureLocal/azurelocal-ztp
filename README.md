@@ -4,7 +4,7 @@
 
 ## What it does
 
-You supply an environment file. One command then:
+You supply one infrastructure file, the `infrastructure.yml` of azurelocal-toolkit (schema 5) that every Azure Local tool reads. One command then:
 
 1. Downloads and checks the maintenance ISO, and builds one virtual USB image per node.
 2. Sets the BIOS values the file names, and boots each node from its image over the BMC (Redfish virtual media, USB-stick slot), all nodes in parallel.
@@ -71,7 +71,7 @@ The full list, with who checks what, is on the [Prerequisites](docs/prerequisite
 | Need | Detail |
 | --- | --- |
 | PowerShell | PowerShell 7.0 or later, in an elevated session on Windows. Every script has `#Requires -Version 7.0`. Windows PowerShell 5.1 cannot run it. |
-| Modules and tools | `powershell-yaml`; `Az.Accounts`, `Az.Resources`, `Az.KeyVault`, `Az.ConnectedMachine` (the code states no minimum versions); the Azure CLI with Bicep (`az bicep install`). Pester 5.9.1 only to run the tests. |
+| Modules and tools | `powershell-yaml`; `Az.Accounts`, `Az.Resources`, `Az.KeyVault`, `Az.ConnectedMachine` (the code states no minimum versions); the Azure CLI with Bicep (`az bicep install`); an [azurelocal-toolkit](https://github.com/AzureLocal/azurelocal-toolkit) clone, found through `AZL_TOOLKIT_ROOT` or next to this repository: its validator checks the infrastructure file, and its secret resolver (`scripts/common/secrets/AzlSecret.psm1`) reads every secret reference (an `-Execute` run without it stops with exit code 2). Pester 5.9.1 only to run the tests. |
 | Operating system | A Windows management host (the SMB share, the local account and the firewall rule are Windows features). It must reach the BMCs, the provisioning network and the internet, and stay up for the run (1.5 to 2 hours for two nodes). |
 | Azure feature and resource providers | The feature `Microsoft.DeviceOnboarding/AzureLocalZTP` is registered, and these resource providers are registered in the subscription: `Microsoft.HybridCompute`, `Microsoft.AzureStackHCI`, `Microsoft.DeviceOnboarding`, `Microsoft.Edge`, `Microsoft.GuestConfiguration`, `Microsoft.HybridConnectivity`, `Microsoft.KeyVault`, `Microsoft.ManagedIdentity`, `Microsoft.PolicyInsights`, `Microsoft.Storage`, `Microsoft.Insights`. |
 | Region | In the preview only **East US** supports the provisioning resources (the site and the edge machines). The resource group can be in another region. |
@@ -79,7 +79,7 @@ The full list, with who checks what, is on the [Prerequisites](docs/prerequisite
 | Ownership vouchers | One small `.pem` file per machine, named after its serial number. The maintenance environment writes it to `\vouchers\<serial>\`. ZTP reads it back from the node's virtual USB image over the BMC (no USB stick, no one at the machine), checks that it holds the node's serial number, and claims the machine with it. Treat a voucher as a credential: keep the vouchers folder out of git. |
 | Hardware | A BMC with Redfish over HTTPS (TCP 443) and virtual media on the USB-stick slot. Secure Boot and TPM on. Learn's validated list: Dell AX-650 and AX-750, Lenovo ThinkAgile MX650 V3 and V4, HPE ProLiant DL360 Gen11. The flow is proven on Dell AX-760 with iDRAC 7.30 (not on Learn's list). |
 | SBE package | Your hardware vendor's Solution Builder Extension package, downloaded before you start and available on a share the toolkit can read (`hardware.sbe.source_path`). A requirement, not for ZTP but for what follows: it must be ready before OS configuration and ARM Validate. You need it to update the cluster, and the toolkit checks it (SB-001 to SB-006). Installing it during the build is the only optional part. Vendors differ; see the SBE paragraph above and [Prerequisites](docs/prerequisites.md#the-sbe-package). |
-| Credentials | Only Key Vault references in the file: the BMC login, the provisioning admin password (at least 12 characters with lower and upper case, a digit and a special character) and, optionally, the `edgeuser` password of the maintenance environment. The Key Vault uses the Azure RBAC permission model. |
+| Credentials | Only secret references in the file, read by the toolkit's resolver (`keyvault://` by default, or `env://`, `file://`, `command://`): the BMC login, the provisioning admin password (at least 12 characters with lower and upper case, a digit and a special character) and, optionally, the `edgeuser` password of the maintenance environment. The provisioning admin password is a `keyvault://` reference (Azure reads it). The Key Vault uses the Azure RBAC permission model. |
 | Network and ports | Host to each BMC TCP 443; each BMC to the host TCP 445 (SMB); host to the provisioning network TCP 20001; host to the internet TCP 443; the machines to Azure TCP 443 and 80 with no HTTPS inspection. Arc gateway is not supported in the preview. |
 
 ## Quickstart
@@ -90,7 +90,8 @@ Check the [Prerequisites](docs/prerequisites.md) first. Then, on a Windows manag
 git clone https://github.com/AzureLocal/azurelocal-ztp.git
 cd azurelocal-ztp
 
-# 1. Copy a toolkit template outside the repo and fill it in (no secrets: Key Vault references only).
+# 1. Copy a toolkit template outside the repo and fill it in (no secrets: secret references only, read by the
+#    toolkit's resolver; set AZL_TOOLKIT_ROOT to the toolkit clone, or clone it next to this repository).
 #    ZTP only: infrastructure.ztp.example.yml. ZTP, then OS configuration and deployment: infrastructure.example.yml.
 Copy-Item <azurelocal-toolkit>\config\variables\examples\infrastructure.ztp.example.yml D:\ztp\infrastructure.yml
 
@@ -118,7 +119,7 @@ Read the [Operator guide](docs/operator-guide.md) before you run it.
 - **Restore stage.** `hardware.bios_during_provisioning` holds BIOS values for the install only. Boot applies them; Restore sets them back to `hardware.bios` (or the value saved before Boot), restarts the node, and waits until it's Connected again. Without the key, Restore does nothing.
 - **Network stage: verify-only.** It reads Azure's per-NIC report, finds the management port by MAC, and records `managementAddressVerified` with a reason that names the mode, the port, its MAC, what it has and what the file expects. It never sends or waits on a Microsoft job: `jobs/ApplyConfiguration` never started on two live runs. `-ApplyThroughAzure` keeps that path as an opt-in, documented as unreliable.
 - **Handoff schema 2.** The handoff carries what Azure generated: the site, the installed `solution.vsrVersion`, and per node the edge and Arc machine names and IDs, `managementAddressVerified`, `managementMode`, `biosRestored` and `networkAdapters[]` (every port as Azure reports it after the install, matched by MAC to the file). It no longer carries `sbe`, `bootstrap`, `timestamps`, `connectivity` or a top-level `arcMachineResourceGroup`.
-- **No SBE in ZTP.** The OS install discovers its own SBE. The vendor SBE package is a requirement that must be ready before OS configuration (see above); only the build-time side-load is optional, and OS configuration does it only when a person asks for it (`hardware.sbe.delivery`). A file with `hardware.sbe` or `ztp.node_preparation` still works; the run ignores them with a `Note:` line.
+- **No SBE in ZTP.** The OS install discovers its own SBE. The vendor SBE package is a requirement that must be ready before OS configuration (see above); only the build-time side-load is optional, and OS configuration does it only when a person asks for it (`hardware.sbe.delivery`). A file with `hardware.sbe` still works; the run ignores it with a `Note:` line.
 
 ## What's next: OS configuration
 
@@ -157,7 +158,7 @@ OEM drivers, the SBE and the deployment admin are part of [Phase 03](https://azu
 | [Operator guide](docs/operator-guide.md) | Prerequisites, inputs, plan and execute runs, watching, resume, the handoff, what's next |
 | [Monitoring a run](docs/monitoring.md) | What each stage checks, the event file, Sonar, reading what you see |
 | [Master infrastructure.yml (schema 5)](docs/infrastructure-schema-5.md) | How ZTP reads the master file every Azure Local tool reads, key by key |
-| [Environment file reference](docs/environment-file.md) | Every key the scripts read, in the older layout (deprecated) |
+| [Infrastructure file reference](docs/environment-file.md) | Every key of the infrastructure file ZTP reads, and how secrets are read |
 | [Running from a pipeline](docs/automation-pipelines.md) | Self-hosted runner, identity, secrets, approval; examples for Azure DevOps, GitHub Actions and GitLab CI |
 | [Troubleshooting and known issues](docs/troubleshooting.md) | 5901 and the resubmit, registration delay, iDRAC quirks, Arc names, node state after install |
 | [Orchestrator reference](docs/automated-bootstrap.md) | Driving `Invoke-ZtpProvisioning.ps1` directly; events and handoff format |
@@ -181,7 +182,7 @@ npm run docs:dev
 ```text
 .
 ├── docs/                          # VitePress documentation; diagrams/ holds the draw.io flow chart and its PNG
-├── examples/                      # Example environment file (older layout) and pipelines (placeholders only)
+├── examples/                      # Pipeline examples (placeholders only); the infrastructure file example is the toolkit's
 ├── scripts/
 │   └── simplified-provisioning/   # Entry point, orchestrator, stage scripts, BMC tools, Bicep
 ├── config/

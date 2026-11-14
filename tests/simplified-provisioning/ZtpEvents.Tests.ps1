@@ -17,8 +17,8 @@ BeforeAll {
     . (Join-Path $global:ztpE_scripts 'ZtpRedfish.Common.ps1')
     . (Join-Path $global:ztpE_scripts 'ZtpEvents.Common.ps1')
     $global:ztpE_nodes = Join-Path $TestDrive 'nodes.json'
-    @{ nodes = @(@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11' }, @{ name = 'node-02'; service_tag = 'EXAMPLE2'; bmc_address = '198.51.100.12' }) } | ConvertTo-Json -Depth 5 | Set-Content $global:ztpE_nodes
-    $global:ztpE_bmc = [pscredential]::new('bmc-example', (ConvertTo-SecureString 'Example-Not-A-Secret-1' -AsPlainText -Force))
+    @{ nodes = @(@{ name = 'node-01'; service_tag = 'IICSN0001'; bmc_address = '198.51.100.11' }, @{ name = 'node-02'; service_tag = 'IICSN0002'; bmc_address = '198.51.100.12' }) } | ConvertTo-Json -Depth 5 | Set-Content $global:ztpE_nodes
+    $global:ztpE_bmc = [pscredential]::new('iic-bmc-user', (ConvertTo-SecureString 'Iic-Not-A-Secret-1' -AsPlainText -Force))
     function global:New-ZtpTestReading {
         param([string]$Power = 'On', [string]$Enabled = 'Once', [string]$Target = 'Usb', [bool]$Inserted = $true, $WriteProtected = $false, [object[]]$Logs = @())
         [pscustomobject]@{ PowerState = $Power; OverrideEnabled = $Enabled; OverrideTarget = $Target; MediaInserted = $Inserted; WriteProtected = $WriteProtected; OtherMedia = @(); LogMatches = @($Logs) }
@@ -217,19 +217,19 @@ Describe 'Get-ZtpImageVoucherSignal' {
         $media = Join-Path $TestDrive 'media'; foreach ($d in 'efi/boot', 'boot/grub2', 'liveos') { $null = New-Item -ItemType Directory -Force (Join-Path $media $d) }
         Set-Content (Join-Path $media 'efi/boot/bootx64.efi') 'e'; Set-Content (Join-Path $media 'boot/grub2/grub.cfg') 'g'; Set-Content (Join-Path $media 'liveos/rootfs.img') 'r'
         $global:ztpE_empty = Join-Path $TestDrive 'empty.img'; $null = Build-ZtpFat32Image -SourcePath $media -OutputPath $global:ztpE_empty -SizeBytes 40MB -ClusterSize 512
-        $global:ztpE_full = Join-Path $TestDrive 'full.img'; $null = Build-ZtpFat32Image -SourcePath $media -OutputPath $global:ztpE_full -SizeBytes 40MB -ClusterSize 512 -ExtraFiles @{ 'vouchers/EXAMPLE1/EXAMPLE1.pem' = (New-ZtpETestVoucher -Serial 'EXAMPLE1') }
-        $global:ztpE_wrong = Join-Path $TestDrive 'wrong.img'; $null = Build-ZtpFat32Image -SourcePath $media -OutputPath $global:ztpE_wrong -SizeBytes 40MB -ClusterSize 512 -ExtraFiles @{ 'vouchers/EXAMPLE1/EXAMPLE1.pem' = (New-ZtpETestVoucher -Serial 'OTHER') }
+        $global:ztpE_full = Join-Path $TestDrive 'full.img'; $null = Build-ZtpFat32Image -SourcePath $media -OutputPath $global:ztpE_full -SizeBytes 40MB -ClusterSize 512 -ExtraFiles @{ 'vouchers/IICSN0001/IICSN0001.pem' = (New-ZtpETestVoucher -Serial 'IICSN0001') }
+        $global:ztpE_wrong = Join-Path $TestDrive 'wrong.img'; $null = Build-ZtpFat32Image -SourcePath $media -OutputPath $global:ztpE_wrong -SizeBytes 40MB -ClusterSize 512 -ExtraFiles @{ 'vouchers/IICSN0001/IICSN0001.pem' = (New-ZtpETestVoucher -Serial 'OTHER') }
     }
     AfterAll { Remove-Item Function:\global:New-ZtpETestVoucher -ErrorAction SilentlyContinue }
     It 'reports no voucher yet, a valid voucher, a voucher for another serial and a missing image' {
-        (Get-ZtpImageVoucherSignal -ImagePath $global:ztpE_empty -Serial EXAMPLE1).Valid | Should -BeFalse
-        (Get-ZtpImageVoucherSignal -ImagePath $global:ztpE_empty -Serial EXAMPLE1).Detail | Should -Match 'no \\vouchers\\ folder'
-        $ok = Get-ZtpImageVoucherSignal -ImagePath $global:ztpE_full -Serial EXAMPLE1
+        (Get-ZtpImageVoucherSignal -ImagePath $global:ztpE_empty -Serial IICSN0001).Valid | Should -BeFalse
+        (Get-ZtpImageVoucherSignal -ImagePath $global:ztpE_empty -Serial IICSN0001).Detail | Should -Match 'no \\vouchers\\ folder'
+        $ok = Get-ZtpImageVoucherSignal -ImagePath $global:ztpE_full -Serial IICSN0001
         $ok.Valid | Should -BeTrue; $ok.Sha256 | Should -Match '^[0-9A-F]{64}$'
         ($ok | ConvertTo-Json) | Should -Not -Match 'BEGIN OWNERSHIP'
-        $wrong = Get-ZtpImageVoucherSignal -ImagePath $global:ztpE_wrong -Serial EXAMPLE1
+        $wrong = Get-ZtpImageVoucherSignal -ImagePath $global:ztpE_wrong -Serial IICSN0001
         $wrong.Valid | Should -BeFalse
-        (Get-ZtpImageVoucherSignal -ImagePath (Join-Path $TestDrive 'nope.img') -Serial EXAMPLE1).Detail | Should -Match 'image not found'
+        (Get-ZtpImageVoucherSignal -ImagePath (Join-Path $TestDrive 'nope.img') -Serial IICSN0001).Detail | Should -Match 'image not found'
     }
 }
 
@@ -280,7 +280,7 @@ Describe 'Wait-ZtpBootstrapComplete.ps1' {
             & $global:ztpE_script[$node] $global:ztpE_poll[$node]
         }
         Mock Get-ZtpImageVoucherSignal {
-            $node = if ($Serial -eq 'EXAMPLE1') { 'node-01' } else { 'node-02' }
+            $node = if ($Serial -eq 'IICSN0001') { 'node-01' } else { 'node-02' }
             $valid = $global:ztpE_voucherAt.ContainsKey($node) -and $global:ztpE_poll[$node] -ge $global:ztpE_voucherAt[$node]
             [pscustomobject]@{ Present = $valid; Valid = $valid; Sha256 = $(if ($valid) { 'AB' * 32 } else { $null }); Detail = $(if ($valid) { 'valid' } else { 'no \vouchers\ folder yet' }); ImageLastWriteUtc = $global:ztpE_imageWritten }
         }
@@ -577,9 +577,9 @@ Describe 'Wait-ZtpBootstrapComplete.ps1' {
 
     It 'uses the Configurator App folder without a BMC when -VoucherFolder is given' {
         $folder = Join-Path $TestDrive 'cfgapp'; $null = New-Item -ItemType Directory $folder -Force
-        $body = [byte[]](@(0x85) + [System.Text.Encoding]::ASCII.GetBytes('device-info:EXAMPLE1') + [byte[]](1..48)); $b64 = [Convert]::ToBase64String($body)
+        $body = [byte[]](@(0x85) + [System.Text.Encoding]::ASCII.GetBytes('device-info:IICSN0001') + [byte[]](1..48)); $b64 = [Convert]::ToBase64String($body)
         $pem = (@('-----BEGIN OWNERSHIP VOUCHER-----') + @(for ($i = 0; $i -lt $b64.Length; $i += 64) { $b64.Substring($i, [math]::Min(64, $b64.Length - $i)) }) + @('-----END OWNERSHIP VOUCHER-----')) -join "`n"
-        Set-Content (Join-Path $folder 'EXAMPLE1.pem') $pem
+        Set-Content (Join-Path $folder 'IICSN0001.pem') $pem
         $rows = & $global:ztpE_run @{ VoucherFolder = $folder; ImageDirectory = $null; Credential = $null; SkipAzureCheck = $true }
         $rows[0].Ready | Should -BeTrue
         Should -Invoke New-ZtpRedfishSession -Times 0

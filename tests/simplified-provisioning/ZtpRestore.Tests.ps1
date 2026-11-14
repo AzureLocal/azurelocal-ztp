@@ -28,11 +28,11 @@ $status = if ($env:ZTPR_ALREADY -eq $NodeName) { 'AlreadySet' } else { 'Changed'
 [pscustomobject]@{ Node = $NodeName; Bmc = $BmcAddress; Status = $status; Changes = @(foreach ($k in $Attributes.Keys) { "${k}: Disabled -> $($Attributes[$k])" }); Original = [ordered]@{} }
 '@
     $script:restore = Join-Path $script:bin 'Restore-ZtpBios.ps1'
-    $script:bmc = [pscredential]::new('bmc-example', (ConvertTo-SecureString 'Example-Not-A-Secret-1' -AsPlainText -Force))
+    $script:bmc = [pscredential]::new('iic-bmc-user', (ConvertTo-SecureString 'Iic-Not-A-Secret-1' -AsPlainText -Force))
     $script:writeNodes = {
         param([System.Collections.IDictionary]$Restore1, [System.Collections.IDictionary]$Restore2)
-        $n1 = [ordered]@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11' }
-        $n2 = [ordered]@{ name = 'node-02'; service_tag = 'EXAMPLE2'; bmc_address = '198.51.100.12' }
+        $n1 = [ordered]@{ name = 'node-01'; service_tag = 'IICSN0001'; bmc_address = '198.51.100.11' }
+        $n2 = [ordered]@{ name = 'node-02'; service_tag = 'IICSN0002'; bmc_address = '198.51.100.12' }
         if ($Restore1) { $n1.bios_restore = $Restore1 }
         if ($Restore2) { $n2.bios_restore = $Restore2 }
         $f = Join-Path $TestDrive "nodes-$([guid]::NewGuid().ToString('N')).json"
@@ -54,7 +54,7 @@ Describe 'Restore-ZtpBios.ps1' {
     It 'is a no-op that says so when no node has bios_during_provisioning' {
         $nodes = & $script:writeNodes
         $out = @(& $script:restore -NodeName node-01, node-02 -NodesFile $nodes -InformationAction SilentlyContinue)
-        ($out | Where-Object { $_ -is [string] }) | Should -Be 'PLAN: Restore: no bios_during_provisioning in the environment file; nothing to set back.'
+        ($out | Where-Object { $_ -is [string] }) | Should -Be 'PLAN: Restore: no bios_during_provisioning in the infrastructure file; nothing to set back.'
         @($out | Where-Object { $_ -isnot [string] } | ForEach-Object Status) | Should -Be @('NotNeeded', 'NotNeeded')
         $rows = @(& $script:restore -NodeName node-01, node-02 -NodesFile $nodes -EventLogPath $script:events -Execute -Confirm:$false -InformationAction SilentlyContinue)
         @($rows | ForEach-Object Status) | Should -Be @('NotNeeded', 'NotNeeded') -Because 'nothing to do needs no credential'
@@ -179,7 +179,7 @@ Describe 'Restore-ZtpBios.ps1 puts back what Boot found (derived slots)' {
         $env:ZTPR_LOG = Join-Path $TestDrive "calls-$([guid]::NewGuid().ToString('N')).jsonl"
         Remove-Item Env:\ZTPR_FAIL, Env:\ZTPR_ALREADY, Env:\ZTPR_NORESULT, Env:\ZTPR_NONTERM, Env:\ZTPR_STATUS -ErrorAction SilentlyContinue
         $script:nodesWithFallback = {
-            $n = [ordered]@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11'; bios_restore = [ordered]@{ Slot2 = '' }; bios_restore_fallback = [ordered]@{ Slot2 = [ordered]@{ when_found = 'Disabled'; restore = 'Enabled' } } }
+            $n = [ordered]@{ name = 'node-01'; service_tag = 'IICSN0001'; bmc_address = '198.51.100.11'; bios_restore = [ordered]@{ Slot2 = '' }; bios_restore_fallback = [ordered]@{ Slot2 = [ordered]@{ when_found = 'Disabled'; restore = 'Enabled' } } }
             $f = Join-Path $TestDrive "nodes-fb-$([guid]::NewGuid().ToString('N')).json"
             @{ nodes = @($n) } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $f
             $f

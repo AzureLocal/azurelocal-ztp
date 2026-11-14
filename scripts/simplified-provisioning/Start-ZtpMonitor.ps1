@@ -37,7 +37,7 @@ Also record the run to this file (replayable with Start-AzlSonar.ps1 -Replay).
 .PARAMETER Execute
 Write the config and start Sonar. Without it the config and the command are printed.
 .EXAMPLE
-./Start-ZtpMonitor.ps1 -SonarPath D:\git\azurelocal-sonar -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example -NodesFile ./nodes.json -Execute
+./Start-ZtpMonitor.ps1 -SonarPath D:\git\azurelocal-sonar -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-iic-azl-01 -NodesFile ./nodes.json -Execute
 #>
 [CmdletBinding()]
 param(

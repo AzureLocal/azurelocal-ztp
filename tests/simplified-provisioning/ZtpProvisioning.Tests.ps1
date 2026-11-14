@@ -37,12 +37,12 @@ if (`$global:ztpRunBehavior.ContainsKey('$script')) { & `$global:ztpRunBehavior[
     }
 
     $script:nodesFile = Join-Path $TestDrive 'nodes.json'
-    @{ nodes = @(@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11' }, @{ name = 'node-02'; service_tag = 'EXAMPLE2'; bmc_address = '198.51.100.12' }) } |
+    @{ nodes = @(@{ name = 'node-01'; service_tag = 'IICSN0001'; bmc_address = '198.51.100.11' }, @{ name = 'node-02'; service_tag = 'IICSN0002'; bmc_address = '198.51.100.12' }) } |
         ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:nodesFile
     $script:vouchers = Join-Path $TestDrive 'vouchers'
     $script:images = Join-Path $TestDrive 'images'
     $null = New-Item -ItemType Directory -Path $script:vouchers, $script:images -Force
-    $script:bmc = [pscredential]::new('bmc-example', (ConvertTo-SecureString 'Example-Not-A-Secret-1' -AsPlainText -Force))
+    $script:bmc = [pscredential]::new('iic-bmc-user', (ConvertTo-SecureString 'Iic-Not-A-Secret-1' -AsPlainText -Force))
 
     $script:healthy = {
         @{
@@ -54,11 +54,11 @@ if (`$global:ztpRunBehavior.ContainsKey('$script')) { & `$global:ztpRunBehavior[
             'Start-MaintenanceBoot.ps1'       = { param($p) if ($p['Execute']) { foreach ($n in $p['NodeName']) { [pscustomobject]@{ Node = $n; Image = "ztp-usb-$n.img"; WriteProtected = $false; Restarted = $true; ResetAt = [datetime]::UtcNow } } } }
             'Set-ZtpDeviceConfiguration.ps1'  = { param($p) if ($p['Execute']) { foreach ($n in $p['Node']) { [pscustomobject]@{ Node = $n; Mode = 'static'; Status = $(if ($n -eq 'node-01') { 'Changed' } else { 'Skipped' }); Adapter = 'eno1'; MacAddress = '00:00:5e:00:53:aa'; Address = $(if ($n -eq 'node-01') { '192.0.2.11' } else { '' }); MaintenanceAddress = $(if ($n -eq 'node-01') { '192.0.2.111' } else { '' }); Released = @() } } } else { 'PLAN: node-01: POST SetArcBootstrapDeviceConfiguration' } }
             'Set-ZtpManagementAddress.ps1'    = { param($p) if ($p['Execute']) { foreach ($n in $p['Node']) { [pscustomobject]@{ Node = $n; Mode = 'static'; Status = $(if ($n -eq 'node-01') { 'Changed' } else { 'AlreadySet' }); Adapter = '00000000-0000-0000-0000-000000000001'; AdapterName = 'Port1'; MacAddress = '00:00:5e:00:53:aa'; Address = "192.0.2.1$($n[-1])"; ExpectedAddress = "192.0.2.1$($n[-1])"; Released = @(if ($n -eq 'node-01') { 'Port3' }); Changes = @() } } } else { 'PLAN: node-01: ApplyConfiguration on Port1' } }
-            'Wait-ZtpVoucher.ps1'             = { param($p) foreach ($n in $p['NodeName']) { $serial = if ($n -eq 'node-01') { 'EXAMPLE1' } else { 'EXAMPLE2' }; $f = Join-Path $p['OutputDirectory'] "$serial.pem"; Set-Content -LiteralPath $f -Value 'pem'; [pscustomobject]@{ Node = $n; Serial = $serial; OutputFile = $f; Valid = $true } } }
+            'Wait-ZtpVoucher.ps1'             = { param($p) foreach ($n in $p['NodeName']) { $serial = if ($n -eq 'node-01') { 'IICSN0001' } else { 'IICSN0002' }; $f = Join-Path $p['OutputDirectory'] "$serial.pem"; Set-Content -LiteralPath $f -Value 'pem'; [pscustomobject]@{ Node = $n; Serial = $serial; OutputFile = $f; Valid = $true } } }
             'Invoke-ZtpAzureProvisioning.ps1' = { param($p)
                 switch ($p['Stage']) {
                     'Plan' { [pscustomobject]@{ VoucherProblems = @() } }
-                    'Watch' { foreach ($n in $p['Node']) { [pscustomobject]@{ Node = $n; ArcMachineName = "00000000-0000-0000-0000-000000000000-$($n[-1])"; ArcResourceGroup = 'rg-example'; Change = 'Add' } } }
+                    'Watch' { foreach ($n in $p['Node']) { [pscustomobject]@{ Node = $n; ArcMachineName = "00000000-0000-0000-0000-000000000000-$($n[-1])"; ArcResourceGroup = 'rg-iic-azl-01'; Change = 'Add' } } }
                 }
             }
         }
@@ -67,7 +67,7 @@ if (`$global:ztpRunBehavior.ContainsKey('$script')) { & `$global:ztpRunBehavior[
         param([hashtable]$Arguments)
         $base = @{
             NodesFile = $script:nodesFile; SourcePath = 'D:\Media\provision-os.iso'; ImageDirectory = $script:images; ShareHost = '192.0.2.10'
-            VoucherDirectory = $script:vouchers; SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroupName = 'rg-example'
+            VoucherDirectory = $script:vouchers; SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroupName = 'rg-iic-azl-01'
             ParameterFile = 'main.parameters.json'; StageScriptRoot = $script:stubRoot; StatePath = $script:statePath
             InformationAction = 'SilentlyContinue'; WarningAction = 'SilentlyContinue'; EventLogPath = (Join-Path $TestDrive 'events.jsonl'); HandoffPath = (Join-Path $TestDrive 'handoff.json')
             ClusterInputsPath = (Join-Path $TestDrive 'inputs.yaml'); Oem = 'Dell'
@@ -138,7 +138,7 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
         $boot.Params.Restart | Should -BeTrue
         $boot.Params.Credential | Should -Be $script:bmc
         $test = $global:ztpRunCalls | Where-Object Script -EQ 'Test-ProvisionedMachines.ps1'
-        $test.Params.ResourceGroupName | Should -Be 'rg-example'
+        $test.Params.ResourceGroupName | Should -Be 'rg-iic-azl-01'
         $test.Params.ExpectedMachineName | Should -Be @('00000000-0000-0000-0000-000000000000-1', '00000000-0000-0000-0000-000000000000-2')
         $state = Get-Content $script:statePath -Raw | ConvertFrom-Json -AsHashtable
         @($state.stages.Keys).Count | Should -Be 11
@@ -173,7 +173,7 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
             Set-Content -LiteralPath (Join-Path $src 'boot.catalog') -Value 'c' -NoNewline
             foreach ($n in $p['NodeName']) {
                 $f = Join-Path $p['OutputDirectory'] "ztp-usb-$n.img"
-                $extra = if ($n -eq 'node-02') { @{ 'vouchers/EXAMPLE2/EXAMPLE2.pem' = [System.Text.Encoding]::ASCII.GetBytes("-----BEGIN OWNERSHIP VOUCHER-----`nAAAA`n-----END OWNERSHIP VOUCHER-----`n") } } else { @{} }
+                $extra = if ($n -eq 'node-02') { @{ 'vouchers/IICSN0002/IICSN0002.pem' = [System.Text.Encoding]::ASCII.GetBytes("-----BEGIN OWNERSHIP VOUCHER-----`nAAAA`n-----END OWNERSHIP VOUCHER-----`n") } } else { @{} }
                 $null = Build-ZtpFat32Image -SourcePath $src -OutputPath $f -SizeBytes 40MB -ClusterSize 512 -ExtraFiles $extra
                 [pscustomobject]@{ Node = $n; ImagePath = $f; Sha256 = 'AB' }
             }
@@ -246,7 +246,7 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
         $net.Params.Node | Should -Be @('node-01', 'node-02')
         $net.Params.ParameterFile | Should -Be 'main.parameters.json'
         $net.Params.SubscriptionId | Should -Be '00000000-0000-0000-0000-000000000000'
-        $net.Params.ResourceGroupName | Should -Be 'rg-example'
+        $net.Params.ResourceGroupName | Should -Be 'rg-iic-azl-01'
         $net.Params.TimeoutMinutes | Should -Be 15
         $net.Params.PollIntervalSeconds | Should -Be 5
         $net.Params.ChangeLogPath | Should -Be (Join-Path $TestDrive 'network-changes.jsonl')
@@ -287,7 +287,7 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
     }
 
     It 'Device sets the address in the maintenance environment before the claim, with the edgeuser password, and lets a node without a maintenance address through' {
-        $edge = ConvertTo-SecureString 'Example-Not-A-Secret-2' -AsPlainText -Force
+        $edge = ConvertTo-SecureString 'Iic-Not-A-Secret-2' -AsPlainText -Force
         $null = & $script:invoke @{ Execute = $true; Stage = 'Device'; Confirm = $false; EdgeUserPassword = $edge; DeviceTimeoutMinutes = 12 }
         $device = $global:ztpRunCalls | Where-Object Script -EQ 'Set-ZtpDeviceConfiguration.ps1'
         $device.Params.Execute | Should -BeTrue
@@ -312,7 +312,7 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
 
     It 'Boot saves each BIOS attribute''s original value once, Restore sets it back and waits for Connected and ready, and the handoff records it' {
         $nodes = Join-Path $TestDrive "nodes-restore-$([guid]::NewGuid().ToString('N')).json"
-        @{ nodes = @(@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11'; bios = @{ Slot2 = 'Disabled' }; bios_restore = @{ Slot2 = '' } }, @{ name = 'node-02'; service_tag = 'EXAMPLE2'; bmc_address = '198.51.100.12' }) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $nodes
+        @{ nodes = @(@{ name = 'node-01'; service_tag = 'IICSN0001'; bmc_address = '198.51.100.11'; bios = @{ Slot2 = 'Disabled' }; bios_restore = @{ Slot2 = '' } }, @{ name = 'node-02'; service_tag = 'IICSN0002'; bmc_address = '198.51.100.12' }) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $nodes
         $global:ztpRunBehavior['Start-MaintenanceBoot.ps1'] = { param($p) foreach ($n in $p['NodeName']) { [pscustomobject]@{ Node = $n; Image = "ztp-usb-$n.img"; WriteProtected = $false; Restarted = $true; Bios = @(); BiosOriginal = $(if ($n -eq 'node-01') { [ordered]@{ Slot2 = $global:ztpRunSlot2 } } else { [ordered]@{} }) } } }
         $global:ztpRunBehavior['Restore-ZtpBios.ps1'] = { param($p) foreach ($n in $p['NodeName']) { if ($n -eq 'node-01') { [pscustomobject]@{ Node = $n; Status = 'Restored'; Restored = [ordered]@{ Slot2 = [string]$p['Original']['node-01']['Slot2'] }; Changes = @('Slot2: Disabled -> Enabled') } } else { [pscustomobject]@{ Node = $n; Status = 'NotNeeded'; Restored = [ordered]@{}; Changes = @() } } } }
         $global:ztpRunSlot2 = 'Enabled'
@@ -343,7 +343,7 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
     Context 'Restore waits for a new Arc connection after the restart' {
         BeforeEach {
             $script:restoreNodes = Join-Path $TestDrive "nodes-restore-$([guid]::NewGuid().ToString('N')).json"
-            @{ nodes = @(@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11'; bios_restore = @{ Slot2 = 'Enabled' } }, @{ name = 'node-02'; service_tag = 'EXAMPLE2'; bmc_address = '198.51.100.12'; bios_restore = @{ Slot2 = 'Enabled' } }) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:restoreNodes
+            @{ nodes = @(@{ name = 'node-01'; service_tag = 'IICSN0001'; bmc_address = '198.51.100.11'; bios_restore = @{ Slot2 = 'Enabled' } }, @{ name = 'node-02'; service_tag = 'IICSN0002'; bmc_address = '198.51.100.12'; bios_restore = @{ Slot2 = 'Enabled' } }) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:restoreNodes
             $script:restartedAt = [datetime]::UtcNow
             $global:ztpRunRestartedAt = $script:restartedAt
             $global:ztpRunBehavior['Restore-ZtpBios.ps1'] = { param($p) [pscustomobject]@{ Node = 'node-01'; Status = 'Restored'; Restored = [ordered]@{ Slot2 = 'Enabled' }; Changes = @(); RestartedAt = $global:ztpRunRestartedAt }; [pscustomobject]@{ Node = 'node-02'; Status = 'AlreadySet'; Restored = [ordered]@{ Slot2 = 'Enabled' }; Changes = @(); RestartedAt = $null } }
@@ -466,7 +466,7 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
 
     It 'ignores the SBE settings of an older settings file, with a note, instead of failing' {
         $config = Join-Path $TestDrive 'settings-old.json'
-        @{ NodesFile = $script:nodesFile; SourcePath = 'D:\Media\from-file.iso'; ImageDirectory = $script:images; ShareHost = '192.0.2.20'; VoucherDirectory = $script:vouchers; SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroupName = 'rg-example'; ParameterFile = 'main.parameters.json'; Oem = 'Dell'; SbeModel = 'AX760'; SbeSolutionVersion = 'latest'; SbePackagePath = 'D:\sbe.zip' } | ConvertTo-Json | Set-Content -LiteralPath $config
+        @{ NodesFile = $script:nodesFile; SourcePath = 'D:\Media\from-file.iso'; ImageDirectory = $script:images; ShareHost = '192.0.2.20'; VoucherDirectory = $script:vouchers; SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroupName = 'rg-iic-azl-01'; ParameterFile = 'main.parameters.json'; Oem = 'Dell'; SbeModel = 'AX760'; SbeSolutionVersion = 'latest'; SbePackagePath = 'D:\sbe.zip' } | ConvertTo-Json | Set-Content -LiteralPath $config
         $out = (& $script:orchestrator -ConfigPath $config -StageScriptRoot $script:stubRoot -StatePath $script:statePath -WarningAction SilentlyContinue 6>&1 | ForEach-Object { "$_" }) -join "`n"
         $out | Should -BeLike '*SbeModel in*ignored: SBE belongs to OS configuration.*'
         $out | Should -BeLike '*SbePackagePath in*ignored: SBE belongs to OS configuration.*'
@@ -512,7 +512,7 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
     }
 
     It 'refuses to submit the Azure deployment when the plan reports voucher problems' {
-        $global:ztpRunBehavior['Invoke-ZtpAzureProvisioning.ps1'] = { param($p) if ($p['Stage'] -eq 'Plan') { [pscustomobject]@{ VoucherProblems = @('node-02: no voucher EXAMPLE2.pem') } } }
+        $global:ztpRunBehavior['Invoke-ZtpAzureProvisioning.ps1'] = { param($p) if ($p['Stage'] -eq 'Plan') { [pscustomobject]@{ VoucherProblems = @('node-02: no voucher IICSN0002.pem') } } }
         { & $script:invoke @{ Execute = $true; Stage = 'Azure'; Confirm = $false } } | Should -Throw '*voucher problems*'
         @($global:ztpRunCalls | ForEach-Object { $_.Params['Stage'] }) | Should -Not -Contain 'Execute'
     }
@@ -527,7 +527,7 @@ Describe 'Invoke-ZtpProvisioning.ps1' {
 
     It 'reads its settings from -ConfigPath, lets a parameter win and rejects unknown keys' {
         $config = Join-Path $TestDrive 'settings.json'
-        @{ NodesFile = $script:nodesFile; SourcePath = 'D:\Media\from-file.iso'; ImageDirectory = $script:images; ShareHost = '192.0.2.20'; ImageNamePrefix = 'usb-'; Oem = 'Dell'; VoucherDirectory = $script:vouchers; SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroupName = 'rg-example'; ParameterFile = 'main.parameters.json' } | ConvertTo-Json | Set-Content -LiteralPath $config
+        @{ NodesFile = $script:nodesFile; SourcePath = 'D:\Media\from-file.iso'; ImageDirectory = $script:images; ShareHost = '192.0.2.20'; ImageNamePrefix = 'usb-'; Oem = 'Dell'; VoucherDirectory = $script:vouchers; SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroupName = 'rg-iic-azl-01'; ParameterFile = 'main.parameters.json' } | ConvertTo-Json | Set-Content -LiteralPath $config
         $null = & $script:orchestrator -ConfigPath $config -SourcePath 'D:\Media\from-parameter.iso' -StageScriptRoot $script:stubRoot -StatePath $script:statePath -InformationAction SilentlyContinue -WarningAction SilentlyContinue
         $global:ztpRunCalls[0].Params.SourcePath | Should -Be 'D:\Media\from-parameter.iso'
         $global:ztpRunCalls[0].Params.ImageNamePrefix | Should -Be 'usb-'
@@ -575,15 +575,15 @@ Describe 'Invoke-ZtpProvisioning.ps1 settings that used to be fixed in the stage
     }
 
     It 'passes the image size, the share account, the Configurator port and user, and the stall budget to their stages' {
-        $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; ImageSizeGB = 6; ShareAccountName = 'svc-example'; MaintenancePort = 20011; MaintenanceUser = 'example-user'; BootstrapStallMinutes = 45; BiosTimeoutMinutes = 50 }
+        $null = & $script:invoke @{ Execute = $true; ConfirmNotClustered = $true; BmcCredential = $script:bmc; Confirm = $false; ImageSizeGB = 6; ShareAccountName = 'svc-iic-media'; MaintenancePort = 20011; MaintenanceUser = 'iic-user'; BootstrapStallMinutes = 45; BiosTimeoutMinutes = 50 }
         ($global:ztpRunCalls | Where-Object Script -EQ 'New-ZtpVirtualUsbImage.ps1').Params.SizeBytes | Should -Be (6GB)
         $boot = ($global:ztpRunCalls | Where-Object Script -EQ 'Start-MaintenanceBoot.ps1').Params
-        $boot.AccountName | Should -Be 'svc-example'
+        $boot.AccountName | Should -Be 'svc-iic-media'
         $boot.BiosTimeoutMinutes | Should -Be 50
-        ($global:ztpRunCalls | Where-Object Script -EQ 'Publish-MaintenanceIso.ps1').Params.AccountName | Should -Be 'svc-example' -Because 'the share is removed with the same account name it was created with'
+        ($global:ztpRunCalls | Where-Object Script -EQ 'Publish-MaintenanceIso.ps1').Params.AccountName | Should -Be 'svc-iic-media' -Because 'the share is removed with the same account name it was created with'
         $device = ($global:ztpRunCalls | Where-Object Script -EQ 'Set-ZtpDeviceConfiguration.ps1').Params
         $device.Port | Should -Be 20011
-        $device.UserName | Should -Be 'example-user'
+        $device.UserName | Should -Be 'iic-user'
         ($global:ztpRunCalls | Where-Object Script -EQ 'Wait-ZtpBootstrapComplete.ps1').Params.StallMinutes | Should -Be 45
     }
 

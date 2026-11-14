@@ -120,7 +120,7 @@ $rows = [System.Collections.Generic.List[object]]::new()
 foreach ($node in $NodeName) { if (-not $plan.Contains($node)) { $rows.Add([pscustomobject]@{ Node = $node; Status = 'NotNeeded'; Restored = [ordered]@{}; Changes = @(); RestartedAt = $null; Error = $null }) } }
 if ($plan.Count -eq 0) {
     Write-Information -MessageData "Restore: no node has bios_during_provisioning; nothing to set back." -InformationAction Continue
-    if (-not $Execute) { 'PLAN: Restore: no bios_during_provisioning in the environment file; nothing to set back.' }
+    if (-not $Execute) { 'PLAN: Restore: no bios_during_provisioning in the infrastructure file; nothing to set back.' }
     return $rows.ToArray()
 }
 if ($problems.Count) {

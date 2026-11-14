@@ -1,8 +1,8 @@
 # Orchestrator reference
 
-> How to drive `Invoke-ZtpProvisioning.ps1` directly, without the environment file: its settings file, stage controls, the state file, the bootstrap watch, the event format and the handoff format.
+> How to drive `Invoke-ZtpProvisioning.ps1` directly, without the infrastructure file: its settings file, stage controls, the state file, the bootstrap watch, the event format and the handoff format.
 
-Most operators don't need this page. `Invoke-ZtpEnvironment.ps1` writes the orchestrator's inputs from the environment file and runs it. See the [Operator guide](operator-guide.md) and [Design and architecture](architecture.md). Use the orchestrator directly when you need a setting the entry point fixes, or want to run one stage.
+Most operators don't need this page. `Invoke-ZtpEnvironment.ps1` writes the orchestrator's inputs from the infrastructure file and runs it. See the [Operator guide](operator-guide.md) and [Design and architecture](architecture.md). Use the orchestrator directly when you need a setting the entry point fixes, or want to run one stage.
 
 The orchestrator covers every ZTP stage, Resolve to Handoff. ZTP ends at the Handoff: each machine is Provisioned in Azure, Arc-connected, with its management address on the management port (found by MAC). OS configuration comes next; see [Where ZTP ends](architecture.md#where-ztp-ends).
 
@@ -25,7 +25,7 @@ Connect-AzAccount
     -BmcCredential $bmc -ConfirmNotClustered -RetryProvisionOs -Execute
 ```
 
-`config/simplified-provisioning/ztp-provisioning.schema.json` validates the settings file, and `nodes.schema.json` the node list. Pass `-AdminPassword` (a `SecureString`) only if the provisioning administrator secret doesn't exist yet; the Azure stage then writes it to Key Vault. The environment-file path never does that.
+`config/simplified-provisioning/ztp-provisioning.schema.json` validates the settings file, and `nodes.schema.json` the node list. Pass `-AdminPassword` (a `SecureString`) only if the provisioning administrator secret doesn't exist yet; the Azure stage then writes it to Key Vault. `Invoke-ZtpEnvironment.ps1` never does that.
 
 Set `RfsWriteAttribute` to `true` for iDRAC 7.30 (see [iDRAC quirks](troubleshooting.md#idrac-quirks)). The example file has it `true`.
 
@@ -74,7 +74,7 @@ Each stage writes `StageStarted`, `StageCompleted` or `StageFailed` events (node
 
 ### The node list's BIOS keys
 
-`Invoke-ZtpEnvironment.ps1` writes these from the environment file. Set them yourself when you drive the orchestrator directly.
+`Invoke-ZtpEnvironment.ps1` writes these from the infrastructure file. Set them yourself when you drive the orchestrator directly.
 
 | Key | Contents |
 | --- | --- |
@@ -129,7 +129,7 @@ Levels are `Info`, `Warning` and `Error`. Vouchers are never logged, only their 
 
 ## Handoff format
 
-`New-ZtpHandoff.ps1` requires every machine to be ready to cluster. It writes the handoff JSON, schema version 2. It holds only what Azure generated during ZTP, never a value the environment file already holds:
+`New-ZtpHandoff.ps1` requires every machine to be ready to cluster. It writes the handoff JSON, schema version 2. It holds only what Azure generated during ZTP, never a value the infrastructure file already holds:
 
 ```json
 {
@@ -137,14 +137,14 @@ Levels are `Info`, `Warning` and `Error`. Vouchers are never logged, only their 
   "generatedUtc": "2026-11-07T12:00:00.0000000Z",
   "tool": "azurelocal-ztp",
   "subscriptionId": "00000000-0000-0000-0000-000000000000",
-  "resourceGroup": "rg-example",
-  "site": { "resourceId": "/subscriptions/.../providers/Microsoft.Edge/sites/site-example", "name": "site-example" },
+  "resourceGroup": "rg-iic-azl-01",
+  "site": { "resourceId": "/subscriptions/.../providers/Microsoft.Edge/sites/iic-site-01", "name": "iic-site-01" },
   "solution": { "vsrVersion": "12.2609.1003.7" },
   "nodes": [ {
-    "name": "node-01", "serial": "EXAMPLE1",
+    "name": "node-01", "serial": "IICSN0001",
     "edgeMachineName": "node-01", "edgeMachineId": "/subscriptions/.../edgeMachines/node-01",
     "arcMachineName": "node-01", "arcMachineResourceId": "/subscriptions/.../Microsoft.HybridCompute/machines/node-01",
-    "arcMachineResourceGroup": "rg-example", "ready": true,
+    "arcMachineResourceGroup": "rg-iic-azl-01", "ready": true,
     "managementAddressVerified": true, "managementAddressReason": null,
     "biosRestored": { "Slot2": "Enabled" }
   } ]
@@ -156,9 +156,9 @@ Levels are `Info`, `Warning` and `Error`. Vouchers are never logged, only their 
 | `schemaVersion`, `generatedUtc`, `tool` | `2`, the time the file was written, `azurelocal-ztp` |
 | `subscriptionId`, `resourceGroup` | Where the edge machines are |
 | `site` | `resourceId`, `name` |
-| `solution.vsrVersion` | The solution build the machines actually installed. The environment file may say `latest`. |
+| `solution.vsrVersion` | The solution build the machines actually installed. The infrastructure file may say `latest`. |
 | `nodes[]` | `name`, `serial`, `edgeMachineName`, `edgeMachineId`, `arcMachineName`, `arcMachineResourceId`, `arcMachineResourceGroup`, `ready` |
-| `nodes[].managementAddressVerified` | From the Network stage: `true` when the port with the management MAC carries the environment file's address |
+| `nodes[].managementAddressVerified` | From the Network stage: `true` when the port with the management MAC carries the infrastructure file's address |
 | `nodes[].managementAddressReason` | `null` when verified. Otherwise a plain-language reason naming the mode, the management port, its MAC, what it has and what the file expects, for example `Mode B (Static with DHCP): the management port Port1 (MAC 00:00:5e:00:53:aa) has DHCP 192.0.2.116 after the install; expected static 192.0.2.11; OS configuration sets it by MAC.`, or `no Network stage result for this node`. |
 | `nodes[].biosRestored` | The attributes Restore set back, attribute to value. `{}` when none. |
 | `nodes[].managementMode` | `mode` (`A` Reserved, `B` Static with DHCP, `C` Static without management DHCP, or `null`), `name`, `ipAssignment`. See [Management address modes](prerequisites.md#management-address-modes). |

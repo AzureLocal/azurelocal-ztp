@@ -18,7 +18,7 @@ BeforeAll {
     $global:ztpH_job = Get-Content (Join-Path $global:ztpH_fixtures 'job-provisionos-succeeded.json') -Raw | ConvertFrom-Json
     $global:ztpH_installing = Get-Content (Join-Path $global:ztpH_fixtures 'edge-machine-installing-os.json') -Raw | ConvertFrom-Json
     $global:ztpH_nodes = Join-Path $TestDrive 'nodes.json'
-    @{ nodes = @(@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11' }, @{ name = 'node-02'; service_tag = 'EXAMPLE2'; bmc_address = '198.51.100.12' }) } | ConvertTo-Json -Depth 5 | Set-Content $global:ztpH_nodes
+    @{ nodes = @(@{ name = 'node-01'; service_tag = 'IICSN0001'; bmc_address = '198.51.100.11' }, @{ name = 'node-02'; service_tag = 'IICSN0002'; bmc_address = '198.51.100.12' }) } | ConvertTo-Json -Depth 5 | Set-Content $global:ztpH_nodes
     # node-02 is node-01's fixture under another name and device ID.
     $two = ($global:ztpH_ready | ConvertTo-Json -Depth 40).Replace('edgeMachines/node-01', 'edgeMachines/node-02').Replace('"name": "node-01"', '"name": "node-02"').Replace('00000000-0000-0000-0000-000000000000-1', '11111111-1111-1111-1111-111111111111-1')
     $global:ztpH_ready2 = $two | ConvertFrom-Json
@@ -39,7 +39,7 @@ Describe 'New-ZtpHandoff.ps1' {
         }
         $global:ztpH_run = {
             param([hashtable]$Extra = @{})
-            $a = @{ SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroupName = 'rg-example'; NodeName = 'node-01', 'node-02'; NodesFile = $global:ztpH_nodes
+            $a = @{ SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroupName = 'rg-iic-azl-01'; NodeName = 'node-01', 'node-02'; NodesFile = $global:ztpH_nodes
                 HandoffPath = (Join-Path $TestDrive 'out/ztp-handoff.json'); InformationAction = 'SilentlyContinue'; WarningAction = 'SilentlyContinue' }
             foreach ($k in $Extra.Keys) { $a[$k] = $Extra[$k] }
             & (Join-Path $global:ztpH_scripts 'New-ZtpHandoff.ps1') @a
@@ -56,16 +56,16 @@ Describe 'New-ZtpHandoff.ps1' {
         $r.ArcMachineNames | Should -Be @('00000000-0000-0000-0000-000000000000-1', '11111111-1111-1111-1111-111111111111-1')
         $h = Get-Content $r.HandoffPath -Raw | ConvertFrom-Json
         @($h.PSObject.Properties.Name) | Should -Be @('schemaVersion', 'generatedUtc', 'tool', 'subscriptionId', 'resourceGroup', 'site', 'solution', 'nodes')
-        $h.schemaVersion | Should -Be 2; $h.tool | Should -Be 'azurelocal-ztp'; $h.resourceGroup | Should -Be 'rg-example'
+        $h.schemaVersion | Should -Be 2; $h.tool | Should -Be 'azurelocal-ztp'; $h.resourceGroup | Should -Be 'rg-iic-azl-01'
         $h.subscriptionId | Should -Be '00000000-0000-0000-0000-000000000000'
-        $h.site.name | Should -Be 'site-example'; $h.site.resourceId | Should -Match '/sites/site-example$'
+        $h.site.name | Should -Be 'iic-site-01'; $h.site.resourceId | Should -Match '/sites/iic-site-01$'
         $h.solution.vsrVersion | Should -Be '12.2609.1003.7'
         $n1 = $h.nodes | Where-Object name -EQ 'node-01'
         @($n1.PSObject.Properties.Name) | Should -Be @('name', 'serial', 'edgeMachineName', 'edgeMachineId', 'arcMachineName', 'arcMachineResourceId', 'arcMachineResourceGroup', 'ready', 'managementAddressVerified', 'managementAddressReason', 'biosRestored', 'biosRestoreComplete', 'biosNotRestored', 'managementMode', 'networkAdapters')
-        $n1.arcMachineName | Should -Be '00000000-0000-0000-0000-000000000000-1'; $n1.serial | Should -Be 'EXAMPLE1'; $n1.ready | Should -BeTrue
+        $n1.arcMachineName | Should -Be '00000000-0000-0000-0000-000000000000-1'; $n1.serial | Should -Be 'IICSN0001'; $n1.ready | Should -BeTrue
         $n1.edgeMachineName | Should -Be 'node-01'; $n1.edgeMachineId | Should -Match '/edgeMachines/node-01$'
         $n1.arcMachineResourceId | Should -Match '/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1$'
-        $n1.arcMachineResourceGroup | Should -Be 'rg-example'
+        $n1.arcMachineResourceGroup | Should -Be 'rg-iic-azl-01'
         $n1.managementAddressVerified | Should -BeTrue; $n1.managementAddressReason | Should -BeNullOrEmpty
         $n1.biosRestored.Slot2 | Should -Be 'Enabled'
         $n2 = $h.nodes | Where-Object name -EQ 'node-02'
@@ -99,11 +99,11 @@ Describe 'New-ZtpHandoff.ps1' {
         # network or not, and the file's ports. The management port is a converged ConnectX port here, not an onboard one.
         $nodes = Join-Path $TestDrive "nodes-nic-$([guid]::NewGuid().ToString('N')).json"
         @{ nodes = @(
-                [ordered]@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11'; management_mac = '00:00:5E:00:53:AA'; management_ip_assignment = 'static'; management_dhcp = $true
+                [ordered]@{ name = 'node-01'; service_tag = 'IICSN0001'; bmc_address = '198.51.100.11'; management_mac = '00:00:5E:00:53:AA'; management_ip_assignment = 'static'; management_dhcp = $true
                     network_adapters = @(
                         [ordered]@{ name = 'Slot 3 Port 1'; mac_address = '00:00:5E:00:53:AA'; roles = @('management', 'compute', 'provisioning'); ip_assignment = 'static'; ip_address = '192.0.2.11' }
                         [ordered]@{ name = 'Slot 3 Port 2'; mac_address = '00:00:5E:00:53:BB'; roles = @('storage'); ip_assignment = 'none'; ip_address = '' }) }
-                [ordered]@{ name = 'node-02'; service_tag = 'EXAMPLE2'; bmc_address = '198.51.100.12'; management_mac = '00:00:5E:00:53:CC'; management_ip_assignment = 'dhcp_reservation'; management_dhcp = $true; network_adapters = @() }) } |
+                [ordered]@{ name = 'node-02'; service_tag = 'IICSN0002'; bmc_address = '198.51.100.12'; management_mac = '00:00:5E:00:53:CC'; management_ip_assignment = 'dhcp_reservation'; management_dhcp = $true; network_adapters = @() }) } |
             ConvertTo-Json -Depth 6 | Set-Content $nodes
         $adapter = {
             param([string]$Id, [string]$Name, [string]$Mac, [string]$Description, [string]$Type, [string]$Ip, [string]$Mask, [string]$Gateway)
@@ -120,7 +120,7 @@ Describe 'New-ZtpHandoff.ps1' {
             New-ZtpHResponse 404 $null
         }
         $reason = 'Mode B (Static with DHCP): the management port Port1 (MAC 00:00:5e:00:53:aa, Example ConnectX-6 Dx) has DHCP 192.0.2.116 after the install; expected static 192.0.2.11; OS configuration sets it by MAC.'
-        $a = @{ SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroupName = 'rg-example'; NodeName = 'node-01', 'node-02'; NodesFile = $nodes
+        $a = @{ SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroupName = 'rg-iic-azl-01'; NodeName = 'node-01', 'node-02'; NodesFile = $nodes
             HandoffPath = (Join-Path $TestDrive 'out/ztp-handoff-nic.json'); WarningAction = 'SilentlyContinue'; Execute = $true
             ManagementAddressCheck = @(@{ node = 'node-01'; verified = $false; reason = $reason }, @{ node = 'node-02'; verified = $true; reason = $null }) }
         $r = & (Join-Path $global:ztpH_scripts 'New-ZtpHandoff.ps1') @a -InformationVariable info -InformationAction SilentlyContinue
@@ -182,7 +182,7 @@ Describe 'Convert-ZtpHandoffToClusterInputs.ps1' {
     BeforeAll {
         $global:ztpH_handoff = Join-Path $TestDrive 'ztp-handoff.json'
         [ordered]@{ schemaVersion = 2; solution = @{ vsrVersion = '12.2609.1003.7' }
-            nodes = @(@{ name = 'node-01'; arcMachineName = '00000000-0000-0000-0000-000000000000-1'; arcMachineResourceId = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1'; managementAddressVerified = $true }, @{ name = 'node-02'; arcMachineName = '11111111-1111-1111-1111-111111111111-1'; managementAddressVerified = $true }) } | ConvertTo-Json -Depth 6 | Set-Content $global:ztpH_handoff
+            nodes = @(@{ name = 'node-01'; arcMachineName = '00000000-0000-0000-0000-000000000000-1'; arcMachineResourceId = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-iic-azl-01/providers/Microsoft.HybridCompute/machines/00000000-0000-0000-0000-000000000000-1'; managementAddressVerified = $true }, @{ name = 'node-02'; arcMachineName = '11111111-1111-1111-1111-111111111111-1'; managementAddressVerified = $true }) } | ConvertTo-Json -Depth 6 | Set-Content $global:ztpH_handoff
         # A handoff written before ZTP ended at Network (schema 1, with an sbe block).
         $global:ztpH_handoffV1 = Join-Path $TestDrive 'ztp-handoff-v1.json'
         [ordered]@{ schemaVersion = 1; solution = @{ vsrVersion = '12.2609.1003.7' }
@@ -300,14 +300,14 @@ Describe 'Start-ZtpMonitor.ps1' {
         $global:ztpH_mon = Join-Path $global:ztpH_scripts 'Start-ZtpMonitor.ps1'
     }
     It 'prints the Sonar config and the command by default and starts nothing' {
-        $out = & $global:ztpH_mon -SonarPath $global:ztpH_sonar -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example -NodesFile $global:ztpH_nodes -EventLogPath (Join-Path $TestDrive 'ev.jsonl') -SonarConfigPath (Join-Path $TestDrive 'sonar.json')
+        $out = & $global:ztpH_mon -SonarPath $global:ztpH_sonar -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-iic-azl-01 -NodesFile $global:ztpH_nodes -EventLogPath (Join-Path $TestDrive 'ev.jsonl') -SonarConfigPath (Join-Path $TestDrive 'sonar.json')
         ($out -join "`n") | Should -Match '"provisioningRoute": "simplified"'
         ($out -join "`n") | Should -Match 'ev.jsonl'
         Test-Path (Join-Path $TestDrive 'sonar.json') | Should -BeFalse
     }
     It 'writes a Sonar config that follows the event file and starts Sonar on it with -Execute' {
         $cfg = Join-Path $TestDrive 'sonar2.json'; $global:ztpH_sonarArgs = $null
-        & $global:ztpH_mon -SonarPath $global:ztpH_sonar -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example -NodesFile $global:ztpH_nodes -EventLogPath (Join-Path $TestDrive 'ev.jsonl') -SonarConfigPath $cfg -Port 9001 -NoBrowser -Execute
+        & $global:ztpH_mon -SonarPath $global:ztpH_sonar -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-iic-azl-01 -NodesFile $global:ztpH_nodes -EventLogPath (Join-Path $TestDrive 'ev.jsonl') -SonarConfigPath $cfg -Port 9001 -NoBrowser -Execute
         $c = Get-Content $cfg -Raw | ConvertFrom-Json
         $c.ztpEvents.path | Should -Be ([System.IO.Path]::GetFullPath((Join-Path $TestDrive 'ev.jsonl')))
         $c.provisioningRoute | Should -Be 'simplified'; $c.nodes.Count | Should -Be 2; $c.nodes[0].seed | Should -BeTrue

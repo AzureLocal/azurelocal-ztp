@@ -37,7 +37,7 @@ The other stages around it:
 - **Network** (after the OS install) does **not** use this service. The maintenance environment is gone by then; the stage reads Azure's per-NIC report (`edgeMachines/<node>/networkAdapters`). See [Appendix A](./api-reference.md#network-adapters-and-applyconfiguration).
 - **Vouchers** can take vouchers that were downloaded with Microsoft's Configurator app (`-VoucherFolder`) instead of reading them from the images. That is the desktop app, not these REST calls.
 
-**How ZTP authenticates.** HTTP Basic as `edgeuser` (setting `provisioning.simplified.maintenance_environment.username`) over TLS on port 20001 (`...maintenance_environment.port`). The password is the one the image was built with (`provisioning.simplified.maintenance_password`, a Key Vault reference in the older layout), and without one the maintenance environment's published default, `Password1`. The service's certificate is self-signed and nothing can verify it, so this script, and only this script's calls, skip the certificate check. The password therefore goes to every host that answers on TCP 20001 in the scan range. Scan only an isolated provisioning network, keep `provisioning_dhcp_range` to the DHCP pool, and change the default password when you build the image. See also [Prerequisites](../prerequisites.md) and [Why the certificate check must be skipped](#why-the-certificate-check-must-be-skipped-and-the-risk).
+**How ZTP authenticates.** HTTP Basic as `edgeuser` (setting `provisioning.simplified.maintenance_environment.username`) over TLS on port 20001 (`...maintenance_environment.port`). The password is the one the image was built with (`provisioning.simplified.maintenance_password`, a secret reference read by azurelocal-toolkit's resolver), and without one the maintenance environment's published default, `Password1`. The service's certificate is self-signed and nothing can verify it, so this script, and only this script's calls, skip the certificate check. The password therefore goes to every host that answers on TCP 20001 in the scan range. Scan only an isolated provisioning network, keep `provisioning_dhcp_range` to the DHCP pool, and change the default password when you build the image. See also [Prerequisites](../prerequisites.md) and [Why the certificate check must be skipped](#why-the-certificate-check-must-be-skipped-and-the-risk).
 
 **Checks before anything is sent.** Two nodes with the same static `ip_address`, or an `ip_address` inside a node's own `maintenance_scan_range` (the DHCP pool would lease it out), stop the run. `dhcp`, `dhcp_reservation` and `preconfigured` nodes are only reported, and only when the node list gives their maintenance address.
 
@@ -600,7 +600,7 @@ $body = @{
     Network = @{ NetworkAdapters = @(@{ MacAddress = '00005e005301'; EnableDhcp = $false; IpAddress = '192.0.2.12'; SubnetMask = '255.255.255.0'; Gateway = '192.0.2.1'; DnsAddressArray = @('192.0.2.30') }) }
     HostName = @{ Name = 'node-01'; SkipReboot = $false }
     ArcConfiguration = @{ ArcMultiServerConfiguration = @{
-        SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroup = 'rg-example-azl'
+        SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroup = 'rg-iic-azl-01-azl'
         TenantId = '00000000-0000-0000-0000-000000000001'; Location = 'EastUS'; Cloud = 'AzureCloud'
         ArmAccessToken = $armToken } }   # $armToken: a token you obtained yourself, never typed into a script
 } | ConvertTo-Json -Depth 10
@@ -633,7 +633,7 @@ $s.Response.DetailedResponse | Select-Object Name, Status
 - **Evidence:** From the service's own metadata; **not called**.
 
 ```powershell
-$body = @{ ArcConfiguration = @{ SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroup = 'rg-example-azl'; TenantId = '00000000-0000-0000-0000-000000000001'; Location = 'EastUS'; Cloud = 'AzureCloud' } } | ConvertTo-Json -Depth 6
+$body = @{ ArcConfiguration = @{ SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroup = 'rg-iic-azl-01-azl'; TenantId = '00000000-0000-0000-0000-000000000001'; Location = 'EastUS'; Cloud = 'AzureCloud' } } | ConvertTo-Json -Depth 6
 Invoke-RestMethod -Uri "$base/InvokeDeviceCodeAuthentication" -Method Post -ContentType 'application/json' -Body $body -Authentication Basic -Credential $cred -SkipCertificateCheck
 ```
 
@@ -812,7 +812,7 @@ Invoke-RestMethod -Uri "$base/CheckForAvailableUpdates" -Method Post -ContentTyp
 - **Works in:** not shown. **Changes the machine?** No (query). **Evidence:** From the service's own metadata; **not called**.
 
 ```powershell
-$body = @{ SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroup = 'rg-example-azl'; TenantId = '00000000-0000-0000-0000-000000000001'; Location = 'EastUS'; Cloud = 'AzureCloud'; ArmAccessToken = $armToken } | ConvertTo-Json
+$body = @{ SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroup = 'rg-iic-azl-01-azl'; TenantId = '00000000-0000-0000-0000-000000000001'; Location = 'EastUS'; Cloud = 'AzureCloud'; ArmAccessToken = $armToken } | ConvertTo-Json
 Invoke-RestMethod -Uri "$base/GetArcZeroDaySolutionUpdateConfig" -Method Post -ContentType 'application/json' -Body $body -Authentication Basic -Credential $cred -SkipCertificateCheck
 ```
 

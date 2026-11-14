@@ -4,7 +4,7 @@ layout: home
 hero:
   name: Azure Local ZTP
   text: Zero-touch provisioning for Azure Local
-  tagline: From bare machines to provisioned, Arc-connected nodes, with one command and an environment file. No USB stick, no one in the rack.
+  tagline: From bare machines to provisioned, Arc-connected nodes, with one command and an infrastructure file. No USB stick, no one in the rack.
   image:
     src: /assets/images/azurelocal-ztp-icon.svg
     alt: Azure Local ZTP
@@ -22,7 +22,7 @@ hero:
 features:
   - icon: 🧾
     title: One input
-    details: Fill in the environment file, started from the toolkit's template. Everything else is automated, behind gates that check each step is ready.
+    details: Fill in the infrastructure file, started from the toolkit's template. Everything else is automated, behind gates that check each step is ready.
     link: /infrastructure-schema-5
     linkText: Master infrastructure.yml
   - icon: 🔌
@@ -58,7 +58,7 @@ features:
 
 | You supply | You get |
 | --- | --- |
-| The environment file: machines, BMC addresses, network, Azure subscription, resource group, site, OS build, and Key Vault references | Every machine Provisioned on the pinned Azure Local build and Arc-connected, with its management IP on the management NIC (found by MAC), and a handoff with each machine's Arc machine name and `arcMachineResourceId` |
+| The infrastructure file: machines, BMC addresses, network, Azure subscription, resource group, site, OS build, and secret references | Every machine Provisioned on the pinned Azure Local build and Arc-connected, with its management IP on the management NIC (found by MAC), and a handoff with each machine's Arc machine name and `arcMachineResourceId` |
 
 The stages are Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Restore and Handoff.
 

@@ -32,7 +32,7 @@ One stage, or All (Prereqs, Validate, Plan; Execute and Watch only with -Execute
 .PARAMETER SubscriptionId
 Subscription of the deployment (for example 00000000-0000-0000-0000-000000000000).
 .PARAMETER ResourceGroupName
-Resource group of the site, configuration and edge machines (for example rg-example).
+Resource group of the site, configuration and edge machines (for example rg-iic-azl-01).
 .PARAMETER ParameterFile
 Parameters file, see bicep/main.example.parameters.json.
 .PARAMETER VoucherPath
@@ -61,11 +61,11 @@ Watch: JSON file that receives the node -> Arc machine name map (with -Execute).
 .PARAMETER Execute
 Approval to change Azure (secret, deployment, ProvisionOs retry). Without it the run stops after Plan.
 .EXAMPLE
-./Invoke-ZtpAzureProvisioning.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example -ParameterFile ./bicep/main.parameters.json -VoucherPath D:\ZtpVouchers
+./Invoke-ZtpAzureProvisioning.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-iic-azl-01 -ParameterFile ./bicep/main.parameters.json -VoucherPath D:\ZtpVouchers
 .EXAMPLE
-./Invoke-ZtpAzureProvisioning.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example -ParameterFile ./bicep/main.parameters.json -VoucherPath D:\ZtpVouchers -AdminPassword $adminPassword -ArcMachineNameMapPath ./arc-machine-names.json -Execute
+./Invoke-ZtpAzureProvisioning.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-iic-azl-01 -ParameterFile ./bicep/main.parameters.json -VoucherPath D:\ZtpVouchers -AdminPassword $adminPassword -ArcMachineNameMapPath ./arc-machine-names.json -Execute
 .EXAMPLE
-./Invoke-ZtpAzureProvisioning.ps1 -Stage Watch -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example -ParameterFile ./bicep/main.parameters.json -VoucherPath D:\ZtpVouchers -RetryProvisionOs -Execute
+./Invoke-ZtpAzureProvisioning.ps1 -Stage Watch -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-iic-azl-01 -ParameterFile ./bicep/main.parameters.json -VoucherPath D:\ZtpVouchers -RetryProvisionOs -Execute
 #>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'The parameters are read inside the stage functions and script blocks.')]
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]

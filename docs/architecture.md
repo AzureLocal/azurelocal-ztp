@@ -10,7 +10,7 @@ For the operator steps, see the [Operator guide](operator-guide.md). To run it f
 
 ![Azure Local ZTP: from infrastructure.yml to provisioned machines and the handoff](./diagrams/ztp-flow-to-handoff.png)
 
-The diagram source is [`diagrams/ztp-flow-to-handoff.drawio`](https://github.com/AzureLocal/azurelocal-ztp/blob/main/docs/diagrams/ztp-flow-to-handoff.drawio). It has four lanes: the operator, the management host, Azure, and the machine with its BMC. The operator supplies one input, the environment file. Then the operator runs one command: `Invoke-ZtpEnvironment.ps1 -InfrastructureFile <file>`, first as a plan, then with `-Execute`. The diagram shows every stage from Start to Handoff, including Device, Network and Restore, and ends where ZTP ends; OS configuration comes next.
+The diagram source is [`diagrams/ztp-flow-to-handoff.drawio`](https://github.com/AzureLocal/azurelocal-ztp/blob/main/docs/diagrams/ztp-flow-to-handoff.drawio). It has four lanes: the operator, the management host, Azure, and the machine with its BMC. The operator supplies one input, the infrastructure file. Then the operator runs one command: `Invoke-ZtpEnvironment.ps1 -InfrastructureFile <file>`, first as a plan, then with `-Execute`. The diagram shows every stage from Start to Handoff, including Device, Network and Restore, and ends where ZTP ends; OS configuration comes next.
 
 The earlier diagram, [`diagrams/ztp-flow.drawio`](https://github.com/AzureLocal/azurelocal-ztp/blob/main/docs/diagrams/ztp-flow.drawio) ([PNG](./diagrams/ztp-flow.png)), is kept for history. It shows the Prepare stage and the SBE step that ZTP no longer runs.
 
@@ -18,7 +18,7 @@ The earlier diagram, [`diagrams/ztp-flow.drawio`](https://github.com/AzureLocal/
 
 | Layer | Script | Role |
 | --- | --- | --- |
-| Entry point | `Invoke-ZtpEnvironment.ps1` | Reads and checks the environment file. Writes the generated inputs (node list, orchestrator settings, Bicep parameters). Reads the BMC login, and the `edgeuser` password when the file names one, from Key Vault. Creates the resource group if it's missing. Runs the orchestrator. |
+| Entry point | `Invoke-ZtpEnvironment.ps1` | Reads and checks the infrastructure file. Writes the generated inputs (node list, orchestrator settings, Bicep parameters). Reads the BMC login, and the `edgeuser` password when the file names one, through azurelocal-toolkit's secret resolver (`keyvault://`, `env://`, `file://`, `command://`). Creates the resource group if it's missing. Runs the orchestrator. |
 | Orchestrator | `Invoke-ZtpProvisioning.ps1` | Runs the eleven provisioning stages in order, Resolve to Handoff. Checks each stage's result. Records completed stages in a state file. |
 | Stage scripts | `Get-ZtpBootstrapIso.ps1`, `New-ZtpVirtualUsbImage.ps1`, `Start-MaintenanceBoot.ps1`, `Set-ZtpBios.ps1`, `Mount-ZtpVirtualUsb.ps1`, `Publish-MaintenanceIso.ps1`, `Wait-ZtpBootstrapComplete.ps1`, `Wait-ZtpVoucher.ps1`, `Set-ZtpDeviceConfiguration.ps1`, `Invoke-ZtpAzureProvisioning.ps1`, `Wait-ZtpMachineReady.ps1`, `Set-ZtpManagementAddress.ps1`, `Restore-ZtpBios.ps1`, `New-ZtpHandoff.ps1`, `Convert-ZtpHandoffToClusterInputs.ps1` | Each stage's work. Each script can run alone and is a plan unless you pass `-Execute`. |
 | OEM layer | `ZtpOem.Common.ps1`, `config/oem/<oem>.json` | The BMC layer only: the BMC kind, its manager and system IDs, the virtual-media slot, the log services and the signal patterns the Bootstrap watch reads, and how the Boot stage boots the USB-stick slot once on a BMC that offers no `Usb` override target (`bmc.usbBootOnce`). Picked by `hardware.vendor`; there is no built-in vendor. Adding an OEM is adding a file. The OEM files hold no SBE settings. |
@@ -32,13 +32,13 @@ A stage starts only when the gate before it passes. A gate that fails, or times 
 
 | # | Stage | What it does | Gate before the next stage |
 | --- | --- | --- | --- |
-| 0 | Start | Checks the environment file and stops if it's invalid. Writes the generated inputs. Reads the BMC login from Key Vault. Keys ZTP no longer reads are accepted and named in a note, for example `Note: ztp.node_preparation ignored: SBE belongs to OS configuration.` | The environment file is valid. |
-| 1 | Resolve | Finds, downloads and hash-checks the maintenance ISO for the train named in `ztp.provisioning_iso`. Its version, URL and SHA-256 go to the stage evidence. ZTP resolves no SBE. | A verified ISO exists. |
+| 0 | Start | Checks the infrastructure file (schema 5 only; anything else is exit code 2) and stops if it's invalid. Writes the generated inputs. Reads the BMC login through the toolkit's secret resolver. Keys ZTP doesn't read are accepted; the SBE is named in a note, `Note: hardware.sbe ignored: SBE belongs to OS configuration.` | The infrastructure file is valid. |
+| 1 | Resolve | Finds, downloads and hash-checks the maintenance ISO for the train named in `provisioning.simplified.maintenance_iso`. Its version, URL and SHA-256 go to the stage evidence. ZTP resolves no SBE. | A verified ISO exists. |
 | 2 | Media | Builds one raw virtual-USB image per node from the ISO: GPT, one FAT32 partition labelled `CDROM`. | One image per node. |
 | 3 | Boot | Sets each node's BIOS from `hardware.bios` with `bios_during_provisioning` merged over it (the temporary values win), and saves each changed attribute's original value once. Shares the images over SMB, read-write, to the BMC addresses only. Closes stale SMB handles. Inserts each node's image in the BMC's USB-stick slot, sets a one-time boot and resets the node. All nodes in parallel. | On iDRAC 7.30 the boot override must read `Once/Floppy` before the reset (the USB-stick slot boots as virtual floppy there; see [iDRAC quirks](troubleshooting.md#idrac-quirks)). For 10 minutes after the reset, the iDRAC log must not show `OSE1002`, logged on the live runs as "C: boot completed" when the installed OS booted. |
 | 4 | Bootstrap | Watches the BMC and the image until the maintenance environment writes its voucher back. | Every node reaches `ReadyForPortal`: a valid voucher, and the Azure prerequisites checked. |
 | 5 | Vouchers | Reads each voucher from its image, checks the serial, replaces a spent local copy, ejects the media, removes the share. | One valid voucher per serial. |
-| 6 | Device | In the maintenance environment, before the claim: sets each static management address on the port with the node's management MAC through the Configurator App's REST service (`https://<maintenance_address>:20001/BootstrapOobeService`, `SetArcBootstrapDeviceConfiguration`). A node without `maintenance_address` is found by a scan: every address of `network_intents.management.provisioning_dhcp_range` (default: the management subnet) is probed on TCP 20001, and the node is the responder whose `GetNetworkAdapters` lists its management MAC. The scan repeats until the node is found or 30 minutes pass. See [The Device stage](environment-file.md#the-device-stage) and [Appendix B](appendix/configurator-app-api.md#how-ztp-uses-this-service). | Each static node reports the static configuration on its management adapter in the maintenance environment. |
+| 6 | Device | In the maintenance environment, before the claim: sets each static management address on the port with the node's management MAC through the Configurator App's REST service (`https://<maintenance_address>:20001/BootstrapOobeService`, `SetArcBootstrapDeviceConfiguration`). A node without `maintenance_address` is found by a scan: every address of `networking.management.provisioning_dhcp_range` (default: the management subnet) is probed on TCP 20001, and the node is the responder whose `GetNetworkAdapters` lists its management MAC. The scan repeats until the node is found or 30 minutes pass. See [The Device stage](environment-file.md#the-device-stage) and [Appendix B](appendix/configurator-app-api.md#how-ztp-uses-this-service). | Each static node reports the static configuration on its management adapter in the maintenance environment. |
 | 7 | Azure | Checks prerequisites, builds the Bicep template, runs a what-if, then submits the claim. With `static_method: device` (the default) the site's network setting is Automatic and the claim carries no Manual adapter. Refuses to submit when a voucher is missing. | ARM accepted the deployment. |
 | 8 | Ready | Waits for "Ready to cluster" on every node. A 404 or 409 on `jobs/ProvisionOs` before the service creates the job means "not there yet". If a `ProvisionOs` job fails, it re-PUTs `jobs/ProvisionOs` once with the edge machine's existing OS profile and user details. | Each node: lifecycle `Provisioned`, `ProvisionOs` succeeded, Arc `Connected`, mandatory extensions `Succeeded`. |
 | 9 | Network | Verify-only, after the install. Reads Azure's per-NIC report (`edgeMachines/<node>/networkAdapters`), finds the management port by its MAC (the port the file gives role `management`; any card or slot) and compares it with the file, by mode: Mode A (`dhcp_reservation`) the reserved address; Modes B and C (`static`) the static address, which the OS install has normally reset to DHCP, so the node is recorded as `Deferred` to OS configuration; `dhcp` and `preconfigured` reported only. It sends and waits on no Microsoft job: `jobs/ApplyConfiguration` never started on two live runs (Dell AX-760, build 2610). `-ApplyThroughAzure` keeps that path as an opt-in. Each node's result (verified, and a reason naming the mode, the port, its MAC, what it has and what the file expects) goes to the state file for the handoff. | Every node has a result. Only a management MAC no adapter reports stops the stage (and with `-ApplyThroughAzure`, a static address not set). |
@@ -49,7 +49,7 @@ All eleven stages are the orchestrator. The calls each stage makes to Azure, the
 
 ### Why Restore exists
 
-Some hardware must look different during the install than in production. Example: an Emulex Fibre Channel HBA presents a SAN LUN that the install could pick as a target. The environment file then says:
+Some hardware must look different during the install than in production. Example: an Emulex Fibre Channel HBA presents a SAN LUN that the install could pick as a target. The infrastructure file then says:
 
 ```yaml
 hardware:
@@ -60,7 +60,7 @@ hardware:
     Slot2: Disabled
 ```
 
-Boot turns slot 2 off before the maintenance boot, so the LUN stays out of the install. Restore turns it back on after the Network stage, before the handoff. `cluster_nodes[].bios_during_provisioning` sets values for one node only.
+Boot turns slot 2 off before the maintenance boot, so the LUN stays out of the install. Restore turns it back on after the Network stage, before the handoff. `nodes[].bios_during_provisioning` sets values for one node only.
 
 ## What runs where
 
@@ -81,7 +81,7 @@ Boot turns slot 2 off before the maintenance boot, so the LUN stays out of the i
 | Management host | Azure, Microsoft download | TCP 443 | Every stage that reads or changes Azure, Network included (it changes the node's ports through Azure, not on the node); Resolve |
 | Each node | Azure | TCP 443 (and 80) | Onboarding, OS download, Arc ([firewall requirements](https://learn.microsoft.com/azure/azure-local/concepts/firewall-requirements)) |
 
-The host needs inbound TCP 445 from the BMC addresses only. `Publish-MaintenanceIso.ps1` creates that Windows Firewall rule, scoped to the BMC addresses in the environment file. It also creates a dedicated local account with Change access on the share (Read when it shares an ISO). The Vouchers stage removes the share, the rule and the account. ZTP makes no WinRM connection to the nodes.
+The host needs inbound TCP 445 from the BMC addresses only. `Publish-MaintenanceIso.ps1` creates that Windows Firewall rule, scoped to the BMC addresses in the infrastructure file. It also creates a dedicated local account with Change access on the share (Read when it shares an ISO). The Vouchers stage removes the share, the rule and the account. ZTP makes no WinRM connection to the nodes.
 
 ## Data flow
 
@@ -91,7 +91,7 @@ The host needs inbound TCP 445 from the BMC addresses only. `Publish-Maintenance
 | Per-node image | Built on the host, shared to the BMC, written back by the machine. | `<media_path>/ztp-virtual-usb/ztp-usb-<node>.img` |
 | Ownership voucher | The machine writes `\vouchers\<serial>\*.pem` into its own image. The host reads it after the eject and writes `<serial>.pem`. At claim time it's base64-encoded into a secure deployment parameter. It's never printed. | `<media_path>/vouchers/<serial>.pem`. Vouchers are one-time use. |
 | BMC login | Key Vault, read into memory. | Never written. |
-| `edgeuser` password | Key Vault (`ztp.maintenance_password_secret`), read into memory. Only its SHA-512 crypt hash goes into the images; the Device stage signs in with it. Without the secret, the published default `Password1`. | Key Vault |
+| `edgeuser` password | A secret reference (`provisioning.simplified.maintenance_password`), read into memory by the toolkit's resolver. Only its SHA-512 crypt hash goes into the images; the Device stage signs in with it. Without the secret, the published default `Password1`. | Key Vault |
 | SMB share account | Generated with a random password for each publish, held in memory only, removed after the Vouchers stage. | Never written. |
 | Provisioning administrator password | Must already exist as a Key Vault secret. The template passes only the secret's resource ID. Each edge machine's identity gets a constrained right to grant Key Vault Secrets User on the vault, so the OS install can read it. ZTP itself doesn't read it. | Key Vault |
 | BIOS originals | Boot reads each attribute it changes and saves the value found, once per attribute and node. Restore sets temporary values back to it when `hardware.bios` gives no final value. | The state file (`biosOriginal`) and `<evidence_path>/bios-changes.jsonl` (phases `original`, `requested`, `applied`). |
@@ -100,7 +100,7 @@ The host needs inbound TCP 445 from the BMC addresses only. `Publish-Maintenance
 | Handoff | Written at the end, schema 2. Holds only what Azure generated during ZTP: the site, the installed solution version (`solution.vsrVersion`), and per node the edge machine and Arc machine names and IDs, read from the edge machine after Ready, so it names the service-created `<device-id>-1` Arc machine. Also each node's `managementAddressVerified` and `managementAddressReason` from Network, `biosRestored` from Restore, `managementMode`, and `networkAdapters[]`: every port as Azure reports it after the install, matched by MAC to the file (roles, its name in the file, what the file expects). No ISO details or timestamps: those are in the state file and the event log. The run prints a table of the ports per node. | `<media_path>/ztp-state/<run>.ztp-handoff.json`, `<run>.ztp-cluster-inputs.yaml`, `<run>.arc-machine-names.json` |
 | Events | One JSON line per state change and per stage. | `<evidence_path>/ztp-events.jsonl` |
 
-`<media_path>` and `<evidence_path>` are `ztp.media_path` and `ztp.evidence_path` of the environment file, by default `%ProgramData%\AzureLocalZtp\<site>\media` and `\evidence`; `-MediaPath` and `-EvidencePath` of `Invoke-ZtpEnvironment.ps1` override them. Neither may be inside a git working tree. `<run>` is the node names of the run joined with `+`, for example `node-01+node-02`.
+`<media_path>` and `<evidence_path>` are `provisioning.simplified.media_path` and `evidence_path` of the infrastructure file, by default `%ProgramData%\AzureLocalZtp\<site>\media` and `\evidence`; `-MediaPath` and `-EvidencePath` of `Invoke-ZtpEnvironment.ps1` override them. Neither may be inside a git working tree. `<run>` is the node names of the run joined with `+`, for example `node-01+node-02`.
 
 The entry point also writes three generated files inside the clone. They hold environment values, so keep them out of source control:
 
@@ -135,7 +135,7 @@ Running from `Boot` or earlier reinstalls the machines. For a node that's alread
 
 ## Where ZTP ends
 
-ZTP ends at the Handoff. Each machine is **Provisioned** in Azure, **Arc-connected**, and has its management IP on the management NIC (found by MAC) as the environment file says. The Arc machine names and IDs are in the handoff. The provisioned OS names the ports `Port0` to `Port6`, so later scripts must find NICs by MAC.
+ZTP ends at the Handoff. Each machine is **Provisioned** in Azure, **Arc-connected**, and has its management IP on the management NIC (found by MAC) as the infrastructure file says. The Arc machine names and IDs are in the handoff. The provisioned OS names the ports `Port0` to `Port6`, so later scripts must find NICs by MAC.
 
 These steps are not ZTP:
 
@@ -146,7 +146,7 @@ These steps are not ZTP:
 | Cluster Validate and Deploy | Use the handoff's `arcMachineResourceId` values with the portal or the ARM template. See [What to hand to the cluster deployment](operator-guide.md#what-to-hand-to-the-cluster-deployment) and [Phase 05 Cluster Deployment](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-05-cluster-deployment/). |
 | Firmware updates | ZTP installs no drivers or firmware. |
 | Arc gateway | Simplified machine provisioning doesn't support Arc gateway in the preview ([Learn](https://learn.microsoft.com/azure/azure-local/deploy/simplified-machine-provisioning#about-simplified-machine-provisioning-process)), so ZTP refuses `scenario.outbound_path` `arc_gateway`, `proxy_arc_gateway` and `private_path`. A proxy is supported: with `proxy`, the site connectivity is `Proxy` and the Device stage sends `networking.outbound.proxy.url` and `.bypass` to each maintenance environment (not yet proven live); with `direct`, it is `Public`. |
-| Management VLAN | The environment-file path sets no VLAN. Learn says a management VLAN must be on the physical adapter before Arc registration ([management VLAN ID](https://learn.microsoft.com/azure/azure-local/plan/cloud-deployment-network-considerations#management-vlan-id)). |
+| Management VLAN | ZTP passes `networking.management.vlan_id` to the Device stage and to the site's `Manual` setting; it configures no switch port. Learn says a management VLAN must be on the physical adapter before Arc registration ([management VLAN ID](https://learn.microsoft.com/azure/azure-local/plan/cloud-deployment-network-considerations#management-vlan-id)). |
 
 ## Limits
 

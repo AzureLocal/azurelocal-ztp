@@ -21,28 +21,28 @@ Microsoft-hosted and Linux runners can't run this. The runner must be a **self-h
 | Reason | Detail |
 | --- | --- |
 | The BMCs read the images from an SMB share on the runner | The Boot stage shares the images with Windows SMB, a local account and a Windows Firewall rule. Each BMC connects to the runner on TCP 445. A hosted runner isn't reachable from your BMCs. |
-| The runner must reach the BMCs and the maintenance environment | Redfish over HTTPS to each BMC (Boot, Bootstrap, Vouchers, Restore), and TCP 20001 to each node's maintenance environment during Device: its `maintenance_address`, or every address of `network_intents.management.provisioning_dhcp_range` that the stage scans. ZTP makes no WinRM connection to the nodes. |
+| The runner must reach the BMCs and the maintenance environment | Redfish over HTTPS to each BMC (Boot, Bootstrap, Vouchers, Restore), and TCP 20001 to each node's maintenance environment during Device: its `maintenance_address`, or every address of `networking.management.provisioning_dhcp_range` that the stage scans. ZTP makes no WinRM connection to the nodes. |
 | Elevation | The share, the local account and the firewall rule need administrator rights. Run the runner as a service under an account in local Administrators. |
-| State on disk | The images, vouchers, state file and handoff are in the media folder (`ztp.media_path`), outside the checkout: a run refuses a folder inside a git working tree. A resume must run on the **same runner**, with the same `ztp.media_path`. |
+| State on disk | The images, vouchers, state file and handoff are in the media folder (`provisioning.simplified.media_path`), outside the checkout: a run refuses a folder inside a git working tree. A resume must run on the **same runner**, with the same `provisioning.simplified.media_path`. |
 
 Set the runner up once:
 
 - PowerShell 7, the Az modules, `powershell-yaml`, and the Azure CLI with Bicep. See [Management host](operator-guide.md#management-host).
 - Give it a dedicated label or capability (the examples use `ztp`) so that every job of a run lands on it.
 - Don't let a workspace clean delete the parent of the checkout. In Azure DevOps, don't set `workspace: clean: all`. In GitLab, pin the clone path (see the GitLab example).
-- Put the environment file on the runner, or check it out from a private repository. ZTP needs no SBE. The environment file has no secrets, but it has your addresses and IDs; keep it out of this public repository.
+- Put the infrastructure file on the runner, or check it out from a private repository. ZTP needs no SBE. The infrastructure file has no secrets, but it has your addresses and IDs; keep it out of this public repository.
 
 ## Identity
 
 The run needs one Azure identity with the roles in [Azure prerequisites](operator-guide.md#azure):
 
 - Owner, or Contributor and Role Based Access Control Administrator, on the cluster resource group.
-- Key Vault Secrets User on each vault the environment file names.
+- Key Vault Secrets User on each vault a `keyvault://` reference of the infrastructure file names.
 - On the vault that holds the provisioning administrator secret, rights to assign roles and deploy into its resource group.
 - Reader on the subscription.
 - Contributor on the subscription only if the run must create the resource group.
 
-Set `ztp.azl_rp_object_id` in the environment file. Otherwise the run looks the object up in Microsoft Entra ID, and a managed identity has no directory read rights by default.
+Set `azure.hci_resource_provider_object_id` in the infrastructure file. Otherwise the run looks the object up in Microsoft Entra ID, and a managed identity has no directory read rights by default.
 
 | Option | How | Notes |
 | --- | --- | --- |
@@ -51,7 +51,7 @@ Set `ztp.azl_rp_object_id` in the environment file. Otherwise the run looks the 
 
 ## Secrets
 
-- Every credential comes from **Key Vault** through references in the environment file: the BMC login, the provisioning administrator password, and the maintenance environment's `edgeuser` password when you set `ztp.maintenance_password_secret`. ZTP creates no deployment admin, so it reads no password for one.
+- Every credential is a secret reference in the infrastructure file, read by azurelocal-toolkit's one resolver (put a toolkit clone on the runner and set `AZL_TOOLKIT_ROOT`, or clone it next to the ZTP checkout; without it an `-Execute` run stops with exit code 2): the BMC login and the maintenance environment's `edgeuser` password (`provisioning.simplified.maintenance_password`) take `keyvault://`, `env://`, `file://` or `command://`; the provisioning administrator password is a `keyvault://` reference that Azure reads itself. ZTP creates no deployment admin, so it reads no password for one.
 - Don't put passwords in pipeline variables, variable groups or CI/CD variables in plain text. The pipeline needs no secret of its own when it uses a managed identity.
 - The scripts never print a secret or a voucher. The share password is generated per run and exists only in memory.
 - Vouchers are written to `<media_path>\vouchers` on the runner. Restrict that folder and never upload it as an artifact.

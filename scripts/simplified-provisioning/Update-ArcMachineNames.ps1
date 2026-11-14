@@ -27,9 +27,9 @@ Accept an edge machine whose lifecycle is not Provisioned.
 .PARAMETER Execute
 Write -MapPath; without it only the rows are returned.
 .EXAMPLE
-./Update-ArcMachineNames.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example -NodeName node-01, node-02
+./Update-ArcMachineNames.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-iic-azl-01 -NodeName node-01, node-02
 .EXAMPLE
-./Update-ArcMachineNames.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example -NodeName node-01, node-02 -MapPath ./arc-machine-names.json -Execute
+./Update-ArcMachineNames.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-iic-azl-01 -NodeName node-01, node-02 -MapPath ./arc-machine-names.json -Execute
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(

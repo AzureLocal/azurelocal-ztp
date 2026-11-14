@@ -1,8 +1,8 @@
 # Variables audit: every action, threshold and literal in ZTP
 
-> Owner's requirement (2026-11-07): with ZTP every action taken is backed by a variable, the environment file copes with servers that have several ports on different adapter types, and everything in the ZTP environment file is a key of the master `infrastructure.yml` schema in azurelocal-toolkit. One file for every tool; no key that only ZTP knows.
+> Owner's requirement (2026-11-07): with ZTP every action taken is backed by a variable, the infrastructure file copes with servers that have several ports on different adapter types, and everything in the ZTP infrastructure file is a key of the master `infrastructure.yml` schema in azurelocal-toolkit. One file for every tool; no key that only ZTP knows.
 
-This page walks every stage and script in `scripts/simplified-provisioning/` (Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Restore, Handoff, the orchestrator `Invoke-ZtpProvisioning.ps1`, `Invoke-ZtpEnvironment.ps1`, `ZtpEnvironment.Common.ps1` and the Bicep) and lists what changes behaviour. Paths are schema 5.4 paths of the master file; the environment-file key is what the schema 5 reader (`ConvertFrom-ZtpInfrastructureV5`) hands to the scripts, which is also the key of the older ZTP layout. Placeholder names and documentation address ranges only.
+This page walks every stage and script in `scripts/simplified-provisioning/` (Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Restore, Handoff, the orchestrator `Invoke-ZtpProvisioning.ps1`, `Invoke-ZtpEnvironment.ps1`, `ZtpEnvironment.Common.ps1` and the Bicep) and lists what changes behaviour. Paths are schema 5.4 paths of the master file; the internal key is what the schema 5 reader (`ConvertFrom-ZtpInfrastructureV5`) hands to the scripts in memory (no file is written or read in that shape; the schema 5 path is the only one an operator writes). Placeholder names and documentation address ranges only.
 
 **Status words.** `controlled`: a variable already backed it. `controlled (new)`: it was fixed in code or in the script wrapper, and 5.4 makes it a key with today's value as the default. `HARD-CODED (fixed)`: it assumed a vendor, and this change removes the assumption. `HARD-CODED (kept)`: it stays in code, for the reason given.
 
@@ -22,7 +22,7 @@ This page walks every stage and script in `scripts/simplified-provisioning/` (Re
 
 ## Resolve (`Get-ZtpBootstrapIso.ps1`)
 
-| # | What it does | Schema 5 path | Environment-file key | Default | Status |
+| # | What it does | Schema 5 path | Internal key | Default | Status |
 | --- | --- | --- | --- | --- | --- |
 | R1 | Which maintenance ISO: `latest`, a train (2610), a build, or a Microsoft download URL | `provisioning.simplified.maintenance_iso` | `ztp.provisioning_iso` | none (required) | controlled |
 | R2 | Consider preview trains (a month above 12) | `provisioning.simplified.include_preview` | `ztp.include_preview` | false | controlled (new) |
@@ -33,7 +33,7 @@ This page walks every stage and script in `scripts/simplified-provisioning/` (Re
 
 ## Media (`New-ZtpVirtualUsbImage.ps1`)
 
-| # | What it does | Schema 5 path | Environment-file key | Default | Status |
+| # | What it does | Schema 5 path | Internal key | Default | Status |
 | --- | --- | --- | --- | --- | --- |
 | M1 | Image file name `<prefix><node>.img` | `provisioning.simplified.usb_image.name_prefix` | `ztp.usb_image.name_prefix` | `ztp-usb-` | controlled (new) |
 | M2 | Image size (4 GiB booted on Dell 16G; the ISO needs about 1 GiB) | `provisioning.simplified.usb_image.size_gb` | `ztp.usb_image.size_gb` | 4 | controlled (new) |
@@ -46,7 +46,7 @@ This page walks every stage and script in `scripts/simplified-provisioning/` (Re
 
 ## Boot (`Set-ZtpBios.ps1`, `Publish-MaintenanceIso.ps1`, `Mount-ZtpVirtualUsb.ps1`, `Start-MaintenanceBoot.ps1`)
 
-| # | What it does | Schema 5 path | Environment-file key | Default | Status |
+| # | What it does | Schema 5 path | Internal key | Default | Status |
 | --- | --- | --- | --- | --- | --- |
 | B1 | BIOS attributes set before the maintenance boot (read first, change only what differs) | `hardware.bios`, `nodes[].bios`, `hardware.bios_during_provisioning`, `nodes[].bios_during_provisioning` | the same names | none | controlled |
 | B2 | BIOS: turn the SAN adapter slots off for the install; Restore puts back the value Boot found (the vendor's enabled value if it was already disabled) | `provisioning.simplified.isolate_san_adapters` with `nodes[].san.hbas[].slot` | `ztp.isolate_san_adapters` with `cluster_nodes[].san.hbas[].slot` | true when this node lists `san.hbas` | controlled (new): was only possible by writing Dell's `Slot2` by hand |
@@ -57,7 +57,7 @@ This page walks every stage and script in `scripts/simplified-provisioning/` (Re
 | B6 | BIOS applied `OnReset`, then the node is restarted (`ForceRestart`, or `On` when it is off) | none | none | OnReset, ForceRestart | HARD-CODED (kept): the machine is reinstalled next; a graceful restart buys nothing |
 | B7 | How long to wait for the BIOS to report the new values | `provisioning.simplified.timeouts.bios_minutes` | `ztp.timeouts.bios_minutes` | 30 | controlled (new) |
 | B8 | BIOS poll interval while waiting | none | none | 30 s | HARD-CODED (kept): script parameter, internal polling |
-| B9 | Which BMC, which login | `nodes[].bmc.ip_address`, `hardware.bmc.username`, `hardware.bmc.password` | `cluster_nodes[].idrac_ip`, `ztp.bmc_secret.*` | none (required) | controlled |
+| B9 | Which BMC, which login | `nodes[].bmc.ip_address`, `hardware.bmc.username`, `hardware.bmc.password` | `cluster_nodes[].idrac_ip`, `ztp.bmc_secret.username`, `.password` (secret references, read by the toolkit's resolver) | none (required) | controlled |
 | B10 | Accept the BMC's self-signed TLS certificate | `hardware.bmc.verify_certificate` | `ztp.verify_bmc_certificate` | false (accept) | controlled (new): was always on |
 | B11 | Also set the iDRAC Remote File Share write attribute before inserting media | `hardware.bmc.rfs_write_attribute` | `ztp.rfs_write_attribute` | true for Dell, false for the other vendors (`config/oem/<vendor>.json`, `bmc.rfsWriteAttribute`) | HARD-CODED (fixed): was `true` for every vendor, and fails on a BMC that has no `RFS.<n>.WriteProtected` |
 | B12 | SMB share name | `provisioning.simplified.media_share.name` | `ztp.share_name` | none (required) | controlled |
@@ -75,7 +75,7 @@ This page walks every stage and script in `scripts/simplified-provisioning/` (Re
 
 ## Bootstrap (`Wait-ZtpBootstrapComplete.ps1`)
 
-| # | What it does | Schema 5 path | Environment-file key | Default | Status |
+| # | What it does | Schema 5 path | Internal key | Default | Status |
 | --- | --- | --- | --- | --- | --- |
 | Bt1 | Overall budget until every node is ready for the portal | `provisioning.simplified.timeouts.bootstrap_minutes` | `ztp.timeouts.bootstrap_minutes` | 120 | controlled (new) |
 | Bt2 | Budget until a valid voucher appears | `provisioning.simplified.timeouts.bootstrap_voucher_minutes` | `ztp.timeouts.bootstrap_voucher_minutes` | 90 | controlled (new) |
@@ -89,7 +89,7 @@ This page walks every stage and script in `scripts/simplified-provisioning/` (Re
 
 ## Vouchers (`Wait-ZtpVoucher.ps1`, `Read-ZtpVoucherFromImage.ps1`)
 
-| # | What it does | Schema 5 path | Environment-file key | Default | Status |
+| # | What it does | Schema 5 path | Internal key | Default | Status |
 | --- | --- | --- | --- | --- | --- |
 | V1 | How long to wait for each node's voucher in its image | `provisioning.simplified.timeouts.voucher_wait_minutes` | `ztp.timeouts.voucher_wait_minutes` | 120 | controlled (new) |
 | V2 | Poll interval 60 s; eject retries every 30 s | none | none | 60 s, 30 s | HARD-CODED (kept): internal polling |
@@ -99,7 +99,7 @@ This page walks every stage and script in `scripts/simplified-provisioning/` (Re
 
 ## Device (`Set-ZtpDeviceConfiguration.ps1`)
 
-| # | What it does | Schema 5 path | Environment-file key | Default | Status |
+| # | What it does | Schema 5 path | Internal key | Default | Status |
 | --- | --- | --- | --- | --- | --- |
 | D1 | TCP port of the maintenance environment's Configurator service | `provisioning.simplified.maintenance_environment.port` | `ztp.maintenance_environment.port` | 20001 | controlled (new) |
 | D2 | The service's user | `provisioning.simplified.maintenance_environment.username` | `ztp.maintenance_environment.username` | `edgeuser` | controlled (new) |
@@ -115,7 +115,7 @@ This page walks every stage and script in `scripts/simplified-provisioning/` (Re
 
 ## Azure and Ready (`Invoke-ZtpAzureProvisioning.ps1`, `Wait-ZtpMachineReady.ps1`, `bicep/main.bicep`, `Invoke-ZtpEnvironment.ps1`)
 
-| # | What it does | Schema 5 path | Environment-file key | Default | Status |
+| # | What it does | Schema 5 path | Internal key | Default | Status |
 | --- | --- | --- | --- | --- | --- |
 | A1 | Subscription and resource group of the site and edge machines | `provisioning.simplified.subscription_id`, `resource_group`, else `azure.subscription_id`, `azure.resource_group` | `ztp.subscription_id`, `ztp.resource_group` | none (required) | controlled |
 | A2 | Create the resource group when it is missing (in `azure.location`, with the tags) | `provisioning.simplified.create_resource_group` | `ztp.create_resource_group` | true | controlled (new) |
@@ -150,7 +150,7 @@ This page walks every stage and script in `scripts/simplified-provisioning/` (Re
 
 ## Network, Restore, Handoff
 
-| # | What it does | Schema 5 path | Environment-file key | Default | Status |
+| # | What it does | Schema 5 path | Internal key | Default | Status |
 | --- | --- | --- | --- | --- | --- |
 | N1 | Network: find the management port by MAC and compare the address with the file; verify only | `nodes[].network_adapters[]` | `cluster_nodes[].mac_address`, `ip_address`, `ip_assignment` | verify | controlled |
 | N2 | Network: move the address through Azure's `ApplyConfiguration` | none (`-ApplyThroughAzure`) | none | off | HARD-CODED (kept): documented unreliable (the job never started on two live runs); opt-in on the orchestrator |

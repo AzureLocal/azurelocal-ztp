@@ -1,12 +1,18 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-Shared helpers for the environment file (dot-sourced by Invoke-ZtpEnvironment.ps1).
+Shared helpers for the infrastructure file (dot-sourced by Invoke-ZtpEnvironment.ps1 and the BMC tools).
 .DESCRIPTION
-Reads the environment file (YAML), checks the keys Invoke-ZtpEnvironment.ps1 uses so a bad file fails before anything runs
-and every problem is named at once, and resolves which nodes a run covers. Nothing here talks to Azure or to a node.
+Reads the one input of every script: the azurelocal-toolkit infrastructure.yml, schema 5 (Read-ZtpInfrastructure). Any
+other file stops the run with exit code 2 (an input error). The reader validates the file (the toolkit's
+Test-AzlInfrastructure when the toolkit is found, always followed by ZTP's own checks) and maps the schema 5 keys
+ZTP reads onto the internal keys below, so every script reads one shape; every message names the schema 5 key
+(ConvertTo-ZtpSchema5Message). docs/environment-file.md lists the schema 5 keys, docs/infrastructure-schema-5.md the
+mapping. Secrets stay secret references in the file and are read only through the toolkit's one resolver,
+scripts/common/secrets/AzlSecret.psm1 (Import-ZtpSecretResolver, Get-ZtpSecret, Get-ZtpBmcCredential). Nothing here talks
+to Azure or to a node, and nothing prompts.
 
-The keys Invoke-ZtpEnvironment.ps1 reads:
+The internal keys (in memory only; no file is written in this shape):
     cluster_nodes[].name, .ip_address, .mac_address (the management port), .service_tag, .idrac_ip
     cluster_nodes[].adapter_name, .arc_machine_name   (optional; the Arc name defaults to the node name)
     cluster_nodes[].maintenance_address               (optional; where the Device stage reaches the maintenance environment)
@@ -44,9 +50,10 @@ The keys Invoke-ZtpEnvironment.ps1 reads:
     ztp.subscription_id, .resource_group
     ztp.site_name, .time_zone, .provisioning_iso, .os_version, .share_name
     ztp.share_host or ztp.share_host_adapter
-    ztp.admin_secret.subscription_id, .resource_group, .vault, .name, .username
-    ztp.bmc_secret.vault, .username_name, .password_name
-    ztp.maintenance_password_secret (optional keyvault://<vault>/<secret>)
+    ztp.admin_secret.subscription_id, .resource_group, .vault, .name, .username  (keyvault:// only: Azure reads the
+                                                          provisioning administrator password from the vault itself)
+    ztp.bmc_secret.username, .password                  (hardware.bmc: secret references; the user name may be the name)
+    ztp.maintenance_password_secret (optional secret reference: keyvault://, env://, file:// or command://)
     ztp.tags (optional mapping), ztp.azl_rp_object_id (optional GUID)
     Optional, each with the default ZTP always used (schema 5.4 names them provisioning.simplified.*): ztp.isolate_san_adapters,
     ztp.enable_embedded_nics (BIOS actions derived from the inventory: see Get-ZtpDerivedBios), ztp.create_resource_group, ztp.configuration_name,
@@ -59,27 +66,42 @@ The keys Invoke-ZtpEnvironment.ps1 reads:
     ztp.media_path      downloads, images, vouchers and run state  (default %ProgramData%\AzureLocalZtp\<site_name>\media)
     ztp.evidence_path   the event log, change logs and run logs    (default %ProgramData%\AzureLocalZtp\<site_name>\evidence)
     Neither may be inside a git working tree: Resolve-ZtpDataPath refuses one, and creates the folder.
-ZTP ends at the Handoff, so it reads nothing for OS configuration: ztp.node_preparation and hardware.sbe (the SBE),
-credentials.local_admin_* and identity.local_admin (the deployment admin), onprem.ntp_servers and the other ports'
-settings may stay in a file and are ignored (Get-ZtpEnvironmentNote names the SBE ones).
+ZTP ends at the Handoff, so it reads nothing for OS configuration: hardware.sbe (the SBE), identity.local_admin (the
+deployment admin), networking.ntp_servers and the other ports' settings may stay in the file and are ignored
+(Get-ZtpEnvironmentNote names the SBE).
 #>
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function New-ZtpInputError {
+    <#
+    .SYNOPSIS
+    An input problem: an exception whose Data['ZtpExit'] is 2. The scripts turn it into exit code 2.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an exception object only.')]
+    [CmdletBinding()]
+    [OutputType([System.ArgumentException])]
+    param([Parameter(Mandatory)][string]$Message)
+    $e = [System.ArgumentException]::new($Message)
+    $e.Data['ZtpExit'] = 2
+    return $e
+}
+
 function Read-ZtpEnvironmentFile {
     <#
     .SYNOPSIS
-    Parses the environment file into an ordered dictionary, or throws one clear message.
+    Parses a YAML file into an ordered dictionary, or throws one clear input error (exit code 2). Read-ZtpInfrastructure
+    is the reader the scripts use; this is its first step.
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Path)
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Environment file '$Path' doesn't exist." }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw (New-ZtpInputError "The infrastructure file '$Path' doesn't exist. Pass -InfrastructureFile with the path of your infrastructure.yml (schema 5).") }
     $full = (Resolve-Path -LiteralPath $Path).Path
     $text = [IO.File]::ReadAllText($full)
-    if ([string]::IsNullOrWhiteSpace($text)) { throw "Environment file '$full' is empty." }
+    if ([string]::IsNullOrWhiteSpace($text)) { throw (New-ZtpInputError "The infrastructure file '$full' is empty.") }
     try { $parsed = ConvertFrom-Yaml $text -Ordered }
-    catch { throw "Environment file '$full' isn't valid YAML: $($_.Exception.Message)" }
-    if ($parsed -isnot [System.Collections.IDictionary]) { throw "Environment file '$full' must be a YAML mapping of keys at the top level." }
+    catch { throw (New-ZtpInputError "The infrastructure file '$full' isn't valid YAML: $($_.Exception.Message)") }
+    if ($parsed -isnot [System.Collections.IDictionary]) { throw (New-ZtpInputError "The infrastructure file '$full' must be a YAML mapping of keys at the top level.") }
     return $parsed
 }
 
@@ -98,7 +120,7 @@ function Get-ZtpEnvValue {
 function Test-ZtpEnvironment {
     <#
     .SYNOPSIS
-    Returns every problem found in the parsed environment file as a string; no output means it is valid. Checks every
+    Returns every problem found in the parsed infrastructure file as a string; no output means it is valid. Checks every
     key Invoke-ZtpEnvironment.ps1 reads, and nothing else.
     #>
     [CmdletBinding()]
@@ -359,37 +381,53 @@ function Test-ZtpEnvironment {
     if (-not $shareHost -and -not $shareAdapter) { $problems.Add('ztp.share_host or ztp.share_host_adapter is required: the address the BMCs reach this server on.') }
     elseif ($shareHost) { & $check $Environment 'ztp.share_host' 'ztp.share_host' 'ip' }
     & $check $Environment 'ztp.admin_secret.resource_group' 'ztp.admin_secret.resource_group' 'text'
-    foreach ($k in 'vault', 'password_name') { & $check $Environment "ztp.bmc_secret.$k" "ztp.bmc_secret.$k" 'text' }
-    # The BMC user name: a secret in the vault (username_name, optionally in username_vault), or the name itself (username).
-    if (-not (Get-ZtpEnvValue -Environment $Environment -Path 'ztp.bmc_secret.username')) { & $check $Environment 'ztp.bmc_secret.username_name' 'ztp.bmc_secret.username_name' 'text' }
+    # The BMC login (hardware.bmc): the password is a secret reference, the user name a secret reference or the name itself.
+    # The toolkit's resolver reads them at run time; a reference's exact form is its check.
+    & $check $Environment 'ztp.bmc_secret.username' 'ztp.bmc_secret.username' 'text'
+    & $check $Environment 'ztp.bmc_secret.password' 'ztp.bmc_secret.password' 'text'
+    $bmcPassword = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.bmc_secret.password'
+    if ((& $isText $bmcPassword) -and -not (Test-ZtpSecretReferenceForm -Value $bmcPassword)) { $problems.Add('ztp.bmc_secret.password must be a secret reference (keyvault://<vault>/<secret>, env://<VARIABLE>, file://<name> or command://<name>), never the password itself.') }
     & $check $Environment 'ztp.azl_rp_object_id' 'ztp.azl_rp_object_id' 'guid' -Optional
     $tags = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.tags'
     if ($null -ne $tags -and $tags -isnot [System.Collections.IDictionary]) { $problems.Add('ztp.tags must be a mapping of tag names to values.') }
     # The maintenance environment's edgeuser password: preset in the image and used by the Device stage. Default Password1.
     $edge = Get-ZtpEnvValue -Environment $Environment -Path 'ztp.maintenance_password_secret'
-    if ($null -ne $edge -and "$edge" -ne '' -and [string]$edge -notmatch '^keyvault://([^/]+)/(.+)$') { $problems.Add('ztp.maintenance_password_secret must be keyvault://<vault>/<secret>.') }
+    if ($null -ne $edge -and "$edge" -ne '' -and -not (Test-ZtpSecretReferenceForm -Value $edge)) { $problems.Add('ztp.maintenance_password_secret must be a secret reference (keyvault://<vault>/<secret>, env://<VARIABLE>, file://<name> or command://<name>).') }
     return $problems.ToArray()
+}
+
+function Test-ZtpSecretReferenceForm {
+    <#
+    .SYNOPSIS
+    True when a value is written as a secret reference of one of the toolkit resolver's four providers (keyvault://, env://,
+    file://, command://). Only the scheme is checked here; the resolver checks the rest when it reads the secret.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([AllowNull()][object]$Value)
+    return ($Value -is [string] -and $Value -match '^(?i)(keyvault|env|file|command)://\S+$')
 }
 
 function Assert-ZtpEnvironment {
     <#
     .SYNOPSIS
-    Throws one message naming every problem in the environment file.
+    Throws one message naming every problem in the infrastructure file, in the schema 5 key paths the operator wrote.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][System.Collections.IDictionary]$Environment,
-        [string]$Source = 'The environment file'
+        [string]$Source = 'The infrastructure file'
     )
-    $problems = @(Test-ZtpEnvironment -Environment $Environment)
-    $warnings = @(Get-ZtpEnvironmentWarning -Environment $Environment)
-    # A schema 5 file (Read-ZtpInfrastructure): its validator's findings first, then the key check in schema 5 paths.
+    # The validator's findings (Read-ZtpInfrastructure) first, then ZTP's key check, in schema 5 paths.
+    $problems = @(Test-ZtpEnvironment -Environment $Environment | ForEach-Object { ConvertTo-ZtpSchema5Message -Message $_ })
+    $warnings = @(Get-ZtpEnvironmentWarning -Environment $Environment | ForEach-Object { ConvertTo-ZtpSchema5Message -Message $_ })
     $origin = $Environment['_source']
-    if ($origin -is [System.Collections.IDictionary] -and $origin['format'] -eq 'schema5') {
-        $problems = @(@($origin['problems']) + @($problems | ForEach-Object { ConvertTo-ZtpSchema5Message -Message $_ }) | Where-Object { $_ } | Select-Object -Unique)
-        $warnings = @(@($origin['warnings']) + @($warnings | ForEach-Object { ConvertTo-ZtpSchema5Message -Message $_ }) | Where-Object { $_ })
+    if ($origin -is [System.Collections.IDictionary]) {
+        $problems = @(@($origin['problems']) + $problems | Where-Object { $_ } | Select-Object -Unique)
+        $warnings = @(@($origin['warnings']) + $warnings | Where-Object { $_ })
         $Source = "$Source (schema $($origin['schema_version']), checked by $($origin['validator']))"
     }
+    else { $problems = @($problems | Select-Object -Unique) }
     if ($problems.Count) {
         throw "$Source is invalid ($($problems.Count) problem$(if ($problems.Count -ne 1) { 's' })):`n  - $($problems -join "`n  - ")"
     }
@@ -405,12 +443,10 @@ function Get-ZtpEnvironmentNote {
     [CmdletBinding()]
     [OutputType([string])]
     param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment)
+    # Read-ZtpInfrastructure records the keys it ignores in _source.ignored.
     $origin = $Environment['_source']
-    $schema5 = $origin -is [System.Collections.IDictionary] -and $origin['format'] -eq 'schema5'
-    # A schema 5 file: Read-ZtpInfrastructure records the keys it ignores in _source.ignored.
-    if ($schema5) { foreach ($k in @($origin['ignored'])) { if ($k) { "$k ignored: SBE belongs to OS configuration." } }; return }
-    $ztp = Get-ZtpEnvValue -Environment $Environment -Path 'ztp'
-    if ($ztp -is [System.Collections.IDictionary] -and $ztp.Contains('node_preparation')) { 'ztp.node_preparation ignored: SBE belongs to OS configuration.' }
+    if ($origin -isnot [System.Collections.IDictionary]) { return }
+    foreach ($k in @($origin['ignored'])) { if ($k) { "$k ignored: SBE belongs to OS configuration." } }
 }
 
 function Get-ZtpEnvironmentPort {
@@ -500,14 +536,14 @@ function Test-ZtpV5ManagementReach {
 function Get-ZtpEnvironmentWarning {
     <#
     .SYNOPSIS
-    What in a valid environment file deserves a warning, one string each: settings ZTP accepts but doesn't act on.
+    What in a valid infrastructure file deserves a warning, one string each: settings ZTP accepts but doesn't act on.
     #>
     [CmdletBinding()]
     [OutputType([string])]
     param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment)
-    # The toolkit warns about a schema 5 file itself (AZL-024), for the same reason.
+    # The toolkit warns about the file itself (AZL-024), for the same reason.
     $origin = $Environment['_source']
-    if ($origin -is [System.Collections.IDictionary] -and $origin['format'] -eq 'schema5' -and @($origin['warnings'] | Where-Object { $_ -like 'AZL-024 *' }).Count) { return }
+    if ($origin -is [System.Collections.IDictionary] -and @($origin['warnings'] | Where-Object { $_ -like 'AZL-024 *' }).Count) { return }
     # Mode C: no DHCP on the management network, but every node has another port with role provisioning on DHCP, which the
     # maintenance environment reaches Azure through. Nothing to warn about.
     $nodeValue = Get-ZtpEnvValue -Environment $Environment -Path 'cluster_nodes'
@@ -639,7 +675,7 @@ function Get-ZtpManagementAssignment {
 function Get-ZtpEnvironmentBios {
     <#
     .SYNOPSIS
-    A node's BIOS attributes from the environment file: hardware.bios with cluster_nodes[].bios merged over it (the node
+    A node's BIOS attributes from the infrastructure file: hardware.bios with cluster_nodes[].bios merged over it (the node
     wins). An ordered dictionary of strings; empty when neither is set.
     .PARAMETER Kind
     final (default): hardware.bios and cluster_nodes[].bios, the machine's final state. provisioning:
@@ -650,6 +686,7 @@ function Get-ZtpEnvironmentBios {
     .PARAMETER ExplicitOnly
     Only what the file writes in hardware.bios, cluster_nodes[].bios and their bios_during_provisioning twins.
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'BIOS is an acronym, not a plural.')]
     [CmdletBinding()]
     [OutputType([System.Collections.Specialized.OrderedDictionary])]
     param(
@@ -770,6 +807,7 @@ function Get-ZtpDerivedBios {
     A slot that doesn't exist in the BMC's BIOS, or a value the BMC doesn't allow, is caught by the Boot stage before it
     changes any node (Set-ZtpBios.ps1 reads the attributes and the registry first).
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'BIOS is an acronym, not a plural.')]
     [CmdletBinding()]
     [OutputType([pscustomobject])]
     param(
@@ -1010,56 +1048,113 @@ function ConvertTo-ZtpSubnetMask {
 function Resolve-ZtpNodeSelection {
     <#
     .SYNOPSIS
-    The node names a run covers: every node in the environment file, or the ones named (each must be in the file).
+    The node names a run covers: every node in the infrastructure file (nodes[]), or the ones named (each must be in it).
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment, [string[]]$Node)
     $known = @(@($Environment['cluster_nodes']) | ForEach-Object { [string]$_['name'] })
     if (-not $Node) { return $known }
     foreach ($n in $Node) {
-        if ($known -notcontains $n) { throw "Node $n isn't in the environment file. Nodes there: $($known -join ', ')." }
+        if ($known -notcontains $n) { throw "Node $n isn't in the infrastructure file (nodes[].name). Nodes there: $($known -join ', ')." }
     }
     return @($Node | Select-Object -Unique)
 }
 
 # ======================================================================================================================
-# Schema 5: the master infrastructure.yml (azurelocal-toolkit config/variables). Read-ZtpInfrastructure detects the
-# format, validates a schema 5 file (with the toolkit's AzlInfrastructure module when the toolkit sits next to this
-# repository, otherwise with the built-in checks here) and maps it onto the keys above, so every script reads one shape.
-# The mapping is in docs/infrastructure-schema-5.md.
+# Schema 5: the infrastructure.yml of azurelocal-toolkit (config/variables). Read-ZtpInfrastructure accepts nothing else,
+# validates it (with the toolkit's AzlInfrastructure module when the toolkit is found, otherwise with the built-in
+# checks here) and maps it onto the internal keys above, so every script reads one shape. The mapping is in
+# docs/infrastructure-schema-5.md.
 # ======================================================================================================================
 
 # A schema 5 port's ip_assignment as ZTP's management mode: dhcp_reservation (Mode A) and dhcp stay apart, so the Network
 # stage and the handoff can tell a reservation from a lease that can change.
 $script:ZtpPortMode = @{ static = 'static'; dhcp_reservation = 'dhcp_reservation'; dhcp = 'dhcp'; preconfigured = 'preconfigured' }
 
-function Get-ZtpEnvironmentFormat {
+# Where a file that isn't a schema 5 infrastructure.yml is sent.
+$script:ZtpToolkitExample = 'azurelocal-toolkit config/variables/examples/infrastructure.example.yml (or infrastructure.ztp.example.yml for ZTP alone)'
+
+function Get-ZtpToolkitRoot {
     <#
     .SYNOPSIS
-    schema5 for a master infrastructure.yml (it has _metadata.schema_version, or schema_version at the top), else legacy
-    (the environment-file layout in docs/environment-file.md).
+    Where the toolkit is looked for: $env:AZL_TOOLKIT_ROOT when that is set (only there), else an azurelocal-toolkit clone
+    next to this repository. The full path, whether it exists or not.
     #>
     [CmdletBinding()]
     [OutputType([string])]
-    param([Parameter(Mandatory)][System.Collections.IDictionary]$Data)
-    if ((Get-ZtpEnvValue -Environment $Data -Path '_metadata.schema_version') -or $Data.Contains('schema_version')) { return 'schema5' }
-    return 'legacy'
+    param()
+    $root = if ($env:AZL_TOOLKIT_ROOT) { $env:AZL_TOOLKIT_ROOT } else { Join-Path $PSScriptRoot '..\..\..\azurelocal-toolkit' }
+    return [IO.Path]::GetFullPath($root)
+}
+
+function Find-ZtpToolkitFile {
+    # A file of the toolkit (Get-ZtpToolkitRoot), as a full path, or $null when it isn't there.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][string]$Relative)
+    $candidate = [IO.Path]::GetFullPath((Join-Path (Get-ZtpToolkitRoot) $Relative))
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
+    return $null
 }
 
 function Find-ZtpToolkitModule {
     <#
     .SYNOPSIS
-    The toolkit's AzlInfrastructure.psm1: under $env:AZL_TOOLKIT_ROOT when that is set (only there), else in an
-    azurelocal-toolkit clone next to this repository. $null when there is none.
+    The toolkit's AzlInfrastructure.psm1 (the validator), or $null when the toolkit isn't found (Get-ZtpToolkitRoot).
     #>
     [CmdletBinding()]
     [OutputType([string])]
     param()
-    $relative = 'scripts\common\infrastructure\AzlInfrastructure.psm1'
-    $root = if ($env:AZL_TOOLKIT_ROOT) { $env:AZL_TOOLKIT_ROOT } else { Join-Path $PSScriptRoot '..\..\..\azurelocal-toolkit' }
-    $candidate = [IO.Path]::GetFullPath((Join-Path $root $relative))
-    if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
-    return $null
+    return (Find-ZtpToolkitFile -Relative 'scripts\common\infrastructure\AzlInfrastructure.psm1')
+}
+
+function Import-ZtpSecretResolver {
+    <#
+    .SYNOPSIS
+    Loads the toolkit's one secret resolver, scripts/common/secrets/AzlSecret.psm1 (keyvault://, env://, file://,
+    command://). Throws an input error (exit code 2) when the toolkit isn't found.
+    #>
+    [CmdletBinding()]
+    param()
+    $module = Find-ZtpToolkitFile -Relative 'scripts\common\secrets\AzlSecret.psm1'
+    if (-not $module) {
+        throw (New-ZtpInputError "The toolkit's secret resolver (scripts/common/secrets/AzlSecret.psm1) isn't found under $(Get-ZtpToolkitRoot). ZTP reads every secret reference of the infrastructure file through it. Set AZL_TOOLKIT_ROOT to an azurelocal-toolkit clone, or clone azurelocal-toolkit next to this repository.")
+    }
+    Import-Module $module -Force -Global -ErrorAction Stop
+}
+
+function Get-ZtpSecret {
+    <#
+    .SYNOPSIS
+    The secret a reference points to, as a SecureString, read by the toolkit's resolver (Get-AzlSecretValue). The value is
+    never written anywhere; the resolver's messages name the reference only.
+    .PARAMETER Infrastructure
+    The parsed infrastructure file (Read-ZtpInfrastructure keeps it in _source.infrastructure): key_vaults and secrets.
+    #>
+    [CmdletBinding()]
+    [OutputType([securestring])]
+    param([Parameter(Mandatory)][string]$Reference, [Parameter(Mandatory)][System.Collections.IDictionary]$Infrastructure)
+    if (-not (Get-Command Get-AzlSecretValue -ErrorAction SilentlyContinue)) { Import-ZtpSecretResolver }
+    return (Get-AzlSecretValue -Reference $Reference -Infrastructure $Infrastructure)
+}
+
+function Get-ZtpBmcCredential {
+    <#
+    .SYNOPSIS
+    The BMC login of hardware.bmc, read by the toolkit's resolver: the password as a SecureString, the user name from its
+    reference or, when it isn't one, as written. Nothing is logged.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscredential])]
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment)
+    $infrastructure = Get-ZtpEnvValue -Environment $Environment -Path '_source.infrastructure'
+    if ($infrastructure -isnot [System.Collections.IDictionary]) { throw (New-ZtpInputError 'The BMC login is read from the infrastructure file; read it with Read-ZtpInfrastructure first.') }
+    if (-not (Get-Command Get-AzlSecretValue -ErrorAction SilentlyContinue)) { Import-ZtpSecretResolver }
+    $user = [string](Get-ZtpEnvValue -Environment $Environment -Path 'ztp.bmc_secret.username')
+    if (Get-AzlSecretProvider -Reference $user) { $user = [string](Get-AzlSecretPlainText -Reference $user -Infrastructure $infrastructure) }
+    if ([string]::IsNullOrWhiteSpace($user)) { throw (New-ZtpInputError 'hardware.bmc.username is empty (or its secret is empty). Set the BMC user name, or a secret reference to it, in the infrastructure file.') }
+    $password = Get-AzlSecretValue -Reference ([string](Get-ZtpEnvValue -Environment $Environment -Path 'ztp.bmc_secret.password')) -Infrastructure $infrastructure
+    return [pscredential]::new($user, $password)
 }
 
 function Get-ZtpV5ManagementPort {
@@ -1090,15 +1185,13 @@ function Split-ZtpKeyVaultReference([object]$Reference) {
 function Test-ZtpInfrastructureV5 {
     <#
     .SYNOPSIS
-    The problems in a schema 5 file that ZTP's own key check (run on the mapped keys) can't name: the format, the scenario,
-    each node's management port, and the vaults and BMC login ZTP can use. Messages use schema 5 key paths.
+    The problems in a schema 5 file that ZTP's own key check (run on the mapped keys) can't name: the scenario, each node's
+    management port, and the vaults and BMC login ZTP can use. Messages use schema 5 key paths. Read-ZtpInfrastructure
+    has already refused a file that isn't schema 5.
     #>
     [CmdletBinding()]
     [OutputType([string])]
     param([Parameter(Mandatory)][System.Collections.IDictionary]$Data)
-    $version = [string](Get-ZtpEnvValue -Environment $Data -Path '_metadata.schema_version')
-    if (-not $version) { $version = [string]$Data['schema_version'] }
-    if ($version -notmatch '^5\.\d+\.\d+$') { "_metadata.schema_version is '$version'; ZTP reads schema 5.x." }
     if ([string](Get-ZtpEnvValue -Environment $Data -Path 'scenario.os_install') -ne 'simplified') {
         "scenario.os_install is '$(Get-ZtpEnvValue -Environment $Data -Path 'scenario.os_install')'; ZTP provisions with simplified machine provisioning (os_install: simplified)."
     }
@@ -1120,7 +1213,11 @@ function Test-ZtpInfrastructureV5 {
     $vaults = @{}
     $vaultList = Get-ZtpEnvValue -Environment $Data -Path 'key_vaults'
     foreach ($kv in @($vaultList)) { if ($kv -is [System.Collections.IDictionary] -and $kv['name']) { $vaults[[string]$kv['name']] = $kv } }
-    $admin = Split-ZtpKeyVaultReference (Get-ZtpEnvValue -Environment $Data -Path 'provisioning.simplified.admin.password')
+    $adminPassword = Get-ZtpEnvValue -Environment $Data -Path 'provisioning.simplified.admin.password'
+    $admin = Split-ZtpKeyVaultReference $adminPassword
+    # Azure reads the provisioning administrator password from the vault itself (the template passes the vault and the
+    # secret name, never a value), so this one secret is a keyvault:// reference. The others go through the resolver.
+    if ($null -ne $adminPassword -and "$adminPassword" -ne '' -and -not $admin) { 'provisioning.simplified.admin.password must be a keyvault://<vault>/<secret> reference: Azure reads it from the vault when it provisions the machines.' }
     if ($admin -and -not $vaults.ContainsKey($admin.Vault)) { "provisioning.simplified.admin.password names vault '$($admin.Vault)', which isn't in key_vaults (ZTP needs its subscription_id and resource_group)." }
     elseif ($admin) {
         $sub = [string]$vaults[$admin.Vault]['subscription_id']
@@ -1134,13 +1231,12 @@ function Test-ZtpInfrastructureV5 {
             elseif ([string]$vaults[$r.Vault]['subscription_id'] -ne $sub) { "$($ref.Path) is in vault '$($r.Vault)', in another subscription than the provisioning admin's vault '$($admin.Vault)'. ZTP reads its secrets in one subscription." }
         }
     }
-    if (-not (Get-ZtpEnvValue -Environment $Data -Path 'hardware.bmc.password')) { 'hardware.bmc (username and password) is required: ZTP mounts the image and boots each node through its BMC.' }
 }
 
 function ConvertFrom-ZtpInfrastructureV5 {
     <#
     .SYNOPSIS
-    Maps a schema 5 infrastructure.yml onto the environment-file keys the ZTP scripts read. Missing values stay missing,
+    Maps a schema 5 infrastructure.yml onto the internal keys the ZTP scripts read (in memory only). Missing values stay missing,
     so the key check names them (in schema 5 paths, through Assert-ZtpEnvironment).
     #>
     [CmdletBinding()]
@@ -1263,20 +1359,18 @@ function ConvertFrom-ZtpInfrastructureV5 {
     }
     $ztp['admin_secret'] = $adminSecret
     & $put $ztp 'maintenance_password_secret' $simplified['maintenance_password']
+    # The BMC login as the file writes it: secret references (the user name may be the name itself), read at run time by
+    # the toolkit's resolver (Get-ZtpBmcCredential).
     $bmcSecret = [ordered]@{}
-    $passwordRef = Split-ZtpKeyVaultReference (& $v 'hardware.bmc.password')
-    if ($passwordRef) { $bmcSecret['vault'] = $passwordRef.Vault; $bmcSecret['password_name'] = $passwordRef.Secret }
-    $user = & $v 'hardware.bmc.username'
-    $userRef = Split-ZtpKeyVaultReference $user
-    if ($userRef) { $bmcSecret['username_name'] = $userRef.Secret; if (-not $passwordRef -or $userRef.Vault -ne $passwordRef.Vault) { $bmcSecret['username_vault'] = $userRef.Vault } }
-    elseif ($user) { $bmcSecret['username'] = [string]$user }
+    & $put $bmcSecret 'username' (& $v 'hardware.bmc.username')
+    & $put $bmcSecret 'password' (& $v 'hardware.bmc.password')
     $ztp['bmc_secret'] = $bmcSecret
     $env_['ztp'] = $ztp
     return $env_
 }
 
 function ConvertTo-ZtpSchema5Message {
-    # A key-check message in environment-file paths, rewritten in the schema 5 paths the operator wrote.
+    # A key-check message in the internal key paths, rewritten in the schema 5 paths the operator wrote.
     param([Parameter(Mandatory)][string]$Message)
     $m = $Message
     $m = $m -replace 'cluster_nodes\[(\d+)\]( \([^)]*\))?\.(ip_address|mac_address)', 'nodes[$1]$2 management port $3'
@@ -1316,9 +1410,8 @@ function ConvertTo-ZtpSchema5Message {
         'ztp.admin_secret.name'                        = 'provisioning.simplified.admin.password (keyvault://<vault>/<secret>)'
         'ztp.admin_secret.subscription_id'             = 'key_vaults[].subscription_id of the provisioning admin''s vault'
         'ztp.admin_secret.resource_group'              = 'key_vaults[].resource_group of the provisioning admin''s vault'
-        'ztp.bmc_secret.username_name'                 = 'hardware.bmc.username'
-        'ztp.bmc_secret.password_name'                 = 'hardware.bmc.password'
-        'ztp.bmc_secret.vault'                         = 'hardware.bmc.password (keyvault://<vault>/<secret>)'
+        'ztp.bmc_secret.username'                      = 'hardware.bmc.username'
+        'ztp.bmc_secret.password'                      = 'hardware.bmc.password'
     }
     foreach ($k in $map.Keys) { $m = $m.Replace($k, $map[$k]) }
     return $m
@@ -1327,11 +1420,14 @@ function ConvertTo-ZtpSchema5Message {
 function Read-ZtpInfrastructure {
     <#
     .SYNOPSIS
-    Reads the file -InfrastructureFile names, in either format, and returns the environment-file keys the scripts read.
+    Reads the file -InfrastructureFile names, the azurelocal-toolkit infrastructure.yml (schema 5), and returns the internal
+    keys the scripts read.
     .DESCRIPTION
-    A legacy environment file (docs/environment-file.md) is returned as it is. A schema 5 infrastructure.yml is validated
-    and mapped (ConvertFrom-ZtpInfrastructureV5); the result carries _source { format, schema_version, path, validator,
-    problems, warnings }, which Assert-ZtpEnvironment reports with the key check, in schema 5 paths.
+    Anything that isn't a schema 5 file (no _metadata.schema_version 5.x) is an input error (exit code 2) that names the
+    file and points at the toolkit's example. The file is validated and mapped (ConvertFrom-ZtpInfrastructureV5); the
+    result carries _source { format, schema_version, path, validator, problems, warnings, ignored, infrastructure },
+    which Assert-ZtpEnvironment reports with the key check, in schema 5 paths. _source.infrastructure is the parsed file
+    itself, for the secret resolver (key_vaults and secrets).
     Validation: the toolkit's Test-AzlInfrastructure when Find-ZtpToolkitModule finds the toolkit (its errors and warnings,
     with their rule IDs), always followed by Test-ZtpInfrastructureV5 for what ZTP itself needs.
     .PARAMETER ToolkitModulePath
@@ -1344,8 +1440,12 @@ function Read-ZtpInfrastructure {
         [string]$ToolkitModulePath
     )
     $data = Read-ZtpEnvironmentFile -Path $Path
-    if ((Get-ZtpEnvironmentFormat -Data $data) -eq 'legacy') { return $data }
     $full = (Resolve-Path -LiteralPath $Path).Path
+    $version = [string](Get-ZtpEnvValue -Environment $data -Path '_metadata.schema_version')
+    if ($version -notmatch '^5\.\d+\.\d+$') {
+        $found = if ($version) { "_metadata.schema_version is '$version'" } else { 'it has no _metadata.schema_version' }
+        throw (New-ZtpInputError "'$full' isn't an infrastructure file in schema 5 ($found). ZTP reads only the azurelocal-toolkit infrastructure.yml, schema 5.x; start from $($script:ZtpToolkitExample).")
+    }
     $problems = [System.Collections.Generic.List[string]]::new()
     $warnings = [System.Collections.Generic.List[string]]::new()
     $module = if ($ToolkitModulePath -eq 'none') { $null } elseif ($ToolkitModulePath) { $ToolkitModulePath } else { Find-ZtpToolkitModule }
@@ -1363,7 +1463,10 @@ function Read-ZtpInfrastructure {
     # The toolkit's AZL-024 stops Mode C without a DHCP provisioning port; without the toolkit, ZTP's own check does.
     if (-not $module) { foreach ($p in @(Test-ZtpV5ManagementReach -Data $data)) { $problems.Add($p) } }
     $env_ = ConvertFrom-ZtpInfrastructureV5 -Data $data
-    $version = [string](Get-ZtpEnvValue -Environment $data -Path '_metadata.schema_version')
-    $env_['_source'] = [ordered]@{ format = 'schema5'; schema_version = $version; path = $full; validator = $validator; problems = $problems.ToArray(); warnings = $warnings.ToArray(); ignored = @(if ((Get-ZtpEnvValue -Environment $data -Path 'hardware.sbe') -is [System.Collections.IDictionary]) { 'hardware.sbe' }) }
+    $env_['_source'] = [ordered]@{
+        format = 'schema5'; schema_version = $version; path = $full; validator = $validator; problems = $problems.ToArray(); warnings = $warnings.ToArray()
+        ignored = @(if ((Get-ZtpEnvValue -Environment $data -Path 'hardware.sbe') -is [System.Collections.IDictionary]) { 'hardware.sbe' })
+        infrastructure = $data
+    }
     return $env_
 }

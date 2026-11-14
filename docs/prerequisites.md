@@ -1,6 +1,6 @@
 # Prerequisites
 
-> Everything that must be in place before a ZTP run, and every value the environment file needs. Each item says whether ZTP checks it, and where, or whether you do it.
+> Everything that must be in place before a ZTP run, and every value the infrastructure file needs. Each item says whether ZTP checks it, and where, or whether you do it.
 
 ZTP ends at the Handoff: each machine is Provisioned in Azure and Arc-connected, with its management address on the management port. OEM drivers, copying the SBE package to the nodes (optional, only when a person asks for it), DHCP off on the other ports, DNS and time on the host, and the deployment admin are OS configuration, which comes next ([Phase 03 OS Configuration](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/)). This page lists what ZTP needs, plus one thing ZTP does not read but that must be ready before the next step: [the SBE package](#the-sbe-package).
 
@@ -8,11 +8,11 @@ ZTP ends at the Handoff: each machine is Provisioned in Azure and Arc-connected,
 
 ## Before you run
 
-- [ ] Start the environment file from the [ZTP-only template](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/variables/examples/infrastructure.ztp.example.yml) (schema 5.3 or later, `_metadata.scope: ztp`; `New-InfrastructureArtifacts.ps1 -Cut ztp -From <file>` in the toolkit cuts a full file down to what ZTP reads), or from the [full template](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/variables/examples/infrastructure.example.yml) if OS configuration and deployment follow. Keep it outside this repository. Fill every value in [Values you need](#values-you-need).
+- [ ] Start the infrastructure file from the [ZTP-only template](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/variables/examples/infrastructure.ztp.example.yml) (schema 5.3 or later, `_metadata.scope: ztp`; `New-InfrastructureArtifacts.ps1 -Cut ztp -From <file>` in the toolkit cuts a full file down to what ZTP reads), or from the [full template](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/variables/examples/infrastructure.example.yml) if OS configuration and deployment follow. Keep it outside this repository. Fill every value in [Values you need](#values-you-need).
 - [ ] The `AzureLocalZTP` feature and the resource providers are registered in the subscription ([Azure](#azure)).
 - [ ] Your account has the roles on the resource group and the Key Vault ([Roles](#roles)).
 - [ ] The Key Vault uses the Azure RBAC permission model and holds the provisioning admin password and the BMC login ([Key Vault](#key-vault)).
-- [ ] The management host has PowerShell 7, the Az modules, `powershell-yaml` and the Azure CLI with Bicep, and you run elevated ([Operator host](#operator-host)).
+- [ ] The management host has PowerShell 7, the Az modules, `powershell-yaml`, the Azure CLI with Bicep and an azurelocal-toolkit clone (`AZL_TOOLKIT_ROOT`, or next to this repository), and you run elevated ([Operator host](#operator-host)).
 - [ ] `media_path` and `evidence_path` are outside any git repository, on a disk with room ([Paths](#paths)).
 - [ ] DHCP answers on the provisioning network, and the ports in [Network](#network) are open.
 - [ ] The BMCs have Redfish and virtual media, and the BIOS settings are in the file ([Hardware](#hardware)).
@@ -94,7 +94,7 @@ Optional. Without it, `Invoke-ZtpEnvironment.ps1` looks it up with `Get-AzADServ
 (Get-AzADServicePrincipal -ApplicationId '1412d89f-b8a8-4111-b4fd-e82905cbd85d').Id
 ```
 
-Checked by ZTP: the key check requires a GUID when the key is set; the run stops with `Set ztp.azl_rp_object_id` when the lookup finds nothing.
+Checked by ZTP: the key check requires a GUID when the key is set; the run stops with `Set azure.hci_resource_provider_object_id` when the lookup finds nothing.
 
 ### The site's network setting
 
@@ -112,7 +112,7 @@ Checked by ZTP: the key check refuses any other value, and with `site` every sta
 | Azure RBAC permission model | The template delegates **Key Vault Secrets User** on the vault, so the vault must use Azure RBAC, not access policies. | You do this. |
 | Public network access during provisioning | Keep it on while machines provision and deploy. Learn says this for deployment ([decision 10](https://learn.microsoft.com/azure/azure-local/plan/cloud-deployment-network-considerations#decision-10-determine-outbound-connectivity)). | You do this. |
 | Every vault listed | Each vault a `keyvault://` reference names is in `key_vaults[]`, with its `subscription_id` and `resource_group`. | Checked by ZTP: `Test-ZtpInfrastructureV5`. |
-| References only | Every secret in the file is `keyvault://<vault>/<secret>`. The file holds no secret values. | Checked by ZTP for `provisioning.simplified.admin.password`, `hardware.bmc.password` and `maintenance_password`: without a `keyvault://` reference the key check finds no vault and secret name, and fails. `hardware.bmc.username` may be the plain user name, which isn't a secret. |
+| References only | Every secret in the file is a secret reference: `keyvault://<vault>/<secret>` (the default), `env://<VARIABLE>`, `file://<name>` or `command://<name>`, read by azurelocal-toolkit's resolver. `provisioning.simplified.admin.password` is a `keyvault://` reference, because Azure reads it from the vault. The file holds no secret values. | Checked by ZTP: `hardware.bmc.password` and `maintenance_password` must be references, and `admin.password` a `keyvault://` one. `hardware.bmc.username` may be the plain user name, which isn't a secret. The resolver checks each reference when it reads it (`-Execute`). |
 
 ### The secrets
 
@@ -238,7 +238,7 @@ Vendors differ, so "download first" does not fit every one. Dell AX and MC is a 
 The keys are defined in the master registry of azurelocal-toolkit (`config/variables/schema/master-registry.yaml`), not here.
 ## Values you need
 
-Every key ZTP reads, in schema 5 paths (`ConvertFrom-ZtpInfrastructureV5`, `Test-ZtpInfrastructureV5` and `Test-ZtpEnvironment` in `ZtpEnvironment.Common.ps1`). Example values only. "File check" is the check the run does before any stage. For the older layout's names, see the [environment file reference](environment-file.md); for the mapping, [Reading the master infrastructure.yml](infrastructure-schema-5.md).
+Every key ZTP reads, in schema 5 paths (`ConvertFrom-ZtpInfrastructureV5`, `Test-ZtpInfrastructureV5` and `Test-ZtpEnvironment` in `ZtpEnvironment.Common.ps1`). Example values only. "File check" is the check the run does before any stage. Every key, with how secrets are read, is in the [infrastructure file reference](environment-file.md); for the mapping, [Reading the master infrastructure.yml](infrastructure-schema-5.md).
 
 | Key | Required or optional | Example | Where to get the value | Stage that uses it |
 | --- | --- | --- | --- | --- |
@@ -247,27 +247,27 @@ Every key ZTP reads, in schema 5 paths (`ConvertFrom-ZtpInfrastructureV5`, `Test
 | `scenario.os_install` | Required, `simplified` | `simplified` | The template | File check |
 | `azure.tenant_id` | Required | `00000000-0000-0000-0000-000000000000` | `(Get-AzContext).Tenant.Id`, or the Microsoft Entra ID overview in the portal | Every Azure call |
 | `azure.subscription_id` | Required, unless `provisioning.simplified.subscription_id` is set | `00000000-0000-0000-0000-000000000000` | `(Get-AzContext).Subscription.Id`, or the portal's Subscriptions page | Bootstrap (Azure check), Azure, Ready, Network, Restore, Handoff |
-| `azure.resource_group` | Required, unless `provisioning.simplified.resource_group` is set | `rg-example` | You choose it; created when missing | Azure, Ready, Network, Restore, Handoff |
+| `azure.resource_group` | Required, unless `provisioning.simplified.resource_group` is set | `rg-iic-azl-01` | You choose it; created when missing | Azure, Ready, Network, Restore, Handoff |
 | `azure.location` | Required | `eastus` | East US in the preview | Bootstrap (OS image catalog), Azure (site configuration, edge machines, a new resource group) |
 | `azure.hci_resource_provider_object_id` | Optional | `00000000-0000-0000-0000-000000000000` | `(Get-AzADServicePrincipal -ApplicationId '1412d89f-b8a8-4111-b4fd-e82905cbd85d').Id` | Azure (the resource provider's role) |
 | `site.name` | Required | `Example site` | You choose it | Azure (the site's display name) |
 | `site.time_zone` | Required | `UTC` | The time zone of the site, in the form the templates use (`UTC`, `Central Standard Time`) | Azure (the site's time setting) |
-| `key_vaults[].name` | Required for each vault a reference names | `kv-example` | The portal, or `Get-AzKeyVault` | File check; Azure (secret ID, vault delegation); secret reads at the start of `-Execute` |
+| `key_vaults[].name` | Required for each vault a reference names | `kv-iic-mgmt-01` | The portal, or `Get-AzKeyVault` | File check; Azure (secret ID, vault delegation); secret reads at the start of `-Execute` |
 | `key_vaults[].subscription_id` | Required for each vault | `00000000-0000-0000-0000-000000000000` | The vault's overview page | Same |
-| `key_vaults[].resource_group` | Required for each vault | `rg-example-mgmt` | The vault's overview page | Azure (the vault delegation deployment) |
+| `key_vaults[].resource_group` | Required for each vault | `rg-iic-azl-01-mgmt` | The vault's overview page | Azure (the vault delegation deployment) |
 | `provisioning.os_version` | Required | `12.2609.1003.7` (or `latest`) | `./scripts/simplified-provisioning/Get-ZtpOsImage.ps1 -SubscriptionId <id> -Location eastus`. Pin a version. | Azure (the OS the machines install); the handoff records the build installed |
 | `provisioning.simplified.subscription_id` | Optional | `00000000-0000-0000-0000-000000000000` | Only when the site goes in another subscription than `azure.subscription_id` | Same as `azure.subscription_id` |
-| `provisioning.simplified.resource_group` | Optional | `rg-example` | Only when the site goes in another group than `azure.resource_group` | Same as `azure.resource_group` |
-| `provisioning.simplified.site_name` | Required | `site-example` | You choose it: the `Microsoft.Edge` site's resource name | Azure (the site, the deployment `ztp-<site_name>`); the default run folders |
+| `provisioning.simplified.resource_group` | Optional | `rg-iic-azl-01` | Only when the site goes in another group than `azure.resource_group` | Same as `azure.resource_group` |
+| `provisioning.simplified.site_name` | Required | `iic-site-01` | You choose it: the `Microsoft.Edge` site's resource name | Azure (the site, the deployment `ztp-<site_name>`); the default run folders |
 | `provisioning.simplified.maintenance_iso` | Required | `latest` or `2610` | `latest`, a train, a build or a Microsoft download URL. See [Bootstrap media](bootstrap-media.md). | Resolve |
 | `provisioning.simplified.admin.username` | Required | `azl-provadmin` | You choose it | Azure (the local administrator the OS install creates) |
-| `provisioning.simplified.admin.password` | Required | `keyvault://kv-example/provisioning-admin-password` | A secret you create before the run | Azure (the secret's resource ID), then the OS install |
-| `provisioning.simplified.maintenance_password` | Optional | `keyvault://kv-example/maintenance-password` | A secret you create; default `Password1` without it | Media (the hash in each image), Device (sign-in) |
+| `provisioning.simplified.admin.password` | Required | `keyvault://kv-iic-mgmt-01/provisioning-admin-password` | A secret you create before the run | Azure (the secret's resource ID), then the OS install |
+| `provisioning.simplified.maintenance_password` | Optional | `keyvault://kv-iic-mgmt-01/maintenance-password` | A secret you create; default `Password1` without it | Media (the hash in each image), Device (sign-in) |
 | `provisioning.simplified.media_share.name` | Required | `ztp-virtual-usb` | You choose it: letters, digits and hyphens | Boot |
 | `provisioning.simplified.media_share.host` | Required, or `host_adapter` | `198.51.100.5` | The management host's address as the BMCs reach it | Boot |
 | `provisioning.simplified.media_share.host_adapter` | Required, or `host` | `VPN` | `Get-NetAdapter`: the adapter whose address the BMCs reach. Wins over `host`. | Boot |
-| `provisioning.simplified.media_path` | Optional | `D:\Data\azl-ztp\site-example\media` | A folder outside any git repository | Every stage |
-| `provisioning.simplified.evidence_path` | Optional | `D:\Data\azl-ztp\site-example\evidence` | A folder outside any git repository | Every stage |
+| `provisioning.simplified.media_path` | Optional | `D:\Data\azl-ztp\iic-site-01\media` | A folder outside any git repository | Every stage |
+| `provisioning.simplified.evidence_path` | Optional | `D:\Data\azl-ztp\iic-site-01\evidence` | A folder outside any git repository | Every stage |
 | `networking.management.subnet` | Required | `192.0.2.0/24` | Your IP plan | Device (mask, default scan range), Azure (`site` method), Network |
 | `networking.management.gateway` | Required | `192.0.2.1` | Your IP plan | Device, Azure (`site` method), Network |
 | `networking.management.dns_servers` | Required | `[192.0.2.53, 192.0.2.54]` | Your IP plan | Device, Azure (`site` method), Network |
@@ -278,12 +278,12 @@ Every key ZTP reads, in schema 5 paths (`ConvertFrom-ZtpInfrastructureV5`, `Test
 | `networking.management.provisioning_network` | Optional, default `dhcp` | `dhcp` | `dhcp`; `static` only warns | File check (warning) |
 | `networking.management.site_ip_range.start`, `.end` | Optional; only with `static_method: site` | `192.0.2.11`, `192.0.2.12` | Your IP plan; default the nodes' range | Azure (the site's Manual range) |
 | `hardware.vendor` | Required | `Dell` | The OEM; picks `config/oem/<vendor>.json` | Bootstrap (the BMC log services and signals) |
-| `hardware.bmc.username` | Required | `keyvault://kv-example/bmc-username` (or the name itself) | A secret you create | Boot, Bootstrap, Vouchers, Restore |
-| `hardware.bmc.password` | Required | `keyvault://kv-example/bmc-password` | A secret you create | Boot, Bootstrap, Vouchers, Restore |
+| `hardware.bmc.username` | Required | `keyvault://kv-iic-mgmt-01/bmc-username` (or the name itself) | A secret you create | Boot, Bootstrap, Vouchers, Restore |
+| `hardware.bmc.password` | Required | `keyvault://kv-iic-mgmt-01/bmc-password` | A secret you create | Boot, Bootstrap, Vouchers, Restore |
 | `hardware.bios` | Optional | `{ EmbNic1Nic2: "Enabled", Slot2: "Enabled" }` | The BMC's Redfish Bios resource (`GET /redfish/v1/Systems/System.Embedded.1/Bios` on an iDRAC) | Boot, Restore |
 | `hardware.bios_during_provisioning` | Optional | `{ Slot2: "Disabled" }` | Same | Boot, Restore |
 | `nodes[].name` | Required, unique | `node-01` | Your naming plan: the host and edge machine name | Every stage |
-| `nodes[].serial_number` | Required | `EXAMPLE1` | The service tag on the machine's label or the BMC dashboard | Bootstrap and Vouchers (voucher mapping), Azure, Handoff |
+| `nodes[].serial_number` | Required | `IICSN0001` | The service tag on the machine's label or the BMC dashboard | Bootstrap and Vouchers (voucher mapping), Azure, Handoff |
 | `nodes[].bmc.ip_address` | Required | `198.51.100.11` | The BMC's address | Boot (also the share's firewall scope), Bootstrap, Vouchers, Restore |
 | `nodes[].bmc.username`, `.password` | Optional; must equal `hardware.bmc` | | | File check |
 | `nodes[].network_adapters[]` management port: `name`, `mac_address`, `roles: [management]`, `ip_assignment`, `ip_address` | Required: exactly one port with role `management` and an `ip_assignment` other than `none` | `{ name: "Embedded NIC 1", mac_address: "00:00:5E:00:53:11", roles: [management], ip_assignment: static, ip_address: "192.0.2.11" }` | The MAC from the BMC's network inventory or the NIC label; the address from your IP plan | Device, Azure, Network |

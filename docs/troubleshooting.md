@@ -19,7 +19,7 @@ Unless a row cites Learn, the behavior below was **proven on Dell AX-760 / iDRAC
 | The Arc machine has a device ID for a name | [Arc machine names](#arc-machine-names) |
 | An unexpected adapter with a `169.254.0.x` address | [The Remote NDIS adapter](#the-remote-ndis-adapter) |
 | Validate complains about inbox drivers or several default gateways (or about an empty `C:\SBE`, only when an SBE was asked for) | [Node state after the OS install](#node-state-after-the-os-install) |
-| `Note: ztp.node_preparation ignored: SBE belongs to OS configuration.` | [SBE settings are ignored](#sbe-settings-are-ignored) |
+| `Note: hardware.sbe ignored: SBE belongs to OS configuration.` | [SBE settings are ignored](#sbe-settings-are-ignored) |
 | Deploy fails with `ParentResourceNotFound` | [Deploy on build 2690](#deploy-fails-with-parentresourcenotfound-on-build-2690) |
 | A job that's running again still carries an error | [Stale error after a resubmit](#stale-error-after-a-resubmit) |
 | The machine keeps reinstalling the maintenance environment | [USB boot loop](#usb-boot-loop) |
@@ -87,7 +87,7 @@ Four BMC tools help when that isn't enough. Each takes `-InfrastructureFile` and
 node-01: no maintenance environment with the management MAC 00:00:5e:00:53:11 answers on TCP 20001 in 192.0.2.1-192.0.2.254 within 30 minutes (30 scan(s)). Check that the node booted the maintenance environment, that this host reaches that network on TCP 20001, and the MAC; or set maintenance_address (or network_intents.management.provisioning_dhcp_range).
 ```
 
-**How the scan works.** It probes every address of `network_intents.management.provisioning_dhcp_range` (schema 5: `networking.management.provisioning_dhcp_range`; without it, the management subnet) on TCP 20001, all at once. Each address that answers is asked `GET GetNetworkAdapters`, and the node is the one that lists its management MAC. It scans again every poll interval (60 seconds from the entry point) until the stage's 30 minutes pass. Each port of the maintenance environment takes a DHCP lease, so a node can answer on several addresses. The scan was verified live on a Dell AX-760 with DHCP from a firewall and no reservation. The calls and what the service refuses are in [Appendix B](appendix/configurator-app-api.md#how-ztp-uses-this-service).
+**How the scan works.** It probes every address of `networking.management.provisioning_dhcp_range` (without it, the management subnet) on TCP 20001, all at once. Each address that answers is asked `GET GetNetworkAdapters`, and the node is the one that lists its management MAC. It scans again every poll interval (60 seconds from the entry point) until the stage's 30 minutes pass. Each port of the maintenance environment takes a DHCP lease, so a node can answer on several addresses. The scan was verified live on a Dell AX-760 with DHCP from a firewall and no reservation. The calls and what the service refuses are in [Appendix B](appendix/configurator-app-api.md#how-ztp-uses-this-service).
 
 **What to check.**
 
@@ -96,14 +96,14 @@ node-01: no maintenance environment with the management MAC 00:00:5e:00:53:11 an
 | The node is still booting | Look at the node's virtual console in the BMC. The maintenance environment shows its address there once it's up. A node that's still restarting answers on a later scan; run `-From Device` if the stage timed out first. |
 | This host reaches TCP 20001 in the range | `Test-NetConnection -ComputerName 192.0.2.140 -Port 20001` from the management host, to the address on the console. A firewall or a route between the host and the provisioning network blocks the scan. |
 | `provisioning_dhcp_range` covers the pool | The range must hold the addresses the DHCP server leases to the maintenance environment. Without it the stage scans the management subnet, which misses a lease from another subnet. At most 4096 addresses. |
-| The MAC | `cluster_nodes[].mac_address` (schema 5: the node's management port MAC) must be the management port's MAC. If an address answers but lists other MACs, the MAC in the file is wrong. |
-| The password | A responder that answers 401 isn't matched. The `edgeuser` password is `ztp.maintenance_password_secret`, else `Password1`, and must be the one the images were built with. |
+| The MAC | The `mac_address` of the node's management port (`nodes[].network_adapters`) must be the management port's MAC. If an address answers but lists other MACs, the MAC in the file is wrong. |
+| The password | A responder that answers 401 isn't matched. The `edgeuser` password is `provisioning.simplified.maintenance_password`, else `Password1`, and must be the one the images were built with. |
 
-If you know the address, set `cluster_nodes[].maintenance_address` and the stage goes there directly, with no scan. Then run `-From Device`.
+If you know the address, set `nodes[].maintenance_address` and the stage goes there directly, with no scan. Then run `-From Device`.
 
 ## Static IP lands on the wrong NIC
 
-**What you see.** With a static management address, the node comes up after the OS install with `ip_address` on a port other than the one whose MAC the environment file names. On a Dell AX-760 it landed on a ConnectX storage port, not the LOM named by MAC. The node doesn't answer on its management address from the management network, and Validate would find the management address on the wrong adapter.
+**What you see.** With a static management address, the node comes up after the OS install with `ip_address` on a port other than the one whose MAC the infrastructure file names. On a Dell AX-760 it landed on a ConnectX storage port, not the LOM named by MAC. The node doesn't answer on its management address from the management network, and Validate would find the management address on the wrong adapter.
 
 **Cause.** With a `Manual` site setting and a `Manual` adapter in the claim, the OS-install request carries the port's MAC in `siteDetails.deviceConfiguration.network.networkAdapters[].macAddress`. Azure accepts it, but the device ignores it. The maintenance environment's provisioning extension (`ProvisioningExtension.dll`) picks the port with `FindReadyPhysicalInterfaceName` and has no `MacAddress` property, so the static address goes to the first ready physical port.
 
@@ -126,7 +126,7 @@ The Network stage, after Ready, only verifies. `GET .../edgeMachines/<node>/netw
 | Device: "the maintenance environment's REST service at &lt;address&gt;:20001 doesn't answer" | `maintenance_address` is the address on the node's console, TCP 20001 is open from this server, and the password is the one the image was built with (`ztp.maintenance_password_secret`, else `Password1`). A 401 means the password. |
 | Device: "no maintenance environment with the management MAC ... answers on TCP 20001" | See [The Device scan finds no node](#the-device-scan-finds-no-node). |
 | Device: "no network adapter in the maintenance environment reports the management MAC" | The message lists the MACs the maintenance environment reports. Correct `mac_address`, then run `-From Device`. |
-| "no network adapter of edge machine &lt;node&gt; reports the management MAC" | The message lists the MACs the machine reports. Correct the management port's `mac_address` in the environment file, then run `-From Network`. |
+| "no network adapter of edge machine &lt;node&gt; reports the management MAC" | The message lists the MACs the machine reports. Correct the management port's `mac_address` in the infrastructure file, then run `-From Network`. |
 | With `-ApplyThroughAzure`: a job stays `DeploymentInProgress` with "Job is not yet triggered as other jobs are still running", or "ApplyConfiguration (apply) failed" | The behaviour seen live. Run the stage without `-ApplyThroughAzure` (`-From Network`) and let OS configuration set the address. |
 
 ## Restore fails
@@ -135,9 +135,9 @@ The Restore stage sets each `bios_during_provisioning` attribute back, restarts 
 
 | Message | Cause | What to do |
 | --- | --- | --- |
-| `BiosRestoreFailed`: "&lt;node&gt;: no value saved for &lt;attribute&gt; before Boot changed it (the run state lost it). Set hardware.bios.&lt;attribute&gt; to the final value." | The environment file gives no final value in `hardware.bios`, and the state file has no `biosOriginal` for that attribute: the state was reset (`-ResetState`, another `-StatePath`) or deleted after Boot. | Add the attribute to `hardware.bios` with its final value, then run `-From Restore`. `bios-changes.jsonl` has the original value in its `original` line. |
+| `BiosRestoreFailed`: "&lt;node&gt;: no value saved for &lt;attribute&gt; before Boot changed it (the run state lost it). Set hardware.bios.&lt;attribute&gt; to the final value." | The infrastructure file gives no final value in `hardware.bios`, and the state file has no `biosOriginal` for that attribute: the state was reset (`-ResetState`, another `-StatePath`) or deleted after Boot. | Add the attribute to `hardware.bios` with its final value, then run `-From Restore`. `bios-changes.jsonl` has the original value in its `original` line. |
 | "&lt;node&gt; BIOS still reports &lt;attribute&gt;=&lt;value&gt; 30 minutes after the restart. Check the BIOS job in the BMC's job queue." | The BIOS didn't apply the change, or doesn't report it. | Look at the BMC's job queue and the node's console. Fix the job, then run `-From Restore`; values already right are left alone. |
-| "The BIOS has no attribute &lt;attribute&gt;." | The attribute name is wrong. Names are case-sensitive. | Read the names from `/redfish/v1/Systems/<id>/Bios`, correct the environment file, run `-From Restore`. |
+| "The BIOS has no attribute &lt;attribute&gt;." | The attribute name is wrong. Names are case-sensitive. | Read the names from `/redfish/v1/Systems/<id>/Bios`, correct the infrastructure file, run `-From Restore`. |
 | "Restore: -Credential (the BMC account) is required with -Execute." or "applying the BIOS restarts the nodes. Pass -ConfirmNotClustered." | Only when you run the orchestrator directly. | Pass `-BmcCredential` and `-ConfirmNotClustered`. The entry point passes both. |
 | "Restore failed on &lt;node&gt;: ... Outcome per node: node-01 Restored, node-02 Failed" | One node failed, or `Set-ZtpBios.ps1` returned no result or a status other than `Changed`/`AlreadySet` (not proof of a restore). A node marked `Restored` has already restarted. | Fix the failed node, then run `-From Restore`: the node whose BIOS is already right is reported `AlreadySet` and not restarted again. |
 | "Restore: the Arc machines are not Connected again after the BIOS restart within N minutes: ... Connected since ..., before the restart" | The machine still reads the `Connected` it had before the restart, or never connected again. The check needs Arc to have changed the status after the restart. | Check the node's console and its outbound access. Once the machine has reconnected, run `-From Ready`. |
@@ -154,7 +154,7 @@ The Restore stage sets each `bios_during_provisioning` attribute back, restarts 
 | `Mode A (Reserved): the management port Port1 (MAC ...) has DHCP 192.0.2.140 after the install; expected the reserved 192.0.2.11; check the DHCP reservation for MAC ...` | The reservation is missing or for another MAC. | Fix the reservation for the management MAC, then restart the port's lease or run OS configuration, which verifies it again. |
 | `dhcp without a reservation (not Mode A, B or C): the management port Port0 (MAC ...) has DHCP 192.0.2.200 after the install; expected 192.0.2.12; reserve the address for the MAC (Mode A) or make it static (Mode B or C).` | A `dhcp` node: ZTP only reports its address and doesn't change it. | Reserve the address (Mode A), or set the port `static` and let OS configuration set it ([Task 03 Static IP](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/task-03-configure-static-ip-address)). |
 | `...: the management port Port0 (MAC ...) has no address after the install; ...` | The management port has no address. | Check the port's link and the DHCP server (Mode A), then OS configuration. |
-| `...: no management MAC in the infrastructure file, so the port wasn't checked` | The environment file names no `mac_address` for the node. | Add it. OS configuration finds NICs by MAC. |
+| `...: no management MAC in the infrastructure file, so the port wasn't checked` | The infrastructure file names no `mac_address` for the node. | Add it. OS configuration finds NICs by MAC. |
 | `no Network stage result for this node` | The state file has no Network result for the node, for example after `-Stage Handoff` with a reset state. | Run `-From Network`. |
 | `no management settings in the infrastructure file` | The node has no management block. | Add the management settings, or set the address in OS configuration. |
 
@@ -184,7 +184,7 @@ Learn's portal steps say to "Provide the machine name as the Azure Arc resource 
 
 ## SBE settings are ignored
 
-**What you see.** The entry point prints `Note: ztp.node_preparation ignored: SBE belongs to OS configuration.` (schema 5: `Note: hardware.sbe ignored: SBE belongs to OS configuration.`). The orchestrator prints `<key> in <file> ignored: SBE belongs to OS configuration.` for an older settings file with `SbeModel`, `SbeFamily`, `SbeSolutionVersion` or `SbePackagePath`.
+**What you see.** The entry point prints `Note: hardware.sbe ignored: SBE belongs to OS configuration.` The orchestrator prints `<key> in <file> ignored: SBE belongs to OS configuration.` for an older settings file with `SbeModel`, `SbeFamily`, `SbeSolutionVersion` or `SbePackagePath`.
 
 **What to do.** Nothing. ZTP no longer reads these keys; the run goes on. Remove them from the file when you like. If you want an SBE, ask OS configuration to side-load it (`hardware.sbe.delivery`); it is never the default.
 

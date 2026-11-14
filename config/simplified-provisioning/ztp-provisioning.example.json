@@ -19,7 +19,7 @@
   "SkipAzureCheck": false,
   "Location": "eastus",
   "SubscriptionId": "00000000-0000-0000-0000-000000000000",
-  "ResourceGroupName": "rg-example",
+  "ResourceGroupName": "rg-iic-azl-01",
   "ParameterFile": "./scripts/simplified-provisioning/bicep/main.parameters.json",
   "OsVersion": "latest",
   "SiteMode": "Auto",

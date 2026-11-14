@@ -10,4 +10,4 @@ This folder holds what the scripts need besides that file:
 | `simplified-provisioning/ztp-provisioning.example.json` and `.schema.json` | Settings of `Invoke-ZtpProvisioning.ps1` when you drive the orchestrator directly (keys are its parameter names; no secrets). `Invoke-ZtpEnvironment.ps1` writes the real one from the infrastructure file. |
 | `simplified-provisioning/nodes.example.json` and `.schema.json` | The node list of the stage scripts (`name`, `service_tag`, `bmc_address` and the optional keys). `Invoke-ZtpEnvironment.ps1` writes the real one. |
 
-Real copies of the generated files are git-ignored. The older configuration layer (`environment.yaml`, `environment.json`, `cluster/cluster-config.md`, `cluster-reference.env` and the `AzureLocalConfig.psm1` loader) is retired.
+Real copies of the generated files are git-ignored. The older configuration layer (`environment.yaml`, `environment.json`, `cluster/cluster-config.md`, `cluster-reference.env` and the `AzureLocalConfig.psm1` loader) is retired, and so is ZTP's own environment-file layout (`cluster_nodes`, `network_intents`, `ztp`): a file that isn't schema 5 stops every script with exit code 2.

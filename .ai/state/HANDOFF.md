@@ -6,7 +6,22 @@
   (possibly a different tool) starts by reading it.
 -->
 
-## Last session (2026-11-14, refactor: the old configuration layer is retired)
+## Last session (2026-11-14, refactor: schema 5 is the only input, secrets through the toolkit resolver)
+
+- **What changed and why (owner rule: one infrastructure file, one resolver, no prompts, no default path, example-company values only):**
+  - `Read-ZtpInfrastructure` accepts only `_metadata.schema_version` 5.x. The older environment-file path and `Get-ZtpEnvironmentFormat` are gone; anything else (and a missing, empty or non-YAML file) is an input error (`New-ZtpInputError`, `Data['ZtpExit'] = 2`) naming the file and pointing at the toolkit's `config/variables/examples/infrastructure.example.yml`. `ConvertFrom-ZtpInfrastructureV5` stays as the in-memory mapping onto the internal keys (no file in that shape is read or written); every message is translated to schema 5 paths (`Assert-ZtpEnvironment` always translates). `_source.infrastructure` keeps the parsed file for the resolver.
+  - Secrets: `Import-ZtpSecretResolver`, `Get-ZtpSecret`, `Get-ZtpBmcCredential` (ZtpEnvironment.Common.ps1) load the toolkit's `scripts/common/secrets/AzlSecret.psm1` (found by `Get-ZtpToolkitRoot`: `AZL_TOOLKIT_ROOT`, else a sibling clone, the same rule as the BMC tools). `Invoke-ZtpEnvironment.ps1 -Execute` imports it right after reading the file (exit 2 when missing, before anything is written), reads `hardware.bmc.username`/`.password` and `provisioning.simplified.maintenance_password` (any of the four providers) before the transcript and before anything changes in Azure, and exits with the resolver's `AzlExit` (2 input, 1 read failure). `provisioning.simplified.admin.password` must be `keyvault://` (Azure reads it). Internal `ztp.bmc_secret` is now `{ username, password }` references.
+  - `-ValidatorPath` no longer defaults to `tools/Validate-Infrastructure.ps1` beside the file.
+  - Removed `examples/infrastructure.example.yml` and `tests/simplified-provisioning/fixtures/environment.example.yml`. `docs/environment-file.md` rewritten as the schema 5 key reference (title "Infrastructure file reference"). Docs, examples, help examples and test fixtures moved to iic-* names, documentation addresses and RFC 7042 MACs; "environment file" wording is now "infrastructure file".
+- **Tests:** Pester 5.9.1, whole `tests` folder, separate `pwsh -NoProfile`, `AZL_TOOLKIT_ROOT=D:\git\azurelocal\azurelocal-toolkit`: 600 tests, 600 passed, 0 failed, 0 skipped, 14 of 14 files loaded (before: 593, 592 passed, 1 skipped; the skipped real-toolkit check now runs through `AZL_TOOLKIT_ROOT`). New: the real toolkit resolver with `env://` and `file://` references, exit 2 for a non-schema-5 file and for a missing resolver, resolver failures passed on as exit codes. PSScriptAnalyzer (Error, Warning) on the changed files: clean (BIOS singular-noun false positives suppressed).
+- **Branch:** `one-file` (worktree `D:\git\worktrees\ztp-one-file`), committed, not pushed.
+- **Open:**
+  1. The toolkit's registry (`tools.ztp.parameters`) still describes `ValidatorPath` with its old default, and still lists the removed scripts' parameters and lacks the four BMC tools.
+  2. `Invoke-ZtpAzureProvisioning.ps1` (the settings-file path) still lists the vault with `Get-AzKeyVaultSecret` to check that the provisioning admin secret exists, and can write it with `Set-AzKeyVaultSecret -AdminPassword`: that secret is a Key Vault reference Azure reads, so it is not a resolver read.
+  3. Node names in tests and docs stay `node-01`/`node-02` (generic, not an example company); the fake test vendor is `IicHardware` (example company).
+  4. Nothing ran against Azure, a vault, a BMC or a node: the resolver path is proven with mocks and with the real resolver's `env://` and `file://` providers only.
+
+## Earlier session (2026-11-14, refactor: the old configuration layer is retired)
 
 - **What changed and why (owner requirement: one infrastructure file feeds every tool, no prompts, no default path):**
   - Removed `scripts/common` (`AzureLocalConfig.psm1`, `RedfishUtils.psm1`, `discovery/`, `service-principals/`, `utilities/helpers/*` including `config-loader.ps1` and `keyvault-helper.ps1`, `utilities/tools/*`), `scripts/tools`, `scripts/examples`, `scripts/Trigger-ZTPDeployment.ps1`, `config/cluster-reference.env.template`, `config/cluster/cluster-config.md.template` and `docs/server-preparation.md` (64 files). `scripts/README.md` has the table of what does each job now (simplified provisioning or azurelocal-toolkit).

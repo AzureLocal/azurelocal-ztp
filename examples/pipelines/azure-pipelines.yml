@@ -5,17 +5,18 @@
 # - A self-hosted Windows agent on the management network, running as a service under a local administrator account,
 #   with the prerequisites in docs/prerequisites.md. Give it the user capability "ztp" so every job lands on it.
 # - The agent host has a managed identity (Azure VM or Azure Arc-enabled server) with the roles in
-#   docs/automation-pipelines.md. No secret is stored in the pipeline: the environment file references Key Vault.
+#   docs/automation-pipelines.md. No secret is stored in the pipeline: the infrastructure file holds secret references,
+#   read with -Execute by azurelocal-toolkit's resolver (set AZL_TOOLKIT_ROOT on the runner, or clone the toolkit next to ZTP).
 # - An environment named azurelocal-ztp-execute with an Approvals check, and an Exclusive lock check so that
 #   only one run per environment goes at a time.
-# - The run keeps its state in ztp.media_path of the environment file, outside the checkout, so a clean workspace is fine.
+# - The run keeps its state in provisioning.simplified.media_path of the infrastructure file, outside the checkout, so a clean workspace is fine.
 
 trigger: none
 pr: none
 
 parameters:
   - name: infrastructureFile
-    displayName: Environment file path on the agent
+    displayName: Infrastructure file path on the agent
     type: string
     default: 'D:\ztp\environments\example\infrastructure.yml'
   - name: nodes

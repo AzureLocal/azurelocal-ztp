@@ -3,7 +3,7 @@
 .SYNOPSIS
 BIOS settings for the Boot stage (dot-sourced by Set-ZtpBios.ps1 and Start-MaintenanceBoot.ps1).
 .DESCRIPTION
-The environment file names BIOS attributes to set before the maintenance boot (hardware.bios, with cluster_nodes[].bios
+The infrastructure file names BIOS attributes to set before the maintenance boot (hardware.bios, with nodes[].bios
 merged over it). Invoke-ZtpEnvironment.ps1 writes each node's merged map to the node list as bios; the Boot stage applies
 it through Redfish. Nothing here talks to a BMC: these functions read the node list and compare values.
 Functions: Get-ZtpNodeBiosSetting, Get-ZtpBiosChange, ConvertTo-ZtpBiosValue.
@@ -128,7 +128,7 @@ function Get-ZtpBiosChange {
     .PARAMETER Current
     The Attributes object of the BMC's Bios resource.
     .PARAMETER Desired
-    Attribute name -> value (strings) from the environment file.
+    Attribute name -> value (strings) from the infrastructure file.
     .OUTPUTS
     Attribute, Current (as the BIOS reports it), Desired (the file's string), Value (typed for the PATCH).
     #>

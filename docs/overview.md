@@ -19,7 +19,7 @@ Microsoft's [simplified machine provisioning (preview)](https://learn.microsoft.
 
 The stages are Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Restore and Handoff.
 
-You supply one thing: an environment file, started from one of the toolkit's templates (see [Pick the template](operator-guide.md#pick-the-template)). Then you run `Invoke-ZtpEnvironment.ps1`, first as a plan, then with `-Execute`.
+You supply one thing: an infrastructure file, started from one of the toolkit's templates (see [Pick the template](operator-guide.md#pick-the-template)). Then you run `Invoke-ZtpEnvironment.ps1`, first as a plan, then with `-Execute`.
 
 **The result:** each machine is **Provisioned** in Azure and **Arc-connected**, with its management IP on the management NIC (found by MAC) as the infrastructure file says. The Arc machine IDs are in the handoff. The nodes are ready for OS configuration, not yet for Validate: OEM drivers, an SBE (optional, only when a person asks for it), DHCP off on the other NICs, DNS and time on the host, and the deployment admin come next, in [azurelocal-toolkit Phase 03: OS Configuration](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/). See [What's next: OS configuration](operator-guide.md#whats-next-os-configuration).
 
@@ -42,7 +42,7 @@ You supply one thing: an environment file, started from one of the toolkit's tem
 | Understand the stages, gates, data flow and limits | [Design and architecture](architecture.md) |
 | Run it from a management host | [Operator guide](operator-guide.md) |
 | Know what comes after ZTP | [What's next: OS configuration](operator-guide.md#whats-next-os-configuration) |
-| Fill in the environment file | [Master infrastructure.yml (schema 5)](infrastructure-schema-5.md), or the [Environment file reference](environment-file.md) for the older layout |
+| Fill in the infrastructure file | [Master infrastructure.yml (schema 5)](infrastructure-schema-5.md) and the [Infrastructure file reference](environment-file.md) |
 | Run it from Azure DevOps, GitHub Actions or GitLab CI | [Running from a pipeline](automation-pipelines.md) |
 | Fix a failed or slow run | [Troubleshooting and known issues](troubleshooting.md) |
 | Drive the orchestrator directly, or read the event format | [Orchestrator reference](automated-bootstrap.md) |

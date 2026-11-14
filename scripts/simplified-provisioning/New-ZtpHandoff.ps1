@@ -49,7 +49,7 @@ Microsoft.AzureStackHCI api-version for edgeMachines.
 .PARAMETER Execute
 Write the file. Without it the content is returned and nothing is written.
 .EXAMPLE
-./New-ZtpHandoff.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example -NodeName node-01,node-02 -NodesFile ./nodes.json -Execute
+./New-ZtpHandoff.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-iic-azl-01 -NodeName node-01,node-02 -NodesFile ./nodes.json -Execute
 #>
 [CmdletBinding()]
 param(

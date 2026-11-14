@@ -8,13 +8,14 @@
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidGlobalVars', '', Justification = 'The stub BMC keeps its state in globals.')]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '', Justification = 'Only a synthetic test secret is converted.')]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Stub signatures mirror the real functions.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'BIOS is an acronym; Settings and Nodes name the helpers'' subject.')]
 param()
 
 BeforeAll {
     $script:root = Join-Path (Split-Path $PSScriptRoot -Parent | Split-Path -Parent) 'scripts/simplified-provisioning'
     . (Join-Path $script:root 'ZtpBios.Common.ps1')
     $script:setBios = Join-Path $script:root 'Set-ZtpBios.ps1'
-    $script:bmc = [pscredential]::new('bmc-example', (ConvertTo-SecureString 'Example-Not-A-Secret-1' -AsPlainText -Force))
+    $script:bmc = [pscredential]::new('iic-bmc-user', (ConvertTo-SecureString 'Iic-Not-A-Secret-1' -AsPlainText -Force))
 
     # The stub BMC: current BIOS values, values pending for the next reset, power state, and every request.
     function global:Reset-TestBmc {
@@ -182,8 +183,8 @@ foreach ($try in 1..50) { try { Add-Content -LiteralPath (Join-Path $env:ZTP_TES
         foreach ($n in 'node-01', 'node-02') { Set-Content -LiteralPath (Join-Path $script:images "ztp-usb-$n.img") -Value 'x' }
         $script:nodesFile = Join-Path $TestDrive 'boot-nodes.json'
         @{ nodes = @(
-                [ordered]@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11'; bios = [ordered]@{ Slot2 = 'Disabled' } }
-                [ordered]@{ name = 'node-02'; service_tag = 'EXAMPLE2'; bmc_address = '198.51.100.12' }
+                [ordered]@{ name = 'node-01'; service_tag = 'IICSN0001'; bmc_address = '198.51.100.11'; bios = [ordered]@{ Slot2 = 'Disabled' } }
+                [ordered]@{ name = 'node-02'; service_tag = 'IICSN0002'; bmc_address = '198.51.100.12' }
             ) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:nodesFile
         $script:boot = Join-Path $script:bin 'Start-MaintenanceBoot.ps1'
     }
@@ -279,8 +280,8 @@ Set-Content -LiteralPath (Join-Path $env:ZTP_TEST_BIOS_DIR "bios-$NodeName.txt")
         function script:New-BootNodes([string]$Slot2) {
             $path = Join-Path $TestDrive "boot-nodes-$([guid]::NewGuid().ToString('N')).json"
             @{ nodes = @(
-                    [ordered]@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11'; bios = [ordered]@{ Slot2 = 'Disabled' }; bios_reason = [ordered]@{ Slot2 = 'derived: nodes[0] slot 2' } }
-                    [ordered]@{ name = 'node-02'; service_tag = 'EXAMPLE2'; bmc_address = '198.51.100.12'; bios = [ordered]@{ $Slot2 = 'Disabled' }; bios_reason = [ordered]@{ $Slot2 = 'derived: nodes[1].san.hbas[0] is in Slot 9, so ZTP looked for the BIOS attribute Slot9; check the slot label' } }
+                    [ordered]@{ name = 'node-01'; service_tag = 'IICSN0001'; bmc_address = '198.51.100.11'; bios = [ordered]@{ Slot2 = 'Disabled' }; bios_reason = [ordered]@{ Slot2 = 'derived: nodes[0] slot 2' } }
+                    [ordered]@{ name = 'node-02'; service_tag = 'IICSN0002'; bmc_address = '198.51.100.12'; bios = [ordered]@{ $Slot2 = 'Disabled' }; bios_reason = [ordered]@{ $Slot2 = 'derived: nodes[1].san.hbas[0] is in Slot 9, so ZTP looked for the BIOS attribute Slot9; check the slot label' } }
                 ) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $path
             $path
         }
@@ -300,9 +301,9 @@ Set-Content -LiteralPath (Join-Path $env:ZTP_TEST_BIOS_DIR "bios-$NodeName.txt")
     It 'goes on when every node has its slot, and gives the share its account name' {
         $dir = Join-Path $TestDrive 'boot2-ok'; $null = New-Item -ItemType Directory -Force -Path $dir
         $env:ZTP_TEST_BIOS_DIR = $dir
-        try { $null = & $script:boot2 -ImageDirectory $script:images2 -ShareHost 192.0.2.10 -NodeName node-01, node-02 -NodesFile (New-BootNodes 'Slot3') -Credential $script:bmc -Restart -ConfirmNotClustered -AccountName svc-example -Execute -Confirm:$false }
+        try { $null = & $script:boot2 -ImageDirectory $script:images2 -ShareHost 192.0.2.10 -NodeName node-01, node-02 -NodesFile (New-BootNodes 'Slot3') -Credential $script:bmc -Restart -ConfirmNotClustered -AccountName svc-iic-media -Execute -Confirm:$false }
         finally { $env:ZTP_TEST_BIOS_DIR = $null }
-        @(Get-Content -LiteralPath (Join-Path $dir 'order.txt')) | Should -Be @('publish svc-example')
+        @(Get-Content -LiteralPath (Join-Path $dir 'order.txt')) | Should -Be @('publish svc-iic-media')
         @(Get-ChildItem -LiteralPath $dir -Filter 'bios-*.txt').Count | Should -Be 2
         @(Get-ChildItem -LiteralPath $dir -Filter 'mount-*.txt').Count | Should -Be 2
     }

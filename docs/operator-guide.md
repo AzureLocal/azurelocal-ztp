@@ -15,7 +15,7 @@ That isn't ready for Validate. OS configuration comes next; see [What's next: OS
 ## The run at a glance
 
 1. Meet the [prerequisites](#prerequisites).
-2. Write the [environment file](#step-1-write-the-environment-file).
+2. Write the [infrastructure file](#step-1-write-the-environment-file).
 3. Sign in to Azure and run the [plan](#step-2-run-the-plan).
 4. Run [execute](#step-3-run-execute) and [watch it](#watch-the-run).
 5. Take the [handoff](#what-to-hand-to-the-cluster-deployment) to [OS configuration](#whats-next-os-configuration).
@@ -37,9 +37,9 @@ The [Prerequisites](prerequisites.md) page lists everything to have in place bef
 | Region | Provisioning resources in **East US**. The resource group can be in any region. | Same |
 | Rights on the cluster resource group | **Owner**, or **Contributor** and **Role Based Access Control Administrator** | Same |
 | Rights to create the resource group | Only if the group doesn't exist yet: Contributor on the subscription. Or create the group first. | `Invoke-ZtpEnvironment.ps1` creates a missing group. |
-| Rights on the Key Vault | Read secrets (**Key Vault Secrets User**) on every vault the environment file names. On the vault that holds the provisioning administrator secret, rights to assign roles and to deploy into its resource group (**Owner**, or **Contributor** and **Role Based Access Control Administrator** on that group). The template assigns each edge machine a constrained role on that vault. If the vault is in the cluster resource group, the group roles above cover this. | `bicep/modules/key-vault-delegation.bicep` |
+| Rights on the Key Vault | Read secrets (**Key Vault Secrets User**) on every vault the infrastructure file names. On the vault that holds the provisioning administrator secret, rights to assign roles and to deploy into its resource group (**Owner**, or **Contributor** and **Role Based Access Control Administrator** on that group). The template assigns each edge machine a constrained role on that vault. If the vault is in the cluster resource group, the group roles above cover this. | `bicep/modules/key-vault-delegation.bicep` |
 | Read on the subscription | **Reader**. The run reads the feature and provider registration, the OS image catalog, and the Arc machines in the managed resource group that the site configuration creates. | `ZtpEvents.Common.ps1`, `Test-ProvisionedMachines.ps1` |
-| Key Vault secrets | The BMC user name (or put the name itself in the file), the BMC password and the provisioning administrator password. Optionally the maintenance environment's `edgeuser` password. The provisioning administrator secret must exist before the run. | [Environment file reference](environment-file.md#secrets-in-key-vault) |
+| Key Vault secrets | The BMC user name (or put the name itself in the file), the BMC password and the provisioning administrator password. Optionally the maintenance environment's `edgeuser` password. The provisioning administrator secret must exist before the run. | [Infrastructure file reference](environment-file.md#secrets-in-key-vault) |
 | Key Vault reachable | Keep public network access on the vault during provisioning and deployment. Learn says this for deployment. | [Learn: decision 10](https://learn.microsoft.com/azure/azure-local/plan/cloud-deployment-network-considerations#decision-10-determine-outbound-connectivity) |
 
 Register the feature and providers once per subscription. That needs a subscription Owner or Contributor; the run itself only reads the registration.
@@ -69,7 +69,7 @@ The template gives each edge machine's identity the right to assign **Key Vault 
 | --- | --- |
 | Redfish over HTTPS on, reachable from the management host. | Self-signed certificates are accepted. |
 | Virtual media on, with the USB-stick (`RemovableDisk`) slot. | The CD slot isn't used. An ISO on the iDRAC CD slot failed in testing. |
-| A BMC account that can insert virtual media, change BMC and BIOS attributes, set the boot override and reset the server. | Store the user name and password in Key Vault. |
+| A BMC account that can insert virtual media, change BMC and BIOS attributes, set the boot override and reset the server. | Store the user name and password behind secret references (Key Vault by default). |
 | The BMC can reach the management host on TCP 445 (SMB). | The iDRAC's SMB client connects out from its management IP. No inbound SMB port is needed on the BMC. |
 | On iDRAC: the manager attribute `RFS.<n>.WriteProtected` is exposed. | The run sets it to `Read Write` with a Redfish PATCH on `/redfish/v1/Managers/iDRAC.Embedded.1/Attributes` before the insert, and back to `Read Only` on eject. On iDRAC 7.30, `InsertMedia` rejects a `WriteProtected=false` field (`IDRAC.2.9.SYS458`), so the attribute is the only way to get a writable slot. **Proven on Dell AX-760 / iDRAC 7.30.** |
 | The factory default BMC password is changed. | |
@@ -103,13 +103,13 @@ ZTP needs no WinRM to the nodes. It reaches them only through the BMC, the maint
 
 | Do this | Why |
 | --- | --- |
-| Change the BMC factory password, and keep the BMC credential only in Key Vault. | The run reads it from Key Vault into memory and never writes it. |
-| Set the maintenance environment's `edgeuser` password (`provisioning.simplified.maintenance_password`; older layout `ztp.maintenance_password_secret`). | Without it the image keeps the published default, `Password1`, and anyone who reaches TCP 20001 while the maintenance environment runs can sign in. |
+| Change the BMC factory password, and keep the BMC credential only behind a secret reference (Key Vault by default). | The run reads it through the toolkit's resolver into memory and never writes it. |
+| Set the maintenance environment's `edgeuser` password (`provisioning.simplified.maintenance_password`). | Without it the image keeps the published default, `Password1`, and anyone who reaches TCP 20001 while the maintenance environment runs can sign in. |
 | Restrict the folder that holds the vouchers (`<media_path>\vouchers`), and never commit vouchers. | An ownership voucher is a secret: it's what claims the machine in Azure. |
 | Treat the read-write share as a tampering risk while it's up. Consider requiring SMB signing on the host, and test that your BMC still connects. | The machine boots from the image on that share. The run limits the share to the BMC addresses and one dedicated account with a random password, and removes the share, the account and the firewall rule after the Vouchers stage. |
 | Keep the generated files and the handoff out of source control. | They hold your subscription, addresses and resource IDs. |
 
-## Step 1: Write the environment file
+## Step 1: Write the infrastructure file
 
 Clone the repository onto the management host, and open an elevated PowerShell 7 session at its root. Every command on this page runs from there.
 
@@ -127,32 +127,32 @@ ZTP reads the master `infrastructure.yml` (schema 5), the file every Azure Local
 | ZTP only, with nothing automated after it | The toolkit's ZTP-only template, [`infrastructure.ztp.example.yml`](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/variables/examples/infrastructure.ztp.example.yml) (`_metadata.scope: ztp`) |
 | ZTP, then OS configuration and cluster deployment with the toolkit | The full template, [`infrastructure.example.yml`](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/variables/examples/infrastructure.example.yml) |
 
-Both work with ZTP. ZTP ignores the keys it doesn't read, so the full template's OS configuration and deployment settings do no harm. [Reading the master infrastructure.yml](infrastructure-schema-5.md) says where each key goes. The older ZTP layout ([`examples/infrastructure.example.yml`](https://github.com/AzureLocal/azurelocal-ztp/blob/main/examples/infrastructure.example.yml), described in the [Environment file reference](environment-file.md)) still works and is deprecated.
+Both work with ZTP. ZTP ignores the keys it doesn't read, so the full template's OS configuration and deployment settings do no harm. [Reading the master infrastructure.yml](infrastructure-schema-5.md) says where each key goes. The [Infrastructure file reference](environment-file.md) describes every key ZTP reads. ZTP reads nothing else: a file that isn't schema 5 stops the run with exit code 2, and there is no default path.
 
-The run keeps its working files in the media folder: downloads, images, vouchers and state. Its evidence (the event log, change logs and transcripts) goes to the evidence folder. Set both in the environment file (`provisioning.simplified.media_path` and `evidence_path`; older layout `ztp.media_path`, `ztp.evidence_path`); without them they are `%ProgramData%\AzureLocalZtp\<site name>\media` and `\evidence`. The run refuses a folder inside a git working tree, and creates the folders when missing. Keep them where they last, because resuming a run depends on them. See [Run data](environment-file.md#run-data-media-and-evidence).
+The run keeps its working files in the media folder: downloads, images, vouchers and state. Its evidence (the event log, change logs and transcripts) goes to the evidence folder. Set both in the infrastructure file (`provisioning.simplified.media_path` and `evidence_path`); without them they are `%ProgramData%\AzureLocalZtp\<site name>\media` and `\evidence`. The run refuses a folder inside a git working tree, and creates the folders when missing. Keep them where they last, because resuming a run depends on them. See [Run data](environment-file.md#run-data-media-and-evidence).
 
 ### Secrets
 
-The file holds no passwords. Each credential is a Key Vault reference (`keyvault://<vault>/<secret>`):
+The file holds no passwords. Each credential is a secret reference, read with `-Execute` by azurelocal-toolkit's one secret resolver (`scripts/common/secrets/AzlSecret.psm1`), found through `AZL_TOOLKIT_ROOT` or a toolkit clone next to this repository. Without the toolkit an `-Execute` run stops with exit code 2. The resolver reads `keyvault://<vault>/<secret>` (the default; the vault listed in `key_vaults`), `env://<VARIABLE>`, `file://<name>` (in `secrets.file.directory`) and `command://<name>` (`secrets.command`). See [Secrets](environment-file.md#secrets).
 
-- The BMC login: `hardware.bmc.username` (a reference, or the name itself) and `hardware.bmc.password`. Older layout: `ztp.bmc_secret`.
-- The provisioning administrator: `provisioning.simplified.admin.username` and `admin.password`. Older layout: `ztp.admin_secret`.
-- Optional, the maintenance environment's `edgeuser` password: `provisioning.simplified.maintenance_password`. Older layout: `ztp.maintenance_password_secret`.
+- The BMC login: `hardware.bmc.username` (a reference, or the name itself) and `hardware.bmc.password`: any provider.
+- The provisioning administrator: `provisioning.simplified.admin.username` and `admin.password`: a `keyvault://` reference only, because Azure reads it from the vault itself.
+- Optional, the maintenance environment's `edgeuser` password: `provisioning.simplified.maintenance_password`: any provider.
 
 ZTP doesn't create the deployment admin, so it doesn't read that secret. OS configuration does.
 
-Create the secrets before you run:
+Create the secrets before you run. In Key Vault, for example (an operator running the Az cmdlet by hand):
 
 ```powershell
-Set-AzKeyVaultSecret -VaultName kv-example -Name bmc-username -SecretValue (Read-Host -AsSecureString 'BMC user')
-Set-AzKeyVaultSecret -VaultName kv-example -Name bmc-password -SecretValue (Read-Host -AsSecureString 'BMC password')
-Set-AzKeyVaultSecret -VaultName kv-example -Name provisioning-admin-password -SecretValue (Read-Host -AsSecureString 'Provisioning admin password')
-Set-AzKeyVaultSecret -VaultName kv-example -Name maintenance-password -SecretValue (Read-Host -AsSecureString 'Maintenance environment edgeuser password')
+Set-AzKeyVaultSecret -VaultName kv-iic-mgmt-01 -Name bmc-username -SecretValue (Read-Host -AsSecureString 'BMC user')
+Set-AzKeyVaultSecret -VaultName kv-iic-mgmt-01 -Name bmc-password -SecretValue (Read-Host -AsSecureString 'BMC password')
+Set-AzKeyVaultSecret -VaultName kv-iic-mgmt-01 -Name provisioning-admin-password -SecretValue (Read-Host -AsSecureString 'Provisioning admin password')
+Set-AzKeyVaultSecret -VaultName kv-iic-mgmt-01 -Name maintenance-password -SecretValue (Read-Host -AsSecureString 'Maintenance environment edgeuser password')
 ```
 
 ### Pin the OS version
 
-`provisioning.os_version` (older layout `ztp.os_version`) decides which Azure Local build the machines install. **Pin an exact version** so every run installs the same build, and a run fails instead of silently taking a newer one.
+`provisioning.os_version` decides which Azure Local build the machines install. **Pin an exact version** so every run installs the same build, and a run fails instead of silently taking a newer one.
 
 1. List the builds your subscription can install. The list comes from the subscription's own provisioning catalog, so a preview build your subscription is entitled to appears here too:
 
@@ -163,7 +163,7 @@ Set-AzKeyVaultSecret -VaultName kv-example -Name maintenance-password -SecretVal
 
    Each entry shows `VsrVersion`, the solution version to pin (for example `12.2610.1004.50`), and `IsPreview`.
 
-2. Set it in the environment file:
+2. Set it in the infrastructure file:
 
    ```yaml
    provisioning:
@@ -184,7 +184,7 @@ To change the build of machines that are already provisioned, provision them aga
 
 ### How the management address gets set
 
-`networking.management.static_method` (older layout `network_intents.management.static_method`) decides who puts a static management address on the node.
+`networking.management.static_method` decides who puts a static management address on the node.
 
 | Value | What happens |
 | --- | --- |
@@ -196,7 +196,7 @@ Either way, Microsoft's OS install then resets every port to DHCP, so after ZTP 
 The Device stage reaches the maintenance environment's REST service on TCP 20001. It finds each node like this (the calls are in [Appendix B](appendix/configurator-app-api.md#how-ztp-uses-this-service)):
 
 1. The node's `maintenance_address`, when the file gives one (schema 5 `nodes[].maintenance_address`, else the `ip_address` of the node's port with role `provisioning`).
-2. Otherwise it scans `networking.management.provisioning_dhcp_range` (`start`, `end`; older layout `network_intents.management.provisioning_dhcp_range`; at most 4096 addresses; default: the management subnet). It probes every address on TCP 20001 in parallel, asks each one that answers for its network adapters, and takes the one that lists the node's management MAC. It scans again every 60 seconds until each node answers, for up to 30 minutes, because the node may still be booting.
+2. Otherwise it scans `networking.management.provisioning_dhcp_range` (`start`, `end`; at most 4096 addresses; default: the management subnet). It probes every address on TCP 20001 in parallel, asks each one that answers for its network adapters, and takes the one that lists the node's management MAC. It scans again every 60 seconds until each node answers, for up to 30 minutes, because the node may still be booting.
 
 Set `provisioning_dhcp_range` to the DHCP pool the maintenance environment takes its lease from, to keep the scan short:
 
@@ -214,7 +214,7 @@ The scan was **verified live** on a Dell AX-760 with DHCP and no reservation. It
 
 ### BIOS values for the install only
 
-`hardware.bios` is the BIOS state the machine ends with. `hardware.bios_during_provisioning` (and a node's own `nodes[].bios_during_provisioning`; older layout `cluster_nodes[].bios_during_provisioning`) holds temporary values for the install only.
+`hardware.bios` is the BIOS state the machine ends with. `hardware.bios_during_provisioning` (and a node's own `nodes[].bios_during_provisioning`) holds temporary values for the install only.
 
 - The Boot stage applies `hardware.bios` with `bios_during_provisioning` merged over it, so the temporary values win. It saves each attribute's original value once, in the state file and in `<evidence_path>\bios-changes.jsonl`.
 - The Restore stage, after Network and before Handoff, sets every temporary key back to its `hardware.bios` value, or to the saved original when `hardware.bios` doesn't name it. It restarts the node through Redfish, waits until the BIOS reports the values, waits 5 minutes, and then waits until each machine is Connected and ready to cluster again.
@@ -239,11 +239,10 @@ ZTP has no SBE settings. A file that still carries them works; the run ignores t
 
 | The file has | The run prints |
 | --- | --- |
-| `hardware.sbe` (schema 5) | `Note: hardware.sbe ignored: SBE belongs to OS configuration.` |
-| `ztp.node_preparation` (older layout) | `Note: ztp.node_preparation ignored: SBE belongs to OS configuration.` |
+| `hardware.sbe` | `Note: hardware.sbe ignored: SBE belongs to OS configuration.` |
 | `SbeModel`, `SbeFamily`, `SbeSolutionVersion` or `SbePackagePath` in an orchestrator settings file | `<key> in <file> ignored: SBE belongs to OS configuration.` |
 
-The deployment admin (`identity.local_admin`, older layout `credentials.local_admin_*`), the time servers (`networking.ntp_servers`, older layout `onprem.ntp_servers`), the other ports in `network_adapters` and `hardware.model` are also not read. OS configuration reads them.
+The deployment admin (`identity.local_admin`), the time servers (`networking.ntp_servers`), the other ports in `network_adapters` and `hardware.model` are also not read. OS configuration reads them.
 
 ## Step 2: Run the plan
 
@@ -275,7 +274,7 @@ Fix anything the plan reports before you go on. Run the plan for some nodes only
 
 Add `-Node node-01, node-02` to limit the run to some nodes. With `-Execute`, the entry point:
 
-1. Reads the BMC login, and the maintenance password if set, from Key Vault.
+1. Reads the BMC login, and the maintenance password if set, through azurelocal-toolkit's secret resolver.
 2. Creates the resource group if it's missing.
 3. Runs the eleven stages with `-ConfirmNotClustered`: Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Restore and Handoff. That flag tells Boot and Restore the machines may be restarted and reinstalled.
 
@@ -318,7 +317,7 @@ Start Sonar in a second window, from the clone root:
 ```powershell
 Connect-AzAccount -Tenant <tenant-id>
 ./scripts/simplified-provisioning/Start-ZtpMonitor.ps1 -SonarPath D:\git\azurelocal-sonar `
-    -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example `
+    -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-iic-azl-01 `
     -NodesFile ./config/simplified-provisioning/nodes.json `
     -EventLogPath <evidence_path>\ztp-events.jsonl -ClusterName <cluster-name> -Execute
 ```
@@ -386,14 +385,14 @@ The handoff holds what Azure generated during ZTP, and what Azure reports for ea
   "generatedUtc": "2026-11-07T12:00:00.0000000Z",
   "tool": "azurelocal-ztp",
   "subscriptionId": "00000000-0000-0000-0000-000000000000",
-  "resourceGroup": "rg-example",
-  "site": { "resourceId": "/subscriptions/.../providers/Microsoft.Edge/sites/site-example", "name": "site-example" },
+  "resourceGroup": "rg-iic-azl-01",
+  "site": { "resourceId": "/subscriptions/.../providers/Microsoft.Edge/sites/iic-site-01", "name": "iic-site-01" },
   "solution": { "vsrVersion": "12.2609.1003.7" },
   "nodes": [ {
-    "name": "node-01", "serial": "EXAMPLE1",
+    "name": "node-01", "serial": "IICSN0001",
     "edgeMachineName": "node-01", "edgeMachineId": "/subscriptions/.../edgeMachines/node-01",
     "arcMachineName": "node-01", "arcMachineResourceId": "/subscriptions/.../Microsoft.HybridCompute/machines/node-01",
-    "arcMachineResourceGroup": "rg-example", "ready": true,
+    "arcMachineResourceGroup": "rg-iic-azl-01", "ready": true,
     "managementAddressVerified": false,
     "managementAddressReason": "Mode B (Static with DHCP): the management port Port1 (MAC 00:00:5e:00:53:aa, Example LOM) has DHCP 192.0.2.116 after the install; expected static 192.0.2.11; OS configuration sets it by MAC.",
     "biosRestored": { "Slot2": "Enabled" },

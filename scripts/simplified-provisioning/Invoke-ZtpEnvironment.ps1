@@ -2,10 +2,11 @@
 #Requires -Modules powershell-yaml
 <#
 .SYNOPSIS
-    One command from an environment file to machines ready to join a cluster, for the nodes you name.
+    One command from the infrastructure file to machines ready to join a cluster, for the nodes you name.
 .DESCRIPTION
-    Reads infrastructure.yml, writes ZTP's settings, node list and Bicep parameters, creates the cluster resource group,
-    reads the iDRAC login from the management vault, finds this server's address as the iDRACs reach it, then runs
+    Reads infrastructure.yml (azurelocal-toolkit schema 5, the only input), writes ZTP's settings, node list and Bicep
+    parameters, creates the cluster resource group, reads the BMC login (and the maintenance password, when the file names
+    one) through the toolkit's secret resolver, finds this server's address as the BMCs reach it, then runs
     Invoke-ZtpProvisioning.ps1. Before the claim, the Device stage (Set-ZtpDeviceConfiguration.ps1) sets each static
     management address on the port with the node's management MAC in the maintenance environment, through the Configurator
     App's REST service; a node without a maintenance address is found by scanning for the service and matching its MAC.
@@ -18,34 +19,46 @@
     port. OEM drivers, the SBE in C:\SBE, DHCP off on the other ports, DNS and time on the host, and the deployment admin
     are OS configuration (azurelocal-toolkit Phase 03), which comes next, before Validate and Deploy:
     https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/. The provisioned OS
-    names the ports Port0 to Port6, so find them by MAC there. The SBE settings (hardware.sbe, ztp.node_preparation) are
-    accepted and ignored.
+    names the ports Port0 to Port6, so find them by MAC there. The SBE settings (hardware.sbe) are accepted and ignored.
 
-    Without -Execute it writes the generated files and shows ZTP's plan. Nothing changes in Azure or on a node.
+    Secrets: hardware.bmc.username and .password and provisioning.simplified.maintenance_password are secret references
+    (keyvault://, env://, file:// or command://) read by the toolkit's one resolver, scripts/common/secrets/AzlSecret.psm1,
+    found under $env:AZL_TOOLKIT_ROOT, else in an azurelocal-toolkit clone next to this repository. They stay SecureStrings
+    and are never written. provisioning.simplified.admin.password is a keyvault:// reference that Azure reads itself.
+    Nothing prompts.
+
+    Without -Execute it writes the generated files and shows ZTP's plan. Nothing changes in Azure or on a node, and no
+    secret is read.
     With -Execute it REINSTALLS the named nodes. Run it elevated, because it creates the share, a local account and a
     firewall rule. The signed-in account needs Owner, or Contributor and Role Based Access Control Administrator, on the
     resource group, and rights to delegate on the vault that holds the administrator secret.
+
+    Exit codes: 0 done; 2 an input problem (a missing file, a file that isn't schema 5, the toolkit's secret resolver not
+    found, a secret reference that can't be used); any other failure throws (exit code 1 under pwsh -File).
 .PARAMETER InfrastructureFile
-    The environment file: a master infrastructure.yml (schema 5, detected by _metadata.schema_version; validated with the
-    toolkit's module when an azurelocal-toolkit clone is next to this repository or $env:AZL_TOOLKIT_ROOT names one), or the
-    older environment-file layout (docs/environment-file.md, deprecated). See docs/infrastructure-schema-5.md.
+    The infrastructure file: the azurelocal-toolkit infrastructure.yml, schema 5 (_metadata.schema_version 5.x). Validated
+    with the toolkit's module when the toolkit is found ($env:AZL_TOOLKIT_ROOT, else a clone next to this repository), and
+    always with ZTP's own checks. Any other file stops the run with exit code 2. Start from the toolkit's
+    config/variables/examples/infrastructure.example.yml or infrastructure.ztp.example.yml; docs/environment-file.md lists
+    the keys ZTP reads.
 .PARAMETER Node
-    Nodes to provision. Defaults to every node in the environment file.
+    Nodes to provision (nodes[].name). Defaults to every node in the infrastructure file.
 .PARAMETER From
     Stage to resume from: Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Restore or Handoff (each runs with every
     later one).
 .PARAMETER MediaPath
     Where the maintenance ISO, node images (about 4 GB each), vouchers and run state are kept. Overrides
-    ztp.media_path; without either, %ProgramData%\AzureLocalZtp\<ztp.site_name>\media. Refused inside a git working tree;
-    created when missing.
+    provisioning.simplified.media_path; without either, %ProgramData%\AzureLocalZtp\<provisioning.simplified.site_name>\media.
+    Refused inside a git working tree; created when missing.
 .PARAMETER EvidencePath
     Where the event log (ztp-events.jsonl, which monitors follow), the change logs and the run transcript go. Overrides
-    ztp.evidence_path; without either, %ProgramData%\AzureLocalZtp\<ztp.site_name>\evidence. Refused inside a git working
-    tree; created when missing.
+    provisioning.simplified.evidence_path; without either,
+    %ProgramData%\AzureLocalZtp\<provisioning.simplified.site_name>\evidence. Refused inside a git working tree; created when
+    missing.
 .PARAMETER ValidatorPath
-    An extra validator for the environment file, run with -ConfigFile <file> and expected to leave a non-zero exit code on
-    failure. Optional. When not given, tools/Validate-Infrastructure.ps1 beside the environment file is used if it exists;
-    when neither exists only the built-in key check runs. The built-in check always runs first.
+    An extra validator for the infrastructure file, run with -ConfigFile <file> and expected to leave a non-zero exit code
+    on failure. Optional, and only when given: no validator is looked for by default. The built-in check (and the toolkit's
+    validator, when the toolkit is found) always runs first.
 .PARAMETER UseManagedIdentity
     Sign in as the managed identity attached to this host. Otherwise it uses the current Az sign-in, so a service principal signs in with Connect-AzAccount first.
 .PARAMETER Execute
@@ -74,17 +87,25 @@ Import-Module powershell-yaml
 # Az PowerShell needs Bicep on PATH; use the copy the Azure CLI installed.
 $env:PATH = "$env:PATH;$(Join-Path $HOME '.azure\bin')"
 
-# The environment file must hold every key this script reads, and then pass the optional external validator, before anything runs.
-$env_ = Read-ZtpInfrastructure -Path $InfrastructureFile
+# The infrastructure file (schema 5, the only input) must hold every key this script reads, and then pass the optional
+# external validator, before anything runs. A file that isn't schema 5, or a missing one, is exit code 2. With -Execute
+# the toolkit's secret resolver must be there too, so a run that can't read its secrets stops before it writes anything.
+try {
+    $env_ = Read-ZtpInfrastructure -Path $InfrastructureFile
+    if ($Execute) { Import-ZtpSecretResolver }
+}
+catch {
+    if (-not $_.Exception.Data.Contains('ZtpExit')) { throw }
+    Write-Error $_.Exception.Message -ErrorAction Continue
+    exit ([int]$_.Exception.Data['ZtpExit'])
+}
 Assert-ZtpEnvironment -Environment $env_ -Source $InfrastructureFile
-$validator = if ($ValidatorPath) { $ValidatorPath } else { Join-Path (Split-Path (Resolve-Path -LiteralPath $InfrastructureFile)) 'tools\Validate-Infrastructure.ps1' }
-if (Test-Path -LiteralPath $validator) {
+if ($ValidatorPath) {
+    if (-not (Test-Path -LiteralPath $ValidatorPath -PathType Leaf)) { throw "Validator $ValidatorPath doesn't exist." }
     $global:LASTEXITCODE = 0
-    & $validator -ConfigFile (Resolve-Path -LiteralPath $InfrastructureFile)
+    & $ValidatorPath -ConfigFile (Resolve-Path -LiteralPath $InfrastructureFile)
     if ($global:LASTEXITCODE -ne 0) { throw "$InfrastructureFile failed validation. Fix it and run again." }
 }
-elseif ($ValidatorPath) { throw "Validator $ValidatorPath doesn't exist." }
-else { Write-Verbose "No validator at $validator; only the built-in key check ran." }
 
 $ztp = $env_.ztp
 # Every choice below is a key of the file (schema provisioning.simplified.*, hardware.bmc.*); the default is what ZTP always did.
@@ -111,12 +132,12 @@ $parameters = Join-Path $bicepDir 'main.parameters.json'
 $state = Join-Path $media 'ztp-state'
 foreach ($dir in $cfgDir, $bicepDir, $state, (Join-Path $media 'vouchers')) { New-Item -ItemType Directory -Force $dir | Out-Null }
 
-# The address the iDRACs reach: the VPN adapter when it's named in the environment file, otherwise the value given.
+# The address the BMCs reach: the adapter when provisioning.simplified.media_share.host_adapter names one, otherwise .host.
 $shareHost = if ($ztp.Contains('share_host')) { [string]$ztp.share_host } else { '' }
 if ($ztp.Contains('share_host_adapter') -and $ztp.share_host_adapter) {
     $shareHost = (Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias ([string]$ztp.share_host_adapter) -ErrorAction Stop | Select-Object -First 1).IPAddress
 }
-if (-not $shareHost) { throw 'Set ztp.share_host or ztp.share_host_adapter in the environment file.' }
+if (-not $shareHost) { throw 'Set provisioning.simplified.media_share.host or .host_adapter in the infrastructure file.' }
 Write-Output "Share host: $shareHost"
 
 $nodeList = @($env_.cluster_nodes)
@@ -195,15 +216,17 @@ if ($withoutMaintenance) { Write-Output "Device stage (static address in the mai
 Write-Output "Outbound path: $($outbound.Path); site connectivity $($outbound.ConnectivityType)$(if ($outbound.ProxyUrl) { ". The Device stage sets the proxy $($outbound.ProxyUrl) and the bypass list ($(@($outbound.ProxyBypass) -join ', ')) in each maintenance environment" })."
 $staticMethod = Get-ZtpStaticMethod -Environment $env_
 Write-Output "Static management addresses set by: $(if ($staticMethod -eq 'device') { 'the Device stage, by MAC, before the claim (site network Automatic, no Manual adapter in the claim)' } else { 'the OS install, from the site''s Manual setting and the claim''s Manual adapter (static_method site)' }); the Network stage checks them after the install."
-$edgeSecret = Split-ZtpKeyVaultReference (Get-ZtpEnvValue -Environment $env_ -Path 'ztp.maintenance_password_secret')
+# The maintenance environment's edgeuser password (provisioning.simplified.maintenance_password): a secret reference, read
+# with -Execute only.
+$edgeReference = [string](Get-ZtpEnvValue -Environment $env_ -Path 'ztp.maintenance_password_secret')
 
 if ($UseManagedIdentity) {
     Connect-AzAccount -Identity -WarningAction SilentlyContinue | Out-Null
 }
 Set-AzContext -Tenant $tenant -Subscription $clusterSub -Scope Process -WarningAction SilentlyContinue | Out-Null
-# From the environment file, because a managed identity has no directory read rights by default.
+# From the infrastructure file, because a managed identity has no directory read rights by default.
 $rpObjectId = if ($ztp.Contains('azl_rp_object_id')) { [string]$ztp.azl_rp_object_id } else { (Get-AzADServicePrincipal -ApplicationId '1412d89f-b8a8-4111-b4fd-e82905cbd85d').Id }
-if (-not $rpObjectId) { throw 'Set ztp.azl_rp_object_id: the Azure Local resource provider object ID in this tenant.' }
+if (-not $rpObjectId) { throw 'Set azure.hci_resource_provider_object_id: the Azure Local resource provider object ID in this tenant.' }
 
 $tags = @{}
 if ($ztp.Contains('tags') -and $ztp.tags) { foreach ($k in $ztp.tags.Keys) { $tags[[string]$k] = [string]$ztp.tags[$k] } }
@@ -333,19 +356,27 @@ if (-not $Execute) {
     return
 }
 
+# The secrets, through the toolkit's one resolver (keyvault://, env://, file://, command://; Import-ZtpSecretResolver ran
+# above). A keyvault:// reference is read with the Az sign-in, in the vaults' subscription. The values stay SecureStrings
+# (the BMC user name is a plain string, as a PSCredential holds it) and are never written. A reference the resolver can't
+# use is exit code 2, one it can't read exit code 1, before anything changes.
+Set-AzContext -Tenant $tenant -Subscription $vaultSub -Scope Process -WarningAction SilentlyContinue | Out-Null
+try {
+    $bmc = Get-ZtpBmcCredential -Environment $env_
+    # The maintenance environment's edgeuser password: the image builder presets it, and the Device stage signs in with it.
+    $edgePassword = if ($edgeReference) { Get-ZtpSecret -Reference $edgeReference -Infrastructure $env_._source.infrastructure } else { $null }
+}
+catch {
+    $code = 1
+    foreach ($key in 'ZtpExit', 'AzlExit') { if ($_.Exception.Data.Contains($key)) { $code = [int]$_.Exception.Data[$key]; break } }
+    Write-Error "A secret of the infrastructure file couldn't be read: $($_.Exception.Message)" -ErrorAction Continue
+    exit $code
+}
+
 # A run that changes things leaves its transcript with the evidence. Nothing secret is written to the output.
 $transcript = Join-Path $evidence ("$runName.{0}.transcript.log" -f (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ'))
 $null = Start-Transcript -LiteralPath $transcript -IncludeInvocationHeader
 try {
-    Set-AzContext -Tenant $tenant -Subscription $vaultSub -Scope Process -WarningAction SilentlyContinue | Out-Null
-    # The BMC user name: the name itself (bmc_secret.username), or a secret, in username_vault when it isn't the password's vault.
-    $user = if ($ztp.bmc_secret.Contains('username') -and $ztp.bmc_secret.username) { [string]$ztp.bmc_secret.username }
-    else { Get-AzKeyVaultSecret -VaultName $(if ($ztp.bmc_secret.Contains('username_vault') -and $ztp.bmc_secret.username_vault) { [string]$ztp.bmc_secret.username_vault } else { [string]$ztp.bmc_secret.vault }) -Name ([string]$ztp.bmc_secret.username_name) -AsPlainText }
-    $password = Get-AzKeyVaultSecret -VaultName ([string]$ztp.bmc_secret.vault) -Name ([string]$ztp.bmc_secret.password_name)
-    $bmc = [pscredential]::new($user, $password.SecretValue)
-    # The maintenance environment's edgeuser password: the image builder presets it, and the Device stage signs in with it.
-    $edgePassword = if ($edgeSecret) { (Get-AzKeyVaultSecret -VaultName $edgeSecret.Vault -Name $edgeSecret.Secret).SecretValue } else { $null }
-
     Set-AzContext -Tenant $tenant -Subscription $clusterSub -Scope Process -WarningAction SilentlyContinue | Out-Null
     if (-not (Get-AzResourceGroup -Name $rg -ErrorAction SilentlyContinue)) {
         if (-not (ConvertTo-ZtpBoolean (& $setting 'ztp.create_resource_group' $true) 'ztp.create_resource_group')) { throw "Resource group $rg doesn't exist, and provisioning.simplified.create_resource_group is false. Create it first, or set the key to true." }

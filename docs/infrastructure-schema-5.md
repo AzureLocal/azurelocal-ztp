@@ -1,31 +1,32 @@
 # Reading the master infrastructure.yml (schema 5)
 
-> How `Invoke-ZtpEnvironment.ps1` reads the master `infrastructure.yml`, the one environment file every Azure Local tool reads, and where each of its keys goes.
+> How `Invoke-ZtpEnvironment.ps1` reads the master `infrastructure.yml`, the one infrastructure file every Azure Local tool reads and ZTP's only input, and where each of its keys goes.
 
-The master file and its schema live in [azurelocal-toolkit](https://github.com/AzureLocal/azurelocal-toolkit/tree/main/config/variables): `infrastructure.schema.json`, the examples (`examples/lom-management-ztp.yml` is a simplified-provisioning example with every port listed) and `README.md`, which describes every key. ZTP reads schema 5.x. Schema 5.2 adds the keys ZTP needs for each machine's ports, BIOS and run folders; schema 5.3 adds `bios_during_provisioning`, `networking.management.static_method` and `provisioning_dhcp_range`, `nodes[].maintenance_address`, `provisioning.simplified.maintenance_password` and `_metadata.scope`; schema 5.4 puts every other ZTP setting in the master file (see [Every setting is a key](#every-setting-is-a-key-schema-54)).
+The master file and its schema live in [azurelocal-toolkit](https://github.com/AzureLocal/azurelocal-toolkit/tree/main/config/variables): `schema/infrastructure.schema.json`, the templates in `examples/`, and `docs/VARIABLES.md`, which describes every key. ZTP reads schema 5.x and nothing else. Schema 5.2 adds the keys ZTP needs for each machine's ports, BIOS and run folders; schema 5.3 adds `bios_during_provisioning`, `networking.management.static_method` and `provisioning_dhcp_range`, `nodes[].maintenance_address`, `provisioning.simplified.maintenance_password` and `_metadata.scope`; schema 5.4 puts every other ZTP setting in the master file (see [Every setting is a key](#every-setting-is-a-key-schema-54)).
 
 ## The two templates
 
 The toolkit has two templates. Start from the one that matches what you do after ZTP:
 
-- **ZTP only**, with no automation after it: the [ZTP-only template](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/variables/examples/infrastructure.ztp.example.yml) (schema 5.3, `_metadata.scope: ztp`). It holds only what ZTP reads, and the toolkit's validator requires only those keys. The toolkit is adding it; it isn't published yet.
+- **ZTP only**, with no automation after it: the [ZTP-only template](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/variables/examples/infrastructure.ztp.example.yml) (`_metadata.scope: ztp`). It holds only what ZTP reads, and the toolkit's validator requires only those keys.
 - **ZTP, then OS configuration and deployment**: the [full template](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/config/variables/examples/infrastructure.example.yml). ZTP reads its part and ignores the rest.
 
 ZTP accepts `_metadata.scope` and ignores every key it doesn't read. To grow a ZTP-only file into the full one, add the sections and set `_metadata.scope: full` (or remove it).
 
-Pass the file the same way as before:
+Pass the file with `-InfrastructureFile` (there is no default path):
 
 ```powershell
-./scripts/simplified-provisioning/Invoke-ZtpEnvironment.ps1 -InfrastructureFile D:\envs\site-01\infrastructure.yml
+./scripts/simplified-provisioning/Invoke-ZtpEnvironment.ps1 -InfrastructureFile D:\envs\iic-azl-01\infrastructure.yml
 ```
 
-The older [environment-file layout](environment-file.md) still works and is deprecated. [Prerequisites](prerequisites.md#values-you-need) lists every value ZTP reads, with an example and where to get it.
+The [infrastructure file reference](environment-file.md) describes every key ZTP reads. [Prerequisites](prerequisites.md#values-you-need) lists every value, with an example and where to get it.
 
 ## How the file is read
 
-1. **The format.** A file with `_metadata.schema_version` (or `schema_version` at the top) is schema 5. Anything else is the older layout, read as before.
-2. **The check.** When an azurelocal-toolkit clone sits next to this repository (`..\azurelocal-toolkit`), or `$env:AZL_TOOLKIT_ROOT` names one, ZTP runs its `Test-AzlInfrastructure`: the schema and the toolkit's rules. Its errors stop the run, with their rule IDs; its warnings are shown. Without the toolkit, only ZTP's own checks run. Either way, ZTP then checks what it needs itself (`Test-ZtpInfrastructureV5`): `_metadata.schema_version` is 5.x, `scenario.os_install: simplified`, exactly one management port per node, every vault a `keyvault://` reference names is in `key_vaults`, every secret is in the provisioning admin vault's subscription, and one BMC login (`hardware.bmc`) for every node.
-3. **The mapping.** The file is mapped onto the keys the scripts read (`ConvertFrom-ZtpInfrastructureV5`, the table below), and ZTP's key check runs on the result. Every problem is named in schema 5 paths (`ConvertTo-ZtpSchema5Message`), for example `site.time_zone is required` or `nodes[0] (node-01) management port mac_address is required`, and all of them at once.
+1. **Schema 5 only.** A file without `_metadata.schema_version` 5.x (ZTP's retired environment-file layout, another schema major, anything else) stops the run with exit code 2, naming the file and pointing at the toolkit's `config/variables/examples/infrastructure.example.yml`.
+2. **The check.** When the toolkit is found (`$env:AZL_TOOLKIT_ROOT`, else an azurelocal-toolkit clone next to this repository), ZTP runs its `Test-AzlInfrastructure`: the schema and the toolkit's rules. Its errors stop the run, with their rule IDs; its warnings are shown. Without the toolkit, only ZTP's own checks run. Either way, ZTP then checks what it needs itself (`Test-ZtpInfrastructureV5`): `scenario.os_install: simplified`, exactly one management port per node, every vault a `keyvault://` reference names is in `key_vaults`, every `keyvault://` secret is in the provisioning admin vault's subscription, the provisioning admin password is a `keyvault://` reference, and one BMC login (`hardware.bmc`) for every node.
+3. **The mapping.** The file is mapped onto the internal keys the scripts read (`ConvertFrom-ZtpInfrastructureV5`, the table below), and ZTP's key check runs on the result. Every problem is named in schema 5 paths (`ConvertTo-ZtpSchema5Message`), for example `site.time_zone is required` or `nodes[0] (iic-azl-n01) management port mac_address is required`, and all of them at once.
+4. **The secrets.** With `-Execute`, the BMC login and the maintenance password are read through the toolkit's one secret resolver (`scripts/common/secrets/AzlSecret.psm1`: `keyvault://`, `env://`, `file://`, `command://`). Without the toolkit the run stops with exit code 2 before it writes anything. See [Secrets](environment-file.md#secrets).
 
 ## Where each key goes
 
@@ -54,8 +55,8 @@ The older [environment-file layout](environment-file.md) still works and is depr
 | SMB share | `provisioning.simplified.media_share.name`, `host` or `host_adapter` |
 | Run folders | `provisioning.simplified.media_path`, `evidence_path` |
 | Provisioning administrator | `provisioning.simplified.admin.username`; the vault and secret from `admin.password` (`keyvault://<vault>/<secret>`), and that vault's `subscription_id` and `resource_group` from `key_vaults[]` |
-| The maintenance environment's `edgeuser` password | `provisioning.simplified.maintenance_password` (`keyvault://<vault>/<secret>`, in `key_vaults`, in the provisioning admin vault's subscription). Schema 5.3. Without it: `Password1`. |
-| BMC login | `hardware.bmc.username` (a `keyvault://` reference or the name itself) and `hardware.bmc.password` (a `keyvault://` reference). Required. |
+| The maintenance environment's `edgeuser` password | `provisioning.simplified.maintenance_password`: a secret reference of any provider (a `keyvault://` vault in `key_vaults`, in the provisioning admin vault's subscription). Schema 5.3. Without it: `Password1`. |
+| BMC login | `hardware.bmc.username` (a secret reference or the name itself) and `hardware.bmc.password` (a secret reference of any provider). Required. |
 | Vendor | `hardware.vendor` (picks `config/oem/<vendor>.json`, the BMC layer) |
 | Resource provider object ID | `azure.hci_resource_provider_object_id` |
 | Tags | `tags` |
@@ -64,7 +65,7 @@ The older [environment-file layout](environment-file.md) still works and is depr
 | Stage budgets, retries, USB image, Configurator service (5.4) | `provisioning.simplified.timeouts.*`, `retry_provision_os`, `skip_azure_check`, `include_preview`, `max_train`, `usb_image`, `maintenance_environment`, `media_share.account_name`, `media_share.keep` |
 | BMC behaviour (5.4) | `hardware.bmc.rfs_write_attribute` (default: true for Dell, false for the other vendors), `hardware.bmc.verify_certificate` (default false) |
 
-Limits of the mapping, which the check names: ZTP reads every secret in the provisioning administrator vault's subscription, and uses one BMC login for every node (`hardware.bmc`; a node's own `bmc` login must be the same).
+Limits of the mapping, which the check names: every `keyvault://` secret is in the provisioning administrator vault's subscription, the provisioning administrator password is a `keyvault://` reference (Azure reads it from the vault), and one BMC login serves every node (`hardware.bmc`; a node's own `bmc` login must be the same).
 
 ### Not read by ZTP
 

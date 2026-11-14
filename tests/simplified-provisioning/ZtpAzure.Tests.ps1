@@ -55,7 +55,7 @@ BeforeAll {
         param($Path, $Method, $Payload)
         $global:ztpCalls.Add([pscustomobject]@{ Path = $Path; Method = $Method; Payload = $Payload })
         if ($Path -like '*/osImages?*') { return New-ZtpTestResponse 200 (Get-Content (Join-Path $global:ztpFixtures 'os-images.json') -Raw) }
-        if ($Path -like '*/Microsoft.Edge/sites/*') { if ($global:ztpSiteExists) { return New-ZtpTestResponse 200 @{ name = 'site-example' } } return New-ZtpTestResponse 404 @{ error = @{ code = 'ResourceNotFound' } } }
+        if ($Path -like '*/Microsoft.Edge/sites/*') { if ($global:ztpSiteExists) { return New-ZtpTestResponse 200 @{ name = 'iic-site-01' } } return New-ZtpTestResponse 404 @{ error = @{ code = 'ResourceNotFound' } } }
         if ($Path -like '*/Microsoft.Edge/configurations/*') { if ($global:ztpSiteExists) { return New-ZtpTestResponse 200 @{ name = 'default' } } return New-ZtpTestResponse 404 $null }
         if ($Path -match '/edgeMachines/([^/?]+)/jobs/ProvisionOs\?') {
             if ($Method -eq 'PUT') { return New-ZtpTestResponse 200 @{ name = 'ProvisionOs' } }
@@ -230,7 +230,7 @@ Describe 'ZTP Azure half' {
             $machine = Get-ZtpTestFixture 'edge-machine-provisioned.json' | ConvertFrom-Json -Depth 60
             $machine.properties.provisioningDetails.userDetails[0].PSObject.Properties.Remove('secretLocation')
             { Get-ZtpProvisionOsRetryBody -Machine $machine } | Should -Throw '*AdminSecretResourceId*'
-            $id = "/subscriptions/$global:ztpZeroSub/resourceGroups/rg-example-sec/providers/Microsoft.KeyVault/vaults/kv-example/secrets/other"
+            $id = "/subscriptions/$global:ztpZeroSub/resourceGroups/rg-iic-sec-01/providers/Microsoft.KeyVault/vaults/kv-iic-mgmt-01/secrets/other"
             (Get-ZtpProvisionOsRetryBody -Machine $machine -AdminSecretResourceId $id).properties.provisioningRequest.userDetails[0].secretLocation | Should -Be $id
         }
     }
@@ -261,7 +261,7 @@ Describe 'ZTP Azure half' {
     Describe 'Readiness poller (Wait-ZtpMachineReady.ps1)' {
         BeforeAll {
             $script:wait = Join-Path $script:scripts 'Wait-ZtpMachineReady.ps1'
-            $script:waitArgs = @{ SubscriptionId = $global:ztpZeroSub; ResourceGroupName = 'rg-example'; EdgeMachineName = @('node-01', 'node-02'); PollIntervalSeconds = 0 }
+            $script:waitArgs = @{ SubscriptionId = $global:ztpZeroSub; ResourceGroupName = 'rg-iic-azl-01'; EdgeMachineName = @('node-01', 'node-02'); PollIntervalSeconds = 0 }
         }
 
         It 'returns the rows when every node is ready to cluster' {
@@ -350,7 +350,7 @@ Describe 'ZTP Azure half' {
         BeforeEach {
             $script:map = Join-Path $TestDrive "arc-$([guid]::NewGuid().ToString('N')).json"
             $global:ztpMachines = @{ 'node-01' = 'provisioned'; 'node-02' = 'provisioned' }
-            $script:arcArgs = @{ SubscriptionId = $global:ztpZeroSub; ResourceGroupName = 'rg-example'; NodeName = @('node-01', 'node-02') }
+            $script:arcArgs = @{ SubscriptionId = $global:ztpZeroSub; ResourceGroupName = 'rg-iic-azl-01'; NodeName = @('node-01', 'node-02') }
         }
 
         It 'returns the rows without a map path and writes nothing' {
@@ -411,9 +411,9 @@ Describe 'ZTP Azure half' {
                 location                 = 'eastus'
                 tags                     = @{ workload = 'example' }
                 azl_rp_app_object_id     = $global:ztpZeroSub
-                key_vault_name           = 'kv-example'
-                key_vault_resource_group = 'rg-example-sec'
-                site_name                = 'site-example'
+                key_vault_name           = 'kv-iic-mgmt-01'
+                key_vault_resource_group = 'rg-iic-sec-01'
+                site_name                = 'iic-site-01'
                 admin_username           = 'azladmin'
                 admin_secret_name        = 'provisioning-admin'
                 time_zone                = 'UTC'
@@ -425,10 +425,10 @@ Describe 'ZTP Azure half' {
             Mock Get-AzContext { [pscustomobject]@{ Subscription = [pscustomobject]@{ Id = $global:ztpZeroSub } } }
             Mock Get-AzKeyVaultSecret { @([pscustomobject]@{ Name = 'provisioning-admin' }) }
             Mock Set-AzKeyVaultSecret {}
-            Mock Get-AzResourceGroupDeploymentWhatIfResult { [pscustomobject]@{ Changes = @([pscustomobject]@{ ChangeType = 'Create'; FullyQualifiedResourceId = "/subscriptions/$global:ztpZeroSub/resourceGroups/rg-example/providers/Microsoft.AzureStackHCI/edgeMachines/node-02" }) } }
+            Mock Get-AzResourceGroupDeploymentWhatIfResult { [pscustomobject]@{ Changes = @([pscustomobject]@{ ChangeType = 'Create'; FullyQualifiedResourceId = "/subscriptions/$global:ztpZeroSub/resourceGroups/rg-iic-azl-01/providers/Microsoft.AzureStackHCI/edgeMachines/node-02" }) } }
             Mock New-AzResourceGroupDeployment { [pscustomobject]@{ State = 'Running' } }
             Mock Get-AzResourceGroupDeployment { [pscustomobject]@{ Timestamp = [datetime]::UtcNow; ProvisioningState = 'Running' } }
-            $script:runArgs = @{ SubscriptionId = $global:ztpZeroSub; ResourceGroupName = 'rg-example'; ParameterFile = $script:paramFile; VoucherPath = $script:voucherPath; OsVersion = 'latest' }
+            $script:runArgs = @{ SubscriptionId = $global:ztpZeroSub; ResourceGroupName = 'rg-iic-azl-01'; ParameterFile = $script:paramFile; VoucherPath = $script:voucherPath; OsVersion = 'latest' }
             $script:adminPassword = ConvertTo-SecureString 'Synthetic-Passw0rd!' -AsPlainText -Force
         }
 
@@ -437,11 +437,11 @@ Describe 'ZTP Azure half' {
             $plan.CreateSite | Should -BeFalse
             $plan.CreateConfiguration | Should -BeFalse
             $plan.Image.VsrVersion | Should -Be '12.2609.1003.7'
-            $plan.AdminSecretResourceId | Should -Be "/subscriptions/$global:ztpZeroSub/resourceGroups/rg-example-sec/providers/Microsoft.KeyVault/vaults/kv-example/secrets/provisioning-admin"
+            $plan.AdminSecretResourceId | Should -Be "/subscriptions/$global:ztpZeroSub/resourceGroups/rg-iic-sec-01/providers/Microsoft.KeyVault/vaults/kv-iic-mgmt-01/secrets/provisioning-admin"
             Should -Invoke Get-AzResourceGroupDeploymentWhatIfResult -Times 1 -Exactly -ParameterFilter {
                 $TemplateParameterObject.os_version -eq '12.2609.1003.7' -and -not $TemplateParameterObject.create_site -and $TemplateParameterObject.claim_machines -and
                 (@($TemplateParameterObject.node_filter) -join ',') -eq 'node-01,node-02' -and $TemplateParameterObject.ownership_vouchers['node-02'] -eq $script:voucher2 -and
-                $TemplateParameterObject.site_name -eq 'site-example' -and $ResourceGroupName -eq 'rg-example'
+                $TemplateParameterObject.site_name -eq 'iic-site-01' -and $ResourceGroupName -eq 'rg-iic-azl-01'
             }
             Should -Invoke New-AzResourceGroupDeployment -Times 0 -Exactly
             Should -Invoke Set-AzKeyVaultSecret -Times 0 -Exactly
@@ -494,10 +494,10 @@ Describe 'ZTP Azure half' {
         It 'claims only the nodes without an edge machine and writes the missing admin secret first' {
             $global:ztpMachines = @{ 'node-01' = 'provisioned' }
             Mock Get-AzKeyVaultSecret { @() }
-            $null = & $script:orchestrator @script:runArgs -Stage Execute -Execute -Confirm:$false -AdminPassword $script:adminPassword -DeploymentName dep-example
-            Should -Invoke Set-AzKeyVaultSecret -Times 1 -Exactly -ParameterFilter { $VaultName -eq 'kv-example' -and $Name -eq 'provisioning-admin' -and $SecretValue -is [securestring] }
+            $null = & $script:orchestrator @script:runArgs -Stage Execute -Execute -Confirm:$false -AdminPassword $script:adminPassword -DeploymentName dep-iic-01
+            Should -Invoke Set-AzKeyVaultSecret -Times 1 -Exactly -ParameterFilter { $VaultName -eq 'kv-iic-mgmt-01' -and $Name -eq 'provisioning-admin' -and $SecretValue -is [securestring] }
             Should -Invoke New-AzResourceGroupDeployment -Times 1 -Exactly -ParameterFilter {
-                $Name -eq 'dep-example' -and $ResourceGroupName -eq 'rg-example' -and $AsJob -and $Mode -eq 'Incremental' -and
+                $Name -eq 'dep-iic-01' -and $ResourceGroupName -eq 'rg-iic-azl-01' -and $AsJob -and $Mode -eq 'Incremental' -and
                 (@($TemplateParameterObject.node_filter) -join ',') -eq 'node-02' -and $TemplateParameterObject.claim_machines -and
                 @($TemplateParameterObject.ownership_vouchers.Keys) -join ',' -eq 'node-02' -and $TemplateParameterObject.ownership_vouchers['node-02'] -eq $script:voucher2
             }

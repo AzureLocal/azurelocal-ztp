@@ -55,7 +55,7 @@ The subscription and resource group are script parameters, not file values. Vouc
 ```powershell
 ./scripts/simplified-provisioning/Invoke-ZtpAzureProvisioning.ps1 `
     -SubscriptionId 00000000-0000-0000-0000-000000000000 `
-    -ResourceGroupName rg-example `
+    -ResourceGroupName rg-iic-azl-01 `
     -ParameterFile ./scripts/simplified-provisioning/bicep/main.parameters.json `
     -VoucherPath D:\ZtpVouchers
 ```
@@ -73,7 +73,7 @@ $adminPassword = Read-Host -AsSecureString 'Provisioning administrator password'
 
 ./scripts/simplified-provisioning/Invoke-ZtpAzureProvisioning.ps1 `
     -SubscriptionId 00000000-0000-0000-0000-000000000000 `
-    -ResourceGroupName rg-example `
+    -ResourceGroupName rg-iic-azl-01 `
     -ParameterFile ./scripts/simplified-provisioning/bicep/main.parameters.json `
     -VoucherPath D:\ZtpVouchers `
     -AdminPassword $adminPassword `
@@ -95,7 +95,7 @@ You can resume or run a stage alone: `-Stage Watch` follows an interrupted run a
 ```powershell
 ./scripts/simplified-provisioning/Wait-ZtpMachineReady.ps1 `
     -SubscriptionId 00000000-0000-0000-0000-000000000000 `
-    -ResourceGroupName rg-example -EdgeMachineName node-01, node-02
+    -ResourceGroupName rg-iic-azl-01 -EdgeMachineName node-01, node-02
 ```
 
 The lifecycle on a live run was `Creating`, `AwaitingConnection`, `Provisioning`, `ReadyForOs`, `InstallingOs`, `Provisioned`. A node is **ready to cluster** when:
@@ -110,7 +110,7 @@ Until the service creates the `ProvisionOs` job, a GET on it answers 404 or 409;
 
 ```powershell
 ./scripts/simplified-provisioning/Wait-ZtpMachineReady.ps1 `
-    -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example `
+    -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-iic-azl-01 `
     -EdgeMachineName node-02 -RetryProvisionOs -Execute
 ```
 

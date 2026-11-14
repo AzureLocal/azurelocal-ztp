@@ -6,7 +6,8 @@
 # - A self-hosted Windows runner on the management network, running as a service under a local administrator account,
 #   with the prerequisites in docs/prerequisites.md. Give it the label "ztp".
 # - The runner host has a managed identity (Azure VM or Azure Arc-enabled server) with the roles in
-#   docs/automation-pipelines.md. No secret is stored in GitHub: the environment file references Key Vault.
+#   docs/automation-pipelines.md. No secret is stored in GitHub: the infrastructure file holds secret references,
+#   read with -Execute by azurelocal-toolkit's resolver (set AZL_TOOLKIT_ROOT on the runner, or clone the toolkit next to ZTP).
 # - An environment named azurelocal-ztp-execute with required reviewers.
 
 name: azurelocal-ztp
@@ -15,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       infrastructure_file:
-        description: Environment file path on the runner
+        description: Infrastructure file path on the runner
         required: true
         default: 'D:\ztp\environments\example\infrastructure.yml'
       nodes:
@@ -29,7 +30,7 @@ on:
         type: choice
         options: [none, Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, Network, Restore, Handoff]
 
-# One run per environment file at a time: the share, the BMCs and the state file serve one run.
+# One run per infrastructure file at a time: the share, the BMCs and the state file serve one run.
 concurrency:
   group: azurelocal-ztp-${{ inputs.infrastructure_file }}
   cancel-in-progress: false

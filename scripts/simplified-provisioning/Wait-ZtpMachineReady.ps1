@@ -38,9 +38,9 @@ Key Vault secret ARM ID for the retry body when the edge machine does not return
 .PARAMETER Execute
 Allow the ProvisionOs re-PUT. Polling itself is read-only.
 .EXAMPLE
-./Wait-ZtpMachineReady.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example -EdgeMachineName node-01, node-02
+./Wait-ZtpMachineReady.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-iic-azl-01 -EdgeMachineName node-01, node-02
 .EXAMPLE
-./Wait-ZtpMachineReady.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-example -EdgeMachineName node-01 -RetryProvisionOs -Execute
+./Wait-ZtpMachineReady.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg-iic-azl-01 -EdgeMachineName node-01 -RetryProvisionOs -Execute
 #>
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 param(

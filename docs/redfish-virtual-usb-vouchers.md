@@ -48,17 +48,17 @@ Copy-Item config/simplified-provisioning/nodes.example.json ./nodes.json
 ```json
 {
   "nodes": [
-    { "name": "node-01", "service_tag": "EXAMPLE1", "bmc_address": "198.51.100.11" },
-    { "name": "node-02", "service_tag": "EXAMPLE2", "bmc_address": "198.51.100.12" }
+    { "name": "node-01", "service_tag": "IICSN0001", "bmc_address": "198.51.100.11" },
+    { "name": "node-02", "service_tag": "IICSN0002", "bmc_address": "198.51.100.12" }
   ]
 }
 ```
 
-The same shape works as `-Nodes @([pscustomobject]@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11' })`. YAML files (`.yml`, `.yaml`) are read when the `powershell-yaml` module is installed. Keep your real node list out of git (it is ignored by the repo's `.gitignore`).
+The same shape works as `-Nodes @([pscustomobject]@{ name = 'node-01'; service_tag = 'IICSN0001'; bmc_address = '198.51.100.11' })`. YAML files (`.yml`, `.yaml`) are read when the `powershell-yaml` module is installed. Keep your real node list out of git (it is ignored by the repo's `.gitignore`).
 
 ## All stages with one command
 
-The orchestrator runs these steps as its Boot, Bootstrap and Vouchers stages, together with the Device, Azure, Ready, Network, Restore and Handoff stages, and checks each result before the next. Use the [Operator guide](operator-guide.md) for the whole flow from an environment file, or the [Orchestrator reference](automated-bootstrap.md) to drive the orchestrator directly. For the Configurator App fallback, rerun the Vouchers stage with `-VoucherFolder`.
+The orchestrator runs these steps as its Boot, Bootstrap and Vouchers stages, together with the Device, Azure, Ready, Network, Restore and Handoff stages, and checks each result before the next. Use the [Operator guide](operator-guide.md) for the whole flow from an infrastructure file, or the [Orchestrator reference](automated-bootstrap.md) to drive the orchestrator directly. For the Configurator App fallback, rerun the Vouchers stage with `-VoucherFolder`.
 
 ## Step by step
 

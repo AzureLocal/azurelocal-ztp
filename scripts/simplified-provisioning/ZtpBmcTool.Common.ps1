@@ -26,9 +26,7 @@ function New-ZtpBmcToolInputError {
     [CmdletBinding()]
     [OutputType([System.ArgumentException])]
     param([Parameter(Mandatory)][string]$Message)
-    $e = [System.ArgumentException]::new($Message)
-    $e.Data['ZtpExit'] = 2
-    return $e
+    return (New-ZtpInputError -Message $Message)
 }
 
 function Get-ZtpBmcToolExitCode {
@@ -45,25 +43,21 @@ function Find-ZtpToolkitRedfishModule {
     <#
     .SYNOPSIS
     The toolkit's AzlRedfishCore.psm1 (it holds Resolve-AzlBmcCredential and loads the toolkit's secret resolver):
-    under $env:AZL_TOOLKIT_ROOT when that is set (only there), else in an azurelocal-toolkit clone next to this repository.
-    $null when there is none.
+    under $env:AZL_TOOLKIT_ROOT when that is set (only there), else in an azurelocal-toolkit clone next to this repository
+    (Get-ZtpToolkitRoot). $null when there is none.
     #>
     [CmdletBinding()]
     [OutputType([string])]
     param()
-    $relative = 'scripts\common\redfish\AzlRedfishCore.psm1'
-    $root = if ($env:AZL_TOOLKIT_ROOT) { $env:AZL_TOOLKIT_ROOT } else { Join-Path $PSScriptRoot '..\..\..\azurelocal-toolkit' }
-    $candidate = [IO.Path]::GetFullPath((Join-Path $root $relative))
-    if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $candidate }
-    return $null
+    return (Find-ZtpToolkitFile -Relative 'scripts\common\redfish\AzlRedfishCore.psm1')
 }
 
 function Read-ZtpBmcToolInput {
     <#
     .SYNOPSIS
     Reads the infrastructure file and returns the selected nodes with their BMC addresses, the TLS choice and the vendor.
-    Throws an input error (exit code 2) for a missing file, an older-layout file, an unknown node or a node without a BMC
-    address. Doesn't read a secret.
+    Throws an input error (exit code 2) for a missing file, a file that isn't schema 5, an unknown node or a node without a
+    BMC address. Doesn't read a secret.
     .PARAMETER InfrastructureFile
     The master infrastructure.yml (schema 5).
     .PARAMETER NodeName
@@ -77,13 +71,10 @@ function Read-ZtpBmcToolInput {
     )
     if (-not (Test-Path -LiteralPath $InfrastructureFile -PathType Leaf)) { throw (New-ZtpBmcToolInputError "The infrastructure file '$InfrastructureFile' doesn't exist. Pass -InfrastructureFile with the path of your infrastructure.yml (schema 5).") }
     try {
-        $raw = Read-ZtpEnvironmentFile -Path $InfrastructureFile
-        if ((Get-ZtpEnvironmentFormat -Data $raw) -ne 'schema5') {
-            throw (New-ZtpBmcToolInputError "'$InfrastructureFile' is in the older environment-file layout. The BMC tools read the master infrastructure.yml (schema 5, _metadata.schema_version 5.x); start from a template in azurelocal-toolkit config/variables/examples.")
-        }
-        # The same reader the provisioning run uses. Only the keys above matter here, so the toolkit's whole-file
-        # validation is skipped, as the toolkit's own BMC scripts do.
+        # The same reader the provisioning run uses: anything but a schema 5 file is an input error. Only the keys above
+        # matter here, so the toolkit's whole-file validation is skipped, as the toolkit's own BMC scripts do.
         $environment = Read-ZtpInfrastructure -Path $InfrastructureFile -ToolkitModulePath none
+        $raw = $environment['_source']['infrastructure']
     }
     catch {
         if ($_.Exception.Data.Contains('ZtpExit')) { throw }

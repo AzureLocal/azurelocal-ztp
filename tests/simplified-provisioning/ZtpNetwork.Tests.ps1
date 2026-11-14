@@ -32,7 +32,7 @@ BeforeAll {
     # A job body as the service returns it, for a status the sequence names.
     function global:New-NetTJob {
         param([System.Collections.IDictionary]$Target, [string]$Status)
-        $p = [ordered]@{ jobType = 'ApplyConfiguration'; deploymentMode = 'Deploy'; jobId = 'job-example'; targetConfiguration = $Target; startTimeUtc = [datetime]::UtcNow.ToString('o') }
+        $p = [ordered]@{ jobType = 'ApplyConfiguration'; deploymentMode = 'Deploy'; jobId = 'job-iic-01'; targetConfiguration = $Target; startTimeUtc = [datetime]::UtcNow.ToString('o') }
         switch ($Status) {
             'Queued' {
                 $p.status = 'DeploymentInProgress'; $p.provisioningState = 'Accepted'
@@ -52,7 +52,7 @@ BeforeAll {
                 $p.error = @{ code = 'NetworkConfigurationFailed'; message = 'The adapter rejected the configuration.' }
             }
         }
-        @{ id = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.AzureStackHCI/edgeMachines/node-01/networkAdapters/x/jobs/ApplyConfiguration'; name = 'ApplyConfiguration'; type = 'Microsoft.AzureStackHCI/edgeMachines/networkAdapters/jobs'; properties = $p }
+        @{ id = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-iic-azl-01/providers/Microsoft.AzureStackHCI/edgeMachines/node-01/networkAdapters/x/jobs/ApplyConfiguration'; name = 'ApplyConfiguration'; type = 'Microsoft.AzureStackHCI/edgeMachines/networkAdapters/jobs'; properties = $p }
     }
     # The stub edge machine: adapters by resource name; a job per adapter that walks its status sequence one GET at a time
     # and, when it reaches Succeeded, makes the adapter report its target.
@@ -63,7 +63,7 @@ BeforeAll {
             if ($global:netT_noAdapters) { return New-NetTResponse 404 @{ error = @{ code = 'ResourceNotFound'; message = 'not found' } } }
             $value = foreach ($k in $global:netT_adapters.Keys) {
                 $a = $global:netT_adapters[$k]
-                @{ id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.AzureStackHCI/edgeMachines/node-01/networkAdapters/$k"; name = $k
+                @{ id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-iic-azl-01/providers/Microsoft.AzureStackHCI/edgeMachines/node-01/networkAdapters/$k"; name = $k
                     type = 'Microsoft.AzureStackHCI/edgeMachines/networkAdapters'; properties = @{ networkConfiguration = $a.desired; reportedProperties = $a.reported; provisioningState = 'Succeeded' } }
             }
             return New-NetTResponse 200 @{ value = @($value) }
@@ -97,7 +97,7 @@ BeforeAll {
     $script:writeParameters = {
         param([System.Collections.IDictionary]$Management, [string]$Name = 'params')
         $file = Join-Path $TestDrive "$Name-$([guid]::NewGuid().ToString('N')).json"
-        $node = [ordered]@{ name = 'node-01'; service_tag = 'EXAMPLE1'; arc_machine_name = 'node-01' }
+        $node = [ordered]@{ name = 'node-01'; service_tag = 'IICSN0001'; arc_machine_name = 'node-01' }
         if ($Management) { $node.management = $Management }
         @{ '$schema' = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#'; contentVersion = '1.0.0.0'; parameters = @{ nodes = @{ value = @($node) } } } |
             ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $file
@@ -106,7 +106,7 @@ BeforeAll {
     $script:static = { [ordered]@{ ip_assignment = 'static'; mac_address = '00-00-5E-00-53-AA'; adapter_name = ''; ip_address = '192.0.2.11'; subnet_mask = '255.255.255.0'; gateway = '192.0.2.1'; dns_servers = @('192.0.2.53', '192.0.2.54'); vlan_id = '0' } }
     $script:argsFor = {
         param([hashtable]$Arguments)
-        $base = @{ SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroupName = 'rg-example'; PollIntervalSeconds = 0; TimeoutMinutes = 5
+        $base = @{ SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroupName = 'rg-iic-azl-01'; PollIntervalSeconds = 0; TimeoutMinutes = 5
             ChangeLogPath = $script:changeLog; EventLogPath = $script:events; InformationAction = 'SilentlyContinue'; WarningAction = 'SilentlyContinue' }
         foreach ($k in $Arguments.Keys) { $base[$k] = $Arguments[$k] }
         $base

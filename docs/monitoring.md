@@ -72,7 +72,7 @@ The run doesn't read the job's `properties.error`. That matters after a resubmit
 
 | Lines | Written by |
 | --- | --- |
-| `Note: <key> ignored: SBE belongs to OS configuration.` | The entry point, before the run, once per SBE key the environment file still carries: `ztp.node_preparation` (older layout) or `hardware.sbe` (schema 5). Nothing to do; ZTP doesn't read them. |
+| `Note: <key> ignored: SBE belongs to OS configuration.` | The entry point, before the run, when the infrastructure file still carries `hardware.sbe`. Nothing to do; ZTP doesn't read them. |
 | `[HH:mm:ssZ] [ztp] ...` | The orchestrator: the stage table at the start, `=== Stage <name> ===`, and `Stage <name> completed in <n> min: <evidence>` |
 | `[HH:mm:ssZ] node-01 lifecycle ...`, `... stage ...`, `... job ProvisionOs ...`, `... step ...` | The Ready wait, and the Ready watch after Restore, one line per change |
 | `[HH:mm:ssZ] [ztp] Restore: BIOS set back on ...; waiting 5 min, ...` | Restore, after the BIOS restart, before it checks the machines in Azure again |
@@ -86,7 +86,7 @@ The Boot, Bootstrap and Vouchers waits print little on the console. Their detail
 
 | How you run | Path |
 | --- | --- |
-| `Invoke-ZtpEnvironment.ps1` | `ztp-events.jsonl` in the evidence folder: `ztp.evidence_path` of the environment file, or `-EvidencePath`, by default `%ProgramData%\AzureLocalZtp\<site>\evidence`. Before this change it was `_media\ztp-state\ztp-events.jsonl` in the clone; point monitors at the new path. |
+| `Invoke-ZtpEnvironment.ps1` | `ztp-events.jsonl` in the evidence folder: `provisioning.simplified.evidence_path` of the infrastructure file, or `-EvidencePath`, by default `%ProgramData%\AzureLocalZtp\<site>\evidence`. Before this change it was `_media\ztp-state\ztp-events.jsonl` in the clone; point monitors at the new path. |
 | `Invoke-ZtpProvisioning.ps1` directly | `-EventLogPath`, default `ztp-events.jsonl` in the current folder |
 
 The file is only ever appended to, so it holds every run that used it. Each event carries its own UTC time.
@@ -162,7 +162,7 @@ Example lines:
 From the clone root, in a second PowerShell 7 window:
 
 ```powershell
-$events = 'D:\Data\azl-ztp\site-01\evidence\ztp-events.jsonl'   # ztp.evidence_path
+$events = 'D:\Data\azl-ztp\site-01\evidence\ztp-events.jsonl'   # provisioning.simplified.evidence_path
 
 # Every new event as one line. -Tail 20 starts with the last 20 instead of the whole history.
 Get-Content -Path $events -Tail 20 -Wait | ForEach-Object {
