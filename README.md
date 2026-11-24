@@ -31,7 +31,7 @@ Planning -> Hardware discovery -> ZTP -> OS configuration -> PRE-CLUSTER VERIFIC
 
 | # | Step | Tool | What it does | Page |
 | --- | --- | --- | --- | --- |
-| 0 | Planning (optional) | [Surveyor](https://azurelocal.cloud/azurelocal-surveyor/) sizes the cluster; [Trailwright](https://azurelocal.cloud/azurelocal-trailwright/) turns the sizing handoff and your answers into the `infrastructure.yml` | A draft of the file this repo reads. Check it with the toolkit's `Test-InfrastructureFile.ps1` first: a Trailwright export did not pass that validator on 2026-11-23 (`landing_zone.networks` entries without `address_space`), so fix those entries by hand. A planner cannot know the machines' MAC addresses, so they come from discovery (step 1) or from you | [Trailwright](https://azurelocal.cloud/azurelocal-trailwright/) |
+| 0 | Planning (optional) | [Surveyor](https://azurelocal.cloud/azurelocal-surveyor/) sizes the cluster; [Trailwright](https://azurelocal.cloud/azurelocal-trailwright/) turns the sizing handoff and your answers into the `infrastructure.yml` | A draft of the file this repo reads. Check it with the toolkit's `Test-InfrastructureFile.ps1` first. A planner cannot know the machines' MAC addresses, so a file written by Trailwright (`_metadata.scope: trailwright`) may leave them out; they come from discovery (step 1) or from you, and ZTP needs them (it finds the management port by MAC) | [Trailwright](https://azurelocal.cloud/azurelocal-trailwright/) |
 | 1 | Hardware discovery (optional, Dell only in this phase) | azurelocal-toolkit `Invoke-HardwareDiscovery.ps1`, then `Update-InfrastructureYml-FromDiscovery.ps1` | Reads each machine's BMC over Redfish. The update script previews, and with `-Apply` writes, the serial numbers and port MACs into the entries of the infrastructure file that already name those ports | [Discovery](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/docs/hardware-discovery.md) |
 | 2 | **ZTP** (this repo) | `Invoke-ZtpEnvironment.ps1` | Installs the OS from Azure by simplified machine provisioning and registers every machine with Azure Arc. Ends at the handoff | This page |
 | 3 | OS configuration | azurelocal-toolkit `Invoke-AzureLocalOsConfiguration.ps1` | Static management address by MAC, DHCP off on the other ports, DNS, time, deployment admin, domain join, storage preparation. The SBE package must already be on a share (below); copying it to the nodes only when a person asks | [OS configuration](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/docs/os-configuration-and-arm-deployment.md) |
@@ -41,6 +41,15 @@ Planning -> Hardware discovery -> ZTP -> OS configuration -> PRE-CLUSTER VERIFIC
 | 7 | Day 2 | the toolkit's post-deployment, operations and update tasks | Logical networks, monitoring, backup, updates | [Part 4: Cluster Deployment](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/) |
 
 [Sonar](https://github.com/AzureLocal/azurelocal-sonar) watches steps 2 to 6 read only; start it beside any of them.
+
+**What ZTP reads and writes.**
+
+| Direction | What | Name |
+| --- | --- | --- |
+| In | The environment file | `infrastructure.yml` (schema 5), `-InfrastructureFile` on `Invoke-ZtpEnvironment.ps1`: the full file, or its ZTP cut (`config/variables/examples/infrastructure.ztp.example.yml`). Read by `Read-ZtpInfrastructure` (`ZtpEnvironment.Common.ps1`) and checked with the toolkit's validator |
+| Out | The handoff | `ztp-handoff.json` (schema 2) from `New-ZtpHandoff.ps1`: per node the edge and Arc machine names and IDs, `managementAddressVerified`, `managementMode`, `biosRestored`, `networkAdapters[]` |
+| Out | The events | `ztp-events.jsonl` in `provisioning.simplified.evidence_path`: what Sonar's ZTP monitor follows |
+| Out (into the file) | The Arc machine names and the installed release | `Convert-ZtpHandoffToClusterInputs.ps1 -InfrastructureFile` writes `nodes[].arc_machine_name` and `deployment.solution_version` |
 
 **Pre-cluster verification gate.** It sits between OS configuration and ARM Validate. It is not part of ZTP and ZTP does not call it. It is in azurelocal-toolkit (`Invoke-AzureLocalPreClusterVerification.ps1`, [the checks it makes](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/docs/pre-cluster-verification.md)), and Sonar's `-Monitor Verification` follows its events. The gate takes the OS configuration report as input (`-OsConfigurationReport`), so run OS configuration first; the handoff's `managementAddressVerified` is what tells you ZTP left each management port at the address the file gives.
 
@@ -58,7 +67,7 @@ ZTP itself never touches the SBE: the OS install discovers its own.
 | Item | State |
 | --- | --- |
 | Microsoft feature | Preview. Provisioning resources in **East US** only. Arc gateway not supported. |
-| End-to-end flow | **Proven on Dell AX-760 / iDRAC 7.30**: two nodes, Azure Local build `12.2690.1003.15`, maintenance image `10.2610.0.3063`. |
+| End-to-end flow | **Proven on Dell AX-760 / iDRAC 7.30**: two nodes, Azure Local build `12.2690.1003.15`, maintenance image `10.2610.0.3063` (the live runs were on the 2610 train). **Not yet run on 2611** (12.2611.1004.9, OS 26100.33822): the 2611 statements in these docs come from Microsoft Learn, not from a run. |
 | Microsoft support | AX-760 isn't on Learn's [validated hardware list](https://learn.microsoft.com/azure/azure-local/deploy/simplified-machine-provisioning#hardware-prerequisites) for this flow (Dell AX-650 and AX-750, Lenovo ThinkAgile MX650 V3 and V4, HPE ProLiant DL360 Gen11). It works, but Microsoft doesn't support it. |
 | Other OEMs | BMC handling is proven on Dell iDRAC only. |
 | Scope | Ends at the handoff: provisioned, Arc-connected nodes with the management address on the management NIC. OS configuration, Active Directory preparation, Validate and Deploy are separate. |
@@ -94,13 +103,15 @@ cd azurelocal-ztp
 #    ZTP only: infrastructure.ztp.example.yml. ZTP, then OS configuration and deployment: infrastructure.example.yml.
 Copy-Item <azurelocal-toolkit>\config\variables\examples\infrastructure.ztp.example.yml D:\ztp\infrastructure.yml
 
-# 2. Plan: changes nothing in Azure, on the BMCs or on the nodes. It still needs this Az sign-in (it reads the
-#    subscription and the Azure Local resource provider), and with provisioning.simplified.media_share.host_adapter set
-#    it reads that adapter's address on this machine; set media_share.host to plan on a machine without the adapter.
-Connect-AzAccount -Tenant <tenant-id>
+# 2. Plan: changes nothing in Azure, on the BMCs or on the nodes, and needs no Azure sign-in, no Az context and no
+#    local adapter: it prints the plan from the file. The address of media_share.host_adapter and the Azure Local resource
+#    provider object ID are looked up when -Execute runs (or set media_share.host and
+#    azure.hci_resource_provider_object_id to see them in the plan).
 ./scripts/simplified-provisioning/Invoke-ZtpEnvironment.ps1 -InfrastructureFile D:\ztp\infrastructure.yml
 
-# 3. Execute: REINSTALLS the nodes; rerun the same command to resume
+# 3. Execute: REINSTALLS the nodes; rerun the same command to resume. Sign in to Azure first (-UseManagedIdentity signs in
+#    with the managed identity instead).
+Connect-AzAccount -Tenant <tenant-id>
 ./scripts/simplified-provisioning/Invoke-ZtpEnvironment.ps1 -InfrastructureFile D:\ztp\infrastructure.yml -Execute
 ```
 
@@ -120,6 +131,8 @@ Read the [Operator guide](docs/operator-guide.md) before you run it.
 - **Restore stage.** `hardware.bios_during_provisioning` holds BIOS values for the install only. Boot applies them; Restore sets them back to `hardware.bios` (or the value saved before Boot), restarts the node, and waits until it's Connected again. Without the key, Restore does nothing.
 - **Network stage: verify-only.** It reads Azure's per-NIC report, finds the management port by MAC, and records `managementAddressVerified` with a reason that names the mode, the port, its MAC, what it has and what the file expects. It never sends or waits on a Microsoft job: `jobs/ApplyConfiguration` never started on two live runs. `-ApplyThroughAzure` keeps that path as an opt-in, documented as unreliable.
 - **Handoff schema 2.** The handoff carries what Azure generated: the site, the installed `solution.vsrVersion`, and per node the edge and Arc machine names and IDs, `managementAddressVerified`, `managementMode`, `biosRestored` and `networkAdapters[]` (every port as Azure reports it after the install, matched by MAC to the file). It no longer carries `sbe`, `bootstrap`, `timestamps`, `connectivity` or a top-level `arcMachineResourceGroup`.
+- **The plan warns about a static design.** With `networking.management.use_dhcp: false` and `networking.management.provisioning_network` left at its default, the plan says that ZTP assumes DHCP on the management network while the machines are provisioned. Set `provisioning_network` to `static` (and give each node a provisioning port on DHCP), or to `dhcp` to say so. The plan also says whether BMC certificate checking is on (`hardware.bmc.verify_certificate`).
+- **The handoff goes into the file.** `Convert-ZtpHandoffToClusterInputs.ps1 -HandoffPath <ztp-handoff.json> -InfrastructureFile <infrastructure.yml>` writes `nodes[].arc_machine_name` and `deployment.solution_version` into the environment file (the keys the cluster deployment reads) through the toolkit's `AzlInfrastructureEdit` module, with a backup `infrastructure.yml.bak.<time>`; comments and order stay. Without `-InfrastructureFile` it only prints the change; `-WhatIf` previews it.
 - **No SBE in ZTP.** The OS install discovers its own SBE. The vendor SBE package is a requirement that must be ready before OS configuration (see above); only the build-time side-load is optional, and OS configuration does it only when a person asks for it (`hardware.sbe.delivery`). A file with `hardware.sbe` still works; the run ignores it with a `Note:` line.
 
 ## What's next: OS configuration
