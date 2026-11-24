@@ -11,7 +11,7 @@ labels: ["type/bug"]
 
 ## Environment
 
-- Azure Local version (e.g. 2604):
+- Azure Local version (e.g. 2611):
 - Hardware platform (Dell / Lenovo / HPE / other):
 - BMC firmware version (iDRAC / XCC / iLO):
 - PowerShell version:

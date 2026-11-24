@@ -161,13 +161,13 @@ Set-AzKeyVaultSecret -VaultName kv-iic-mgmt-01 -Name maintenance-password -Secre
    ./scripts/simplified-provisioning/Get-ZtpOsImage.ps1 -SubscriptionId 00000000-0000-0000-0000-000000000000 -Location eastus
    ```
 
-   Each entry shows `VsrVersion`, the solution version to pin (for example `12.2610.1004.50`), and `IsPreview`.
+   Each entry shows `VsrVersion`, the solution version to pin (for example `12.2611.1004.9`), and `IsPreview`.
 
 2. Set it in the infrastructure file:
 
    ```yaml
    provisioning:
-     os_version: "12.2610.1004.50"
+     os_version: "12.2611.1004.9"
    ```
 
    | Value | Installs |

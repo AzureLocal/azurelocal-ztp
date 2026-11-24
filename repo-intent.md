@@ -15,6 +15,6 @@ the Azure portal — but drivable from anywhere with BMC network reachability.
 
 ## Status
 
-Microsoft feature: Public preview as of azloc-2604 (East US only). This repo:
+Microsoft feature: Public preview as of azloc-2611 (East US only). This repo:
 active development — CI/CD pipelines are placeholder stubs pending real
 implementation; documentation is mid-completion.

@@ -13,7 +13,7 @@ Thank you for your interest in contributing to **azurelocal-ztp**. This repo aut
 ### Reporting Bugs
 
 Open an issue with:
-- Azure Local version (e.g. 2604)
+- Azure Local version (e.g. 2611)
 - Hardware platform (Dell / Lenovo / HPE)
 - BMC firmware version (iDRAC / XCC / iLO)
 - Which script or stage failed and the full error output
@@ -56,7 +56,7 @@ This project uses [Conventional Commits](https://www.conventionalcommits.org/):
 Examples:
 - `feat(redfish): add HPE iLO 6 virtual media support`
 - `fix(scripts): handle non-200 response from Mount-ZtpVirtualUsb`
-- `docs(guides): align with azloc-2604 RP list`
+- `docs(guides): align with azloc-2611 RP list`
 
 ## Development Guidelines
 
