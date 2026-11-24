@@ -52,7 +52,7 @@
 - **Tests:** Pester 5.9.1, 394 passed, 0 failed (main before this refactor: 419). The removed groups: 18 SBE, 21 Prepare/SBE environment, and a few replaced. PSScriptAnalyzer (Error, Warning): 2 findings, both pre-existing.
 - **Branch:** main (pushed).
 - **Open:**
-  1. The toolkit's ZTP-only template (`config/infrastructure/infrastructure.ztp.example.yml`) isn't published yet, so the docs link 404s until it is. Its local copy still carries `hardware.sbe`, `identity.local_admin` and `networking.ntp_servers`, and says "Prepare".
+  1. The toolkit's ZTP-only template is `config/variables/examples/infrastructure.ztp.example.yml` (published on toolkit main; it no longer carries `hardware.sbe`, `identity.local_admin` or `networking.ntp_servers`).
   2. The flow diagram (`docs/diagrams/ztp-flow.drawio` and its PNG) is being redrawn by the coordinator.
   3. No live timing yet for the run up to the Handoff after Restore.
 

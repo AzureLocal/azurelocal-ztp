@@ -26,24 +26,23 @@ The stages are Resolve, Media, Boot, Bootstrap, Vouchers, Device, Azure, Ready, 
 ZTP is one step of the Azure Local route. Each step starts only when the one before it is done and checked.
 
 ```text
-Hardware discovery -> ZTP -> OS configuration -> PRE-CLUSTER VERIFICATION GATE -> ARM Validate -> ARM Deploy -> day 2
+Planning -> Hardware discovery -> ZTP -> OS configuration -> PRE-CLUSTER VERIFICATION GATE -> ARM Validate -> ARM Deploy -> day 2
 ```
 
 | # | Step | Tool | What it does | Page |
 | --- | --- | --- | --- | --- |
-| 1 | Hardware discovery (optional, Dell only in this phase) | azurelocal-toolkit `Invoke-HardwareDiscovery.ps1` | Reads each machine's BMC over Redfish and fills the serial numbers and port MACs of the infrastructure file | [Discovery](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/scripts/common/idrac-management/README.md) |
+| 0 | Planning (optional) | [Surveyor](https://azurelocal.cloud/azurelocal-surveyor/) sizes the cluster; [Trailwright](https://azurelocal.cloud/azurelocal-trailwright/) turns the sizing handoff and your answers into the `infrastructure.yml` | A draft of the file this repo reads. Check it with the toolkit's `Test-InfrastructureFile.ps1` first: a Trailwright export did not pass that validator on 2026-11-23 (`landing_zone.networks` entries without `address_space`), so fix those entries by hand. A planner cannot know the machines' MAC addresses, so they come from discovery (step 1) or from you | [Trailwright](https://azurelocal.cloud/azurelocal-trailwright/) |
+| 1 | Hardware discovery (optional, Dell only in this phase) | azurelocal-toolkit `Invoke-HardwareDiscovery.ps1`, then `Update-InfrastructureYml-FromDiscovery.ps1` | Reads each machine's BMC over Redfish. The update script previews, and with `-Apply` writes, the serial numbers and port MACs into the entries of the infrastructure file that already name those ports | [Discovery](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/docs/hardware-discovery.md) |
 | 2 | **ZTP** (this repo) | `Invoke-ZtpEnvironment.ps1` | Installs the OS from Azure by simplified machine provisioning and registers every machine with Azure Arc. Ends at the handoff | This page |
 | 3 | OS configuration | azurelocal-toolkit `Invoke-AzureLocalOsConfiguration.ps1` | Static management address by MAC, DHCP off on the other ports, DNS, time, deployment admin, domain join, storage preparation. The SBE package must already be on a share (below); copying it to the nodes only when a person asks | [OS configuration](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/docs/os-configuration-and-arm-deployment.md) |
-| 4 | **Pre-cluster verification gate** | azurelocal-toolkit and the Sonar Verification monitor | A read-only check that every machine is ready for a cluster. Validate should not start until it passes. **Being built; not in main yet** | See the note below |
+| 4 | **Pre-cluster verification gate** | azurelocal-toolkit and the Sonar Verification monitor | A read-only check that every machine is ready for a cluster. The ARM run refuses to go on without a passing, current result of it for the same infrastructure file. **In main** | [Pre-cluster verification](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/docs/pre-cluster-verification.md) |
 | 5 | ARM Validate | azurelocal-toolkit `Invoke-AzureLocalArmDeployment.ps1 -Mode Validate` | Submits the deployment in validate mode and reports each validation step | [ARM deployment guide](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/docs/arm-deployment-guide.md) |
 | 6 | ARM Deploy | the same script, `-Mode Deploy` | Creates the cluster. A separate, explicit run that needs a successful Validate | Same |
 | 7 | Day 2 | the toolkit's post-deployment, operations and update tasks | Logical networks, monitoring, backup, updates | [Part 4: Cluster Deployment](https://azurelocal.cloud/docs/implementation/04-cluster-deployment/) |
 
 [Sonar](https://github.com/AzureLocal/azurelocal-sonar) watches steps 2 to 6 read only; start it beside any of them.
 
-<!-- TODO(gate): the pre-cluster verification gate and Sonar's Verification monitor are being built in the toolkit and Sonar repositories. When they are in main, link the toolkit page of the gate here and name the checks it makes. -->
-
-**Pre-cluster verification gate.** It sits between OS configuration and ARM Validate. It is not part of ZTP and ZTP does not call it. It is being built in azurelocal-toolkit (and the Sonar Verification monitor in azurelocal-sonar) and is not in their main branches yet. Until it is published, check these yourself before Validate: the handoff's `managementAddressVerified` and the OS configuration report's `converged` for every node.
+**Pre-cluster verification gate.** It sits between OS configuration and ARM Validate. It is not part of ZTP and ZTP does not call it. It is in azurelocal-toolkit (`Invoke-AzureLocalPreClusterVerification.ps1`, [the checks it makes](https://github.com/AzureLocal/azurelocal-toolkit/blob/main/docs/pre-cluster-verification.md)), and Sonar's `-Monitor Verification` follows its events. The gate takes the OS configuration report as input (`-OsConfigurationReport`), so run OS configuration first; the handoff's `managementAddressVerified` is what tells you ZTP left each management port at the address the file gives.
 
 **The SBE package is a requirement, and it comes before OS configuration.** Download your hardware vendor's Solution Builder Extension (SBE) package for your model and the Azure Local version you deploy. It is a requirement: you need it to update the cluster, and the toolkit reads it from a share and checks it before the cluster is created. The SBE must be ready before OS configuration and ARM Validate and Deploy; ZTP does not read it. To install it during the build, switch on the side-load in the file (`hardware.sbe.delivery`); it is off by default and the toolkit never does it unasked.
 
@@ -95,7 +94,9 @@ cd azurelocal-ztp
 #    ZTP only: infrastructure.ztp.example.yml. ZTP, then OS configuration and deployment: infrastructure.example.yml.
 Copy-Item <azurelocal-toolkit>\config\variables\examples\infrastructure.ztp.example.yml D:\ztp\infrastructure.yml
 
-# 2. Plan: changes nothing in Azure, on the BMCs or on the nodes
+# 2. Plan: changes nothing in Azure, on the BMCs or on the nodes. It still needs this Az sign-in (it reads the
+#    subscription and the Azure Local resource provider), and with provisioning.simplified.media_share.host_adapter set
+#    it reads that adapter's address on this machine; set media_share.host to plan on a machine without the adapter.
 Connect-AzAccount -Tenant <tenant-id>
 ./scripts/simplified-provisioning/Invoke-ZtpEnvironment.ps1 -InfrastructureFile D:\ztp\infrastructure.yml
 

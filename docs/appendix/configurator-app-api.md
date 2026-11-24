@@ -824,7 +824,7 @@ Invoke-RestMethod -Uri "$base/GetArcZeroDaySolutionUpdateConfig" -Method Post -C
 - **Works in:** not shown. **Changes the machine?** **Yes** (installs software; may restart it). **Evidence:** From the service's own metadata; **not called**.
 
 ```powershell
-$body = @{ EnableUpdate = $true; TargetSolutionVersion = '12.2610.1.1'; Environment = 'Production' } | ConvertTo-Json
+$body = @{ EnableUpdate = $true; TargetSolutionVersion = '12.2611.1004.9'; Environment = 'Production' } | ConvertTo-Json
 Invoke-RestMethod -Uri "$base/StartArcZeroDaySolutionUpdate" -Method Post -ContentType 'application/json' -Body $body -Authentication Basic -Credential $cred -SkipCertificateCheck
 ```
 
@@ -852,7 +852,7 @@ These load an OS image or a solution extension (a "SBE") onto the machine by han
 - **Changes the machine?** **Yes** (clears the upload directory, stores the sideload plan).
 
 ```powershell
-$body = @{ SideloadItems = @(@{ Type = 'OsImage'; FileNames = @('os-image.zip') }); SolutionVersion = '12.2610.1.1' } | ConvertTo-Json -Depth 5
+$body = @{ SideloadItems = @(@{ Type = 'OsImage'; FileNames = @('os-image.zip') }); SolutionVersion = '12.2611.1004.9' } | ConvertTo-Json -Depth 5
 Invoke-RestMethod -Uri "$base/EnablePackageSideload" -Method Post -ContentType 'application/json' -Body $body -Authentication Basic -Credential $cred -SkipCertificateCheck
 ```
 
@@ -873,7 +873,7 @@ Invoke-RestMethod -Uri "$base/UploadFile?fileName=os-image.zip" -Method Post -Co
 - **Changes the machine?** **Yes** (marks the sideload ready for the install to use).
 
 ```powershell
-$body = @{ SideloadItems = @(@{ Type = 'OsImage'; FileNames = @('os-image.zip') }); SolutionVersion = '12.2610.1.1' } | ConvertTo-Json -Depth 5
+$body = @{ SideloadItems = @(@{ Type = 'OsImage'; FileNames = @('os-image.zip') }); SolutionVersion = '12.2611.1004.9' } | ConvertTo-Json -Depth 5
 Invoke-RestMethod -Uri "$base/CompletePackageSideload" -Method Post -ContentType 'application/json' -Body $body -Authentication Basic -Credential $cred -SkipCertificateCheck
 ```
 

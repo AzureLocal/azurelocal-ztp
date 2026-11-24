@@ -139,7 +139,7 @@ Levels are `Info`, `Warning` and `Error`. Vouchers are never logged, only their 
   "subscriptionId": "00000000-0000-0000-0000-000000000000",
   "resourceGroup": "rg-iic-azl-01",
   "site": { "resourceId": "/subscriptions/.../providers/Microsoft.Edge/sites/iic-site-01", "name": "iic-site-01" },
-  "solution": { "vsrVersion": "12.2609.1003.7" },
+  "solution": { "vsrVersion": "12.2611.1004.9" },
   "nodes": [ {
     "name": "node-01", "serial": "IICSN0001",
     "edgeMachineName": "node-01", "edgeMachineId": "/subscriptions/.../edgeMachines/node-01",
@@ -177,7 +177,7 @@ nodes:
   - name: node-02
     arc_machine_name: node-02
 deployment:
-  solution_version: 12.2609.1003.7
+  solution_version: 12.2611.1004.9
 ```
 
 Without `-InfrastructureFile` it prints this patch only. With `-InfrastructureFile ./infrastructure.yml` it writes the values into the file through the toolkit's `AzlInfrastructureEdit` module (`$env:AZL_TOOLKIT_ROOT`, else a clone next to this repository): only those values change, comments and order stay, a backup `infrastructure.yml.bak.<time>` is written first, a file without a `deployment` block gets one, and nothing is written when a node of the handoff is not in the file (`-WhatIf` previews). The ARM deployment plan then reads `nodes[].arc_machine_name` from the file.

@@ -171,7 +171,7 @@ A re-run does not re-claim a machine that already has an edge machine: the scrip
     },
     "ownershipVoucherDetails": { "ownerKeyType": "MicrosoftManaged", "ownershipVoucher": "<base64 of the voucher .pem, in memory only>" },
     "provisioningDetails": {
-      "osProfile": { "osType": "HCI", "vsrVersion": "12.2609.1003.7" },
+      "osProfile": { "osType": "HCI", "vsrVersion": "12.2611.1004.9" },
       "userDetails": [ { "userName": "administrator", "secretType": "KeyVault",
         "secretLocation": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-iic-sec-01/providers/Microsoft.KeyVault/vaults/kv-iic-mgmt-01/secrets/provisioning-admin" } ]
     }
@@ -235,7 +235,7 @@ Other documented properties ZTP does not set or read: `machineState` values `Cre
   "properties": {
     "jobType": "ProvisionOs",
     "provisioningRequest": {
-      "osProfile": { "osType": "HCI", "vsrVersion": "12.2609.1003.7" },
+      "osProfile": { "osType": "HCI", "vsrVersion": "12.2611.1004.9" },
       "userDetails": [ { "userName": "administrator", "secretType": "KeyVault",
         "secretLocation": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-iic-sec-01/providers/Microsoft.KeyVault/vaults/kv-iic-mgmt-01/secrets/provisioning-admin" } ],
       "target": "HCI"
