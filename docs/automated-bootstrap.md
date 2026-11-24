@@ -168,17 +168,21 @@ Schema 1 also had `sbe`, `bootstrap`, `timestamps`, `connectivity` and a top-lev
 
 A node whose management address isn't verified doesn't stop the handoff. `New-ZtpHandoff.ps1` warns `Management address not verified on: <node> (<reason>). OS configuration must fix it before Validate.`
 
-`Convert-ZtpHandoffToClusterInputs.ps1` reads schema 2 and schema 1 and turns the handoff into the block a cluster deployment environment file reads:
+`Convert-ZtpHandoffToClusterInputs.ps1` reads schema 2 and schema 1 and turns the handoff into the two values the cluster deployment reads from `infrastructure.yml`, `nodes[].arc_machine_name` and `deployment.solution_version`:
 
 ```yaml
-arc_machine_names:
-  node-01: node-01
-  node-02: node-02
-release:
-  azure_local_version: 12.2609.1003.7
+nodes:
+  - name: node-01
+    arc_machine_name: node-01
+  - name: node-02
+    arc_machine_name: node-02
+deployment:
+  solution_version: 12.2609.1003.7
 ```
 
-The Arc machine names are the ones Azure reports on the edge machine after Ready. On the live runs the service named them `<device-id>-1`, not after the host; see [Arc machine names](troubleshooting.md#arc-machine-names). `-Only` takes `arc_machine_names` and `release`. Only `arc_machine_names` is required by the cluster deployment inputs. A schema 1 handoff's `sbe` block is ignored. Check `release.*` against your environment schema before you paste it. The handoff holds Azure resource IDs; keep it out of source control.
+Without `-InfrastructureFile` it prints this patch only. With `-InfrastructureFile ./infrastructure.yml` it writes the values into the file through the toolkit's `AzlInfrastructureEdit` module (`$env:AZL_TOOLKIT_ROOT`, else a clone next to this repository): only those values change, comments and order stay, a backup `infrastructure.yml.bak.<time>` is written first, a file without a `deployment` block gets one, and nothing is written when a node of the handoff is not in the file (`-WhatIf` previews). The ARM deployment plan then reads `nodes[].arc_machine_name` from the file.
+
+The Arc machine names are the ones Azure reports on the edge machine after Ready. On the live runs the service named them `<device-id>-1`, not after the host; see [Arc machine names](troubleshooting.md#arc-machine-names). `-Only` takes `nodes` and `deployment`. A schema 1 handoff's `sbe` block is ignored. The handoff holds Azure resource IDs; keep it out of source control.
 
 ## Known gaps
 

@@ -265,7 +265,7 @@ Every key ZTP reads, in schema 5 paths (`ConvertFrom-ZtpInfrastructureV5`, `Test
 | `provisioning.simplified.maintenance_password` | Optional | `keyvault://kv-iic-mgmt-01/maintenance-password` | A secret you create; default `Password1` without it | Media (the hash in each image), Device (sign-in) |
 | `provisioning.simplified.media_share.name` | Required | `ztp-virtual-usb` | You choose it: letters, digits and hyphens | Boot |
 | `provisioning.simplified.media_share.host` | Required, or `host_adapter` | `198.51.100.5` | The management host's address as the BMCs reach it | Boot |
-| `provisioning.simplified.media_share.host_adapter` | Required, or `host` | `VPN` | `Get-NetAdapter`: the adapter whose address the BMCs reach. Wins over `host`. | Boot |
+| `provisioning.simplified.media_share.host_adapter` | Required, or `host` | `VPN` | `Get-NetAdapter`: the adapter whose address the BMCs reach. With `-Execute` it wins over `host`; a plan reads no adapter and uses `host`, or says the address is resolved on the management host. | Boot |
 | `provisioning.simplified.media_path` | Optional | `D:\Data\azl-ztp\iic-site-01\media` | A folder outside any git repository | Every stage |
 | `provisioning.simplified.evidence_path` | Optional | `D:\Data\azl-ztp\iic-site-01\evidence` | A folder outside any git repository | Every stage |
 | `networking.management.subnet` | Required | `192.0.2.0/24` | Your IP plan | Device (mask, default scan range), Azure (`site` method), Network |

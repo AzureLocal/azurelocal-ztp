@@ -427,7 +427,7 @@ The causes, and what's known about them, are in [Troubleshooting](troubleshootin
 The run ends after the Handoff with two console lines:
 
 ```text
-[12:00:00Z] [ztp] ZTP is done: the machines are Provisioned and Arc-connected, with the management address on the management port. <handoff> has the Arc machine names and IDs; <cluster inputs> has arc_machine_names for the cluster deployment environment file.
+[12:00:00Z] [ztp] ZTP is done: the machines are Provisioned and Arc-connected, with the management address on the management port. <handoff> has the Arc machine names and IDs; <cluster inputs> is the infrastructure.yml patch (nodes[].arc_machine_name, deployment.solution_version); apply it with Convert-ZtpHandoffToClusterInputs.ps1 -InfrastructureFile.
 [12:00:00Z] [ztp] Next: OS configuration (OEM drivers, the SBE in C:\SBE, DHCP off on the other ports, DNS and time, the deployment admin), then Validate and Deploy. ZTP does none of these. See https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/. Hardware must not be clustered by this repository.
 ```
 

@@ -8,6 +8,11 @@
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock and stub signatures mirror the real commands; the bodies read only some parameters.')]
 param()
 
+# The toolkit's AzlInfrastructureEdit module applies the handoff to an infrastructure file: $env:AZL_TOOLKIT_ROOT, else
+# azurelocal-toolkit next to this repository. Without it the tests that apply the patch are skipped.
+$ztpHToolkit = if ($env:AZL_TOOLKIT_ROOT) { $env:AZL_TOOLKIT_ROOT } else { Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) '..\azurelocal-toolkit' }
+$ztpHHaveEdit = Test-Path -LiteralPath (Join-Path $ztpHToolkit 'scripts\common\infrastructure\AzlInfrastructureEdit.psm1')
+
 BeforeAll {
     $global:ztpH_scripts = Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'scripts/simplified-provisioning'
     $global:ztpH_root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
@@ -190,21 +195,22 @@ Describe 'Convert-ZtpHandoffToClusterInputs.ps1' {
             nodes = @(@{ name = 'node-01'; arcMachineName = '00000000-0000-0000-0000-000000000000-1' }, @{ name = 'node-02'; arcMachineName = '11111111-1111-1111-1111-111111111111-1' }) } | ConvertTo-Json -Depth 6 | Set-Content $global:ztpH_handoffV1
         $global:ztpH_convert = Join-Path $global:ztpH_scripts 'Convert-ZtpHandoffToClusterInputs.ps1'
     }
-    It 'emits the arc_machine_names map (host name -> Arc machine name) and the installed solution version as YAML, and no SBE' {
+    It 'emits the infrastructure.yml patch (nodes[].arc_machine_name, deployment.solution_version) as YAML, and no SBE' {
         $y = & $global:ztpH_convert -HandoffPath $global:ztpH_handoff
-        $y | Should -Match "(?m)^arc_machine_names:\r?\n  node-01: '?00000000-0000-0000-0000-000000000000-1'?\r?\n  node-02: '?11111111-1111-1111-1111-111111111111-1'?"
-        $y | Should -Match "(?m)^release:\r?\n  azure_local_version: '?12.2609.1003.7'?$"
+        $y | Should -Match "(?m)^nodes:\r?\n  - name: node-01\r?\n    arc_machine_name: '?00000000-0000-0000-0000-000000000000-1'?\r?\n  - name: node-02\r?\n    arc_machine_name: '?11111111-1111-1111-1111-111111111111-1'?"
+        $y | Should -Match "(?m)^deployment:\r?\n  solution_version: '?12.2609.1003.7'?$"
         $y | Should -Not -Match '(?m)^sbe'
+        $y | Should -Not -Match 'arc_machine_names|azure_local_version' -Because 'nothing reads those keys'
     }
     It 'reads a schema 1 handoff too, and ignores its sbe block' {
         $y = & $global:ztpH_convert -HandoffPath $global:ztpH_handoffV1
-        $y | Should -Match '(?m)^arc_machine_names:'
+        $y | Should -Match '(?m)^nodes:'
         $y | Should -Not -Match 'sbe'
     }
-    It 'emits JSON that the cluster deployment inputs read (arc_machine_names is a map of strings)' {
-        $j = & $global:ztpH_convert -HandoffPath $global:ztpH_handoff -Format Json -Only arc_machine_names | ConvertFrom-Json
-        $j.arc_machine_names.'node-02' | Should -Be '11111111-1111-1111-1111-111111111111-1'
-        $j.PSObject.Properties.Name | Should -Be @('arc_machine_names')
+    It 'emits JSON with the same keys as the file' {
+        $j = & $global:ztpH_convert -HandoffPath $global:ztpH_handoff -Format Json -Only nodes | ConvertFrom-Json
+        $j.nodes[1].arc_machine_name | Should -Be '11111111-1111-1111-1111-111111111111-1'
+        $j.PSObject.Properties.Name | Should -Be @('nodes')
     }
     It 'writes -OutputPath' {
         $out = Join-Path $TestDrive 'cluster/inputs.yaml'
@@ -220,9 +226,58 @@ Describe 'Convert-ZtpHandoffToClusterInputs.ps1' {
         { & $global:ztpH_convert -HandoffPath $p3 } | Should -Throw '*Unsupported handoff schemaVersion*'
         { & $global:ztpH_convert -HandoffPath (Join-Path $TestDrive 'missing.json') } | Should -Throw '*not found*'
     }
-    It 'matches the arc_machine_names rule of the cluster deployment: a missing node falls back to its host name, so every node is listed' {
-        $y = & $global:ztpH_convert -HandoffPath $global:ztpH_handoff -Only arc_machine_names
-        @($y -split "`n" | Where-Object { $_ -match '^  ' }).Count | Should -Be 2
+    It 'lists every node of the handoff, so none falls back to its host name' {
+        $y = & $global:ztpH_convert -HandoffPath $global:ztpH_handoff -Only nodes
+        @($y -split "`n" | Where-Object { $_ -match '^  - name:' }).Count | Should -Be 2
+    }
+
+    Context 'with -InfrastructureFile (the toolkit''s AzlInfrastructureEdit applies the patch)' {
+        BeforeAll {
+            $script:savedToolkit = $env:AZL_TOOLKIT_ROOT
+            $script:toolkit = if ($env:AZL_TOOLKIT_ROOT) { $env:AZL_TOOLKIT_ROOT } else { Join-Path $global:ztpH_root '..\azurelocal-toolkit' }
+            $script:ztpLib = Join-Path $global:ztpH_scripts 'ZtpEnvironment.Common.ps1'
+            function script:New-PatchTarget {
+                param([string]$Name, [switch]$NoDeployment)
+                $path = Join-Path $TestDrive "$Name.yml"
+                $text = (Get-Content -LiteralPath (Join-Path $global:ztpH_fixtures 'infrastructure.v5.example.yml') -Raw).TrimEnd()
+                if (-not $NoDeployment) { $text += "`n`ndeployment:`n  solution_version: `"12.2606.1002.9`"`n" }
+                [IO.File]::WriteAllText($path, $text, [Text.UTF8Encoding]::new($false))
+                $path
+            }
+        }
+        AfterAll { $env:AZL_TOOLKIT_ROOT = $script:savedToolkit }
+        BeforeEach { $env:AZL_TOOLKIT_ROOT = $script:toolkit }
+
+        It 'writes the Arc machine names and the solution version into the file, keeps a backup, and the reader then has them' -Skip:(-not $ztpHHaveEdit) {
+            $file = New-PatchTarget -Name 'apply'
+            $null = & $global:ztpH_convert -HandoffPath $global:ztpH_handoff -InfrastructureFile $file -InformationAction SilentlyContinue
+            $data = ConvertFrom-Yaml (Get-Content -LiteralPath $file -Raw) -Ordered
+            @($data.nodes | ForEach-Object { $_.arc_machine_name }) | Should -Be @('00000000-0000-0000-0000-000000000000-1', '11111111-1111-1111-1111-111111111111-1')
+            $data.deployment.solution_version | Should -Be '12.2609.1003.7'
+            @(Get-ChildItem -LiteralPath $TestDrive -Filter 'apply.yml.bak.*').Count | Should -Be 1
+            $env:AZL_TOOLKIT_ROOT = Join-Path $TestDrive 'no-toolkit-here'
+            . $script:ztpLib
+            $e = Read-ZtpInfrastructure -Path $file
+            (Get-ZtpEnvValue -Environment $e.cluster_nodes[1] -Path 'arc_machine_name') | Should -Be '11111111-1111-1111-1111-111111111111-1'
+        }
+        It 'shows the change and writes nothing with -WhatIf' -Skip:(-not $ztpHHaveEdit) {
+            $file = New-PatchTarget -Name 'whatif'
+            $before = Get-Content -LiteralPath $file -Raw
+            $null = & $global:ztpH_convert -HandoffPath $global:ztpH_handoff -InfrastructureFile $file -WhatIf
+            Get-Content -LiteralPath $file -Raw | Should -Be $before
+        }
+        It 'adds the deployment block when the file has none' -Skip:(-not $ztpHHaveEdit) {
+            $file = New-PatchTarget -Name 'nodeployment' -NoDeployment
+            $null = & $global:ztpH_convert -HandoffPath $global:ztpH_handoff -InfrastructureFile $file -InformationAction SilentlyContinue
+            (ConvertFrom-Yaml (Get-Content -LiteralPath $file -Raw) -Ordered).deployment.solution_version | Should -Be '12.2609.1003.7'
+        }
+        It 'changes nothing when the file lacks a node of the handoff, and says which' -Skip:(-not $ztpHHaveEdit) {
+            $other = New-PatchTarget -Name 'othernode'
+            (Get-Content -LiteralPath $other -Raw).Replace('name: "node-02"', 'name: "node-09"') | Set-Content -LiteralPath $other
+            $before = Get-Content -LiteralPath $other -Raw
+            { & $global:ztpH_convert -HandoffPath $global:ztpH_handoff -InfrastructureFile $other } | Should -Throw '*nodes[[]node-02[]].arc_machine_name*'
+            Get-Content -LiteralPath $other -Raw | Should -Be $before
+        }
     }
 }
 

@@ -133,9 +133,15 @@ $state = Join-Path $media 'ztp-state'
 foreach ($dir in $cfgDir, $bicepDir, $state, (Join-Path $media 'vouchers')) { New-Item -ItemType Directory -Force $dir | Out-Null }
 
 # The address the BMCs reach: the adapter when provisioning.simplified.media_share.host_adapter names one, otherwise .host.
+# A plan reads no adapter of this computer, so it can run anywhere: it uses .host when the file gives it, and otherwise says
+# the address is read from the adapter on the management host when -Execute runs.
 $shareHost = if ($ztp.Contains('share_host')) { [string]$ztp.share_host } else { '' }
-if ($ztp.Contains('share_host_adapter') -and $ztp.share_host_adapter) {
-    $shareHost = (Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias ([string]$ztp.share_host_adapter) -ErrorAction Stop | Select-Object -First 1).IPAddress
+$shareAdapter = if ($ztp.Contains('share_host_adapter')) { [string]$ztp.share_host_adapter } else { '' }
+if ($shareAdapter -and $Execute) {
+    $shareHost = (Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias $shareAdapter -ErrorAction Stop | Select-Object -First 1).IPAddress
+}
+elseif ($shareAdapter -and -not $shareHost) {
+    $shareHost = "<resolved on the management host from adapter '$shareAdapter'>"
 }
 if (-not $shareHost) { throw 'Set provisioning.simplified.media_share.host or .host_adapter in the infrastructure file.' }
 Write-Output "Share host: $shareHost"
@@ -213,6 +219,8 @@ if ($restorePlan) { Write-Output "BIOS set back by the Restore stage after Netwo
 foreach ($line in @(Get-ZtpDerivedBiosPlan -Environment $env_ -Node $Node)) { Write-Output $line }
 $withoutMaintenance = @($nodeList | Where-Object { $_.name -in $Node -and -not (Get-ZtpEnvValue -Environment $_ -Path 'maintenance_address') } | ForEach-Object { [string]$_.name })
 if ($withoutMaintenance) { Write-Output "Device stage (static address in the maintenance environment): no maintenance address for $($withoutMaintenance -join ', '); it scans $(if ($scanText) { $scanText } else { "the management subnet $([string]$env_.network_intents.management.subnet)" }) for TCP 20001 and finds each node by its management MAC." }
+$verifyBmc = ConvertTo-ZtpBoolean (& $setting 'ztp.verify_bmc_certificate' $false) 'hardware.bmc.verify_certificate'
+Write-Output $(if ($verifyBmc) { 'BMC certificate checking: on (hardware.bmc.verify_certificate is true).' } else { 'BMC certificate checking: off, so a BMC with a self-signed certificate is accepted. Set hardware.bmc.verify_certificate to true in the infrastructure file to check the certificate.' })
 Write-Output "Outbound path: $($outbound.Path); site connectivity $($outbound.ConnectivityType)$(if ($outbound.ProxyUrl) { ". The Device stage sets the proxy $($outbound.ProxyUrl) and the bypass list ($(@($outbound.ProxyBypass) -join ', ')) in each maintenance environment" })."
 $staticMethod = Get-ZtpStaticMethod -Environment $env_
 Write-Output "Static management addresses set by: $(if ($staticMethod -eq 'device') { 'the Device stage, by MAC, before the claim (site network Automatic, no Manual adapter in the claim)' } else { 'the OS install, from the site''s Manual setting and the claim''s Manual adapter (static_method site)' }); the Network stage checks them after the install."
@@ -220,12 +228,18 @@ Write-Output "Static management addresses set by: $(if ($staticMethod -eq 'devic
 # with -Execute only.
 $edgeReference = [string](Get-ZtpEnvValue -Environment $env_ -Path 'ztp.maintenance_password_secret')
 
-if ($UseManagedIdentity) {
-    Connect-AzAccount -Identity -WarningAction SilentlyContinue | Out-Null
+# A plan signs in nowhere and asks Azure nothing (no Az context, no directory lookup): the resource provider object ID it
+# shows is the file's, or a note that -Execute looks it up.
+if ($Execute) {
+    if ($UseManagedIdentity) {
+        Connect-AzAccount -Identity -WarningAction SilentlyContinue | Out-Null
+    }
+    Set-AzContext -Tenant $tenant -Subscription $clusterSub -Scope Process -WarningAction SilentlyContinue | Out-Null
 }
-Set-AzContext -Tenant $tenant -Subscription $clusterSub -Scope Process -WarningAction SilentlyContinue | Out-Null
 # From the infrastructure file, because a managed identity has no directory read rights by default.
-$rpObjectId = if ($ztp.Contains('azl_rp_object_id')) { [string]$ztp.azl_rp_object_id } else { (Get-AzADServicePrincipal -ApplicationId '1412d89f-b8a8-4111-b4fd-e82905cbd85d').Id }
+$rpObjectId = if ($ztp.Contains('azl_rp_object_id')) { [string]$ztp.azl_rp_object_id }
+elseif ($Execute) { (Get-AzADServicePrincipal -ApplicationId '1412d89f-b8a8-4111-b4fd-e82905cbd85d').Id }
+else { '<looked up in the tenant when -Execute runs; or set azure.hci_resource_provider_object_id>' }
 if (-not $rpObjectId) { throw 'Set azure.hci_resource_provider_object_id: the Azure Local resource provider object ID in this tenant.' }
 
 $tags = @{}

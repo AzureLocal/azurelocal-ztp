@@ -595,12 +595,50 @@ param($params)
         { & $script:envScript -InfrastructureFile $bad -MediaPath $script:media -ValidatorPath $fail } | Should -Throw '*provisioning.simplified.media_share.name is required*'
     }
 
-    It 'finds the share host from the named adapter, and asks for the resource provider ID only when the file does not give it' {
-        $infra = New-TestInfrastructureV5 -Name 'env-adapter' -Edit { param($d) $d.provisioning.simplified.media_share.Remove('host'); $d.provisioning.simplified.media_share['host_adapter'] = 'Ethernet 2'; $d.azure.Remove('hci_resource_provider_object_id') }
+    It 'plans with no adapter of this computer and no Az sign-in: the share host and the resource provider ID are named, not looked up' {
+        $infra = New-TestInfrastructureV5 -Name 'env-adapter-plan' -Edit { param($d) $d.provisioning.simplified.media_share.Remove('host'); $d.provisioning.simplified.media_share['host_adapter'] = 'Ethernet 2'; $d.azure.Remove('hci_resource_provider_object_id') }
+        $null = & $script:envScript -InfrastructureFile $infra -MediaPath $script:media -UseManagedIdentity *>&1
+        $cfg = Get-Content -LiteralPath (Join-Path $script:envRoot 'config/simplified-provisioning/ztp-provisioning.json') -Raw | ConvertFrom-Json
+        $cfg.ShareHost | Should -BeLike "*resolved on the management host*'Ethernet 2'*"
+        $bicep = Get-Content -LiteralPath (Join-Path $script:envRoot 'scripts/simplified-provisioning/bicep/main.parameters.json') -Raw | ConvertFrom-Json
+        $bicep.parameters.azl_rp_app_object_id.value | Should -BeLike '*looked up in the tenant when -Execute runs*'
+        $global:ztpE_calls.Count | Should -Be 0 -Because 'a plan makes no Az sign-in, context or directory call (no Connect-AzAccount, Set-AzContext, Get-AzADServicePrincipal)'
+    }
+
+    It 'plans with the file''s media_share.host when the adapter is also named' {
+        $infra = New-TestInfrastructureV5 -Name 'env-adapter-host-plan' -Edit { param($d) $d.provisioning.simplified.media_share['host_adapter'] = 'Ethernet 2' }
         $null = & $script:envScript -InfrastructureFile $infra -MediaPath $script:media *>&1
+        (Get-Content -LiteralPath (Join-Path $script:envRoot 'config/simplified-provisioning/ztp-provisioning.json') -Raw | ConvertFrom-Json).ShareHost | Should -Be '192.0.2.10'
+    }
+
+    It 'with -Execute finds the share host from the named adapter, and asks for the resource provider ID only when the file does not give it' {
+        $infra = New-TestInfrastructureV5 -Name 'env-adapter' -Edit { param($d) $d.provisioning.simplified.media_share.Remove('host'); $d.provisioning.simplified.media_share['host_adapter'] = 'Ethernet 2'; $d.azure.Remove('hci_resource_provider_object_id') }
+        $null = & $script:envScript -InfrastructureFile $infra -MediaPath $script:media -Node node-01 -Execute *>&1
         $cfg = Get-Content -LiteralPath (Join-Path $script:envRoot 'config/simplified-provisioning/ztp-provisioning.json') -Raw | ConvertFrom-Json
         $cfg.ShareHost | Should -Be '192.0.2.77'
         $global:ztpE_calls | Should -Contain 'Get-AzADServicePrincipal'
+        $global:ztpE_calls | Should -Contain 'Set-AzContext 00000000-0000-0000-0000-000000000000'
+    }
+
+    It 'says in the plan that BMC certificate checking is off and which key turns it on, and says so when it is on' {
+        $infra = New-TestInfrastructureV5 -Name 'env-cert-off'
+        $text = (& $script:envScript -InfrastructureFile $infra -MediaPath $script:media *>&1 | ForEach-Object { "$_" }) -join "`n"
+        $text | Should -BeLike '*BMC certificate checking: off*hardware.bmc.verify_certificate*'
+        $on = New-TestInfrastructureV5 -Name 'env-cert-on' -Edit { param($d) $d.hardware.bmc['verify_certificate'] = $true }
+        $text = (& $script:envScript -InfrastructureFile $on -MediaPath $script:media *>&1 | ForEach-Object { "$_" }) -join "`n"
+        $text | Should -BeLike '*BMC certificate checking: on*'
+    }
+
+    It 'warns in the plan when the design is static (use_dhcp false) and provisioning_network is at its default' {
+        $static = New-TestInfrastructureV5 -Name 'env-static-default' -Edit { param($d) $d.networking.management['use_dhcp'] = $false; $d.networking.management.Remove('provisioning_network') }
+        $text = (& $script:envScript -InfrastructureFile $static -MediaPath $script:media *>&1 | ForEach-Object { "$_" }) -join "`n"
+        $text | Should -BeLike '*networking.management.use_dhcp is false*provisioning_network is not set*'
+        $set = New-TestInfrastructureV5 -Name 'env-static-set' -Edit { param($d) $d.networking.management['use_dhcp'] = $false; $d.networking.management['provisioning_network'] = 'dhcp' }
+        $text = (& $script:envScript -InfrastructureFile $set -MediaPath $script:media *>&1 | ForEach-Object { "$_" }) -join "`n"
+        $text | Should -Not -BeLike '*networking.management.use_dhcp is false*'
+        $dhcp = New-TestInfrastructureV5 -Name 'env-dhcp-default' -Edit { param($d) $d.networking.management['use_dhcp'] = $true; $d.networking.management.Remove('provisioning_network') }
+        $text = (& $script:envScript -InfrastructureFile $dhcp -MediaPath $script:media *>&1 | ForEach-Object { "$_" }) -join "`n"
+        $text | Should -Not -BeLike '*networking.management.use_dhcp is false*'
     }
 
     It 'with -Execute creates the resource group, reads the BMC login through the toolkit''s resolver, and runs the stages for the nodes; nothing runs after Handoff' {
@@ -1091,18 +1129,45 @@ Describe 'Every ZTP setting is a key of the master schema (schema 5.4)' {
         $env:AZL_TOOLKIT_ROOT = Join-Path $TestDrive 'no-toolkit-here'
         $script:toolkitRoot = if ($script:savedToolkitRoot54b) { $script:savedToolkitRoot54b } else { Join-Path $script:repoRoot '..\azurelocal-toolkit' }
         $script:toolkitSchema = Join-Path $script:toolkitRoot 'config\variables\schema\infrastructure.schema.json'
+        $script:ztpSchema = Join-Path $script:toolkitRoot 'config\variables\schema\tools\ztp.schema.json'
+        $script:read = { param([string]$Path) Read-ZtpInfrastructure -Path $Path }
+        function Get-ZtpSchemaKey {
+            # The keys the registry says ztp reads (the generated per-tool schema is the used_by ztp cut): the settings under
+            # provisioning.simplified and the BMC settings under hardware.bmc, as schema 5 paths.
+            param([Parameter(Mandatory)][string]$SchemaPath)
+            $s = Get-Content -LiteralPath $SchemaPath -Raw | ConvertFrom-Json -AsHashtable -Depth 100
+            $simplified = $s.properties.provisioning.properties.simplified.properties
+            $bmc = $s.properties.hardware.properties.bmc.properties
+            @($simplified.Keys | ForEach-Object { "provisioning.simplified.$_" }) + @($bmc.Keys | ForEach-Object { "hardware.bmc.$_" })
+        }
+        function Get-ZtpUnreadSchemaKey {
+            # The keys in the schema that the reader (ConvertFrom-ZtpInfrastructureV5) never names: a key used_by ztp that the
+            # reader would silently drop. The reader names a key as a quoted string, in a list or an index.
+            param([Parameter(Mandatory)][string]$SchemaPath)
+            $source = Get-Content -LiteralPath (Join-Path $script:scripts 'ZtpEnvironment.Common.ps1') -Raw
+            Get-ZtpSchemaKey -SchemaPath $SchemaPath | Where-Object { $source -notmatch "['""]$([regex]::Escape(($_ -split '\.')[-1]))['""]" -and -not $source.Contains($_) }
+        }
         function Format-Bios { param($Bios) @($Bios.Keys | ForEach-Object { "$_=$($Bios[$_])" }) -join ',' }
         function Get-AssertText { param([string]$Path) try { Assert-ZtpEnvironment -Environment (Read-ZtpInfrastructure -Path $Path) -Source 'infra.yml' -InformationAction SilentlyContinue; '' } catch { $_.Exception.Message } }
-        $script:newKeys = @(
-            'isolate_san_adapters', 'enable_embedded_nics', 'create_resource_group', 'configuration_name', 'managed_resource_group_name', 'apply_site_settings', 'use_key_vault_configuration',
-            'assign_provisioning_roles', 'assign_hci_rp_role', 'network_kind', 'ntp', 'site_mode', 'deployment_name', 'skip_azure_check', 'include_preview', 'max_train',
-            'retry_provision_os', 'usb_image', 'maintenance_environment', 'timeouts')
     }
 
-    It 'has a schema key (toolkit 5.4) for every setting the reader copies' -Skip:(-not $ztpHaveToolkit) {
+    It 'reads every provisioning.simplified and hardware.bmc key the registry lists for ztp (the set comes from the ZTP schema, not from this test)' -Skip:(-not $ztpHaveToolkit) {
+        $keys = @(Get-ZtpSchemaKey -SchemaPath $script:ztpSchema)
+        $keys.Count | Should -BeGreaterThan 20 -Because 'the ZTP schema lists the provisioning.simplified settings'
+        @(Get-ZtpUnreadSchemaKey -SchemaPath $script:ztpSchema) | Should -BeNullOrEmpty -Because 'a key used_by ztp that ConvertFrom-ZtpInfrastructureV5 does not name is dropped without a message'
+    }
+
+    It 'fails when a key is added for ztp to a scratch copy of the registry schema and the reader does not know it' -Skip:(-not $ztpHaveToolkit) {
+        $scratch = Join-Path $TestDrive 'ztp.schema.scratch.json'
+        $schema = Get-Content -LiteralPath $script:ztpSchema -Raw | ConvertFrom-Json -AsHashtable -Depth 100
+        $schema.properties.provisioning.properties.simplified.properties['new_setting_the_reader_lacks'] = @{ type = 'string' }
+        $schema | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $scratch
+        @(Get-ZtpUnreadSchemaKey -SchemaPath $scratch) | Should -Be @('provisioning.simplified.new_setting_the_reader_lacks')
+    }
+
+    It 'has a schema key (toolkit 5.4) for the nested settings the reader copies' -Skip:(-not $ztpHaveToolkit) {
         $schema = Get-Content -LiteralPath $script:toolkitSchema -Raw | ConvertFrom-Json -AsHashtable -Depth 100
         $simplified = $schema.properties.provisioning.properties.simplified.properties
-        foreach ($k in $script:newKeys) { $simplified.Keys | Should -Contain $k -Because "provisioning.simplified.$k is read by ConvertFrom-ZtpInfrastructureV5" }
         foreach ($k in 'account_name', 'keep') { $simplified.media_share.properties.Keys | Should -Contain $k }
         $schema.'$defs'.bmc_credentials.properties.Keys | Should -Contain 'rfs_write_attribute'
         $schema.'$defs'.bmc_credentials.properties.Keys | Should -Contain 'verify_certificate'

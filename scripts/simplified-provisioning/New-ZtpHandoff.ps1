@@ -25,8 +25,8 @@ only what Azure generated during ZTP, never a value the infrastructure file alre
 The bootstrap ISO and timestamps aren't here: they are in the run's state file, stage evidence and event log. The ports'
 addresses after the install are, because they are what OS configuration starts from. A short table per node (ports, MACs,
 roles, address now, expected) is also printed.
-Feed it to Convert-ZtpHandoffToClusterInputs.ps1 to get the arc_machine_names block for the cluster deployment environment
-file. The handoff holds Azure resource IDs of your subscription: keep it out of source control.
+Feed it to Convert-ZtpHandoffToClusterInputs.ps1 -InfrastructureFile to write nodes[].arc_machine_name and
+deployment.solution_version into infrastructure.yml. The handoff holds Azure resource IDs of your subscription: keep it out of source control.
 .PARAMETER SubscriptionId
 Subscription of the edge machines.
 .PARAMETER ResourceGroupName
@@ -218,5 +218,5 @@ if (-not $Execute) {
 $folder = Split-Path -Parent $HandoffPath
 if ($folder -and -not (Test-Path -LiteralPath $folder)) { $null = New-Item -ItemType Directory -Path $folder -Force }
 $handoff | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $HandoffPath -Encoding utf8NoBOM
-Write-ZtpLog "Wrote $HandoffPath ($($rows.Count) node(s)). Next: Convert-ZtpHandoffToClusterInputs.ps1 -HandoffPath $HandoffPath, then OS configuration."
+Write-ZtpLog "Wrote $HandoffPath ($($rows.Count) node(s)). Next: Convert-ZtpHandoffToClusterInputs.ps1 -HandoffPath $HandoffPath -InfrastructureFile <infrastructure.yml>, then OS configuration."
 return [pscustomobject]@{ HandoffPath = $HandoffPath; Nodes = @($rows | ForEach-Object { $_.name }); ArcMachineNames = $names }

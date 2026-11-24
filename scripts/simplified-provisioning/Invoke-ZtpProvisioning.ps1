@@ -52,8 +52,9 @@ file; nothing is hardcoded.
             Without bios_during_provisioning it is a no-op that says so.
   Handoff   New-ZtpHandoff.ps1 writes -HandoffPath (ztp-handoff.json: only what Azure generated during ZTP: edge machine
             and Arc machine names and IDs, the site, the installed solution version, each node's Network result and the BIOS
-            values Restore set back); Convert-ZtpHandoffToClusterInputs.ps1 writes -ClusterInputsPath (the arc_machine_names
-            block for the cluster deployment environment file). Nothing is clustered here.
+            values Restore set back); Convert-ZtpHandoffToClusterInputs.ps1 writes -ClusterInputsPath (the patch for
+            infrastructure.yml: nodes[].arc_machine_name and deployment.solution_version; run it with -InfrastructureFile to
+            apply it). Nothing is clustered here.
 ZTP ends here: each machine is Provisioned in Azure and Arc-connected, and the handoff says whether its management address
 is verified on the management port (by MAC). OS configuration (the static management address by MAC, OEM drivers, the SBE
 in C:\SBE, DHCP and the gateway off on the other ports, DNS and time, the deployment admin) comes next, before Validate and Deploy: azurelocal-toolkit Phase 03, documented at
@@ -101,7 +102,7 @@ Bootstrap: region of the catalog check (preview: eastus).
 .PARAMETER HandoffPath
 Handoff: ztp-handoff.json.
 .PARAMETER ClusterInputsPath
-Handoff: arc_machine_names block for the cluster deployment environment file (.yaml or .json).
+Handoff: the infrastructure.yml patch (nodes[].arc_machine_name, deployment.solution_version) for the cluster deployment (.yaml or .json).
 .PARAMETER ImageDirectory
 Folder of the per-node images; shared in place to the BMCs.
 .PARAMETER ImageNamePrefix
@@ -821,7 +822,7 @@ foreach ($name in $run) {
     $results.Add([pscustomobject]@{ Stage = $name; Result = 'Completed'; Minutes = $minutes; Evidence = $evidence })
 }
 if ('Handoff' -in $run) {
-    Write-ZtpRunLog "ZTP is done: the machines are Provisioned and Arc-connected, with the management address on the management port. $HandoffPath has the Arc machine names and IDs; $ClusterInputsPath has arc_machine_names for the cluster deployment environment file."
+    Write-ZtpRunLog "ZTP is done: the machines are Provisioned and Arc-connected, with the management address on the management port. $HandoffPath has the Arc machine names and IDs; $ClusterInputsPath is the infrastructure.yml patch (nodes[].arc_machine_name, deployment.solution_version); apply it with Convert-ZtpHandoffToClusterInputs.ps1 -HandoffPath $HandoffPath -InfrastructureFile <infrastructure.yml>."
     Write-ZtpRunLog 'Next: OS configuration (OEM drivers, the SBE in C:\SBE, DHCP off on the other ports, DNS and time, the deployment admin), then Validate and Deploy. ZTP does none of these. See https://azurelocal.cloud/docs/implementation/04-cluster-deployment/phase-03-os-configuration/. Hardware must not be clustered by this repository.'
 }
 $results.ToArray()

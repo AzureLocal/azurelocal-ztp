@@ -8,8 +8,8 @@ Each expected machine must exist, be Connected and carry the mandatory Arc exten
 provisioning state Succeeded. Another Arc machine in the group is reported as 'other machine in the group' and doesn't fail
 the check, because nodes can be provisioned one run at a time into the same group; -StrictGroup makes it fail. With
 -PassThru the rows are returned even when a check fails; otherwise the script throws.
-Simplified provisioning names the Arc machine <device-id>-1: pass the values of arc_machine_names (written by
-Update-ArcMachineNames.ps1 from each edge machine's arcMachineResourceId), not the host names.
+Simplified provisioning names the Arc machine <device-id>-1: pass the values of nodes[].arc_machine_name (written into
+infrastructure.yml by Convert-ZtpHandoffToClusterInputs.ps1 from each edge machine's arcMachineResourceId), not the host names.
 .PARAMETER SubscriptionId
 Azure Local landing-zone subscription ID.
 .PARAMETER ResourceGroupName

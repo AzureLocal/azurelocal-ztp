@@ -541,13 +541,23 @@ function Get-ZtpEnvironmentWarning {
     [CmdletBinding()]
     [OutputType([string])]
     param([Parameter(Mandatory)][System.Collections.IDictionary]$Environment)
+    $nodeValue = Get-ZtpEnvValue -Environment $Environment -Path 'cluster_nodes'
+    $nodes = @(@($nodeValue) | Where-Object { $_ -is [System.Collections.IDictionary] })
+    # A static design (networking.management.use_dhcp false) that leaves provisioning_network at its default: ZTP assumes DHCP
+    # on the management network while the machines are provisioned (Mode B), so the maintenance environment's way to Azure is
+    # a DHCP server the design does not have. Not when every node has a separate provisioning port on DHCP (Mode C).
+    $useDhcp = Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.use_dhcp'
+    $staticDesign = $false
+    if ($null -ne $useDhcp -and "$useDhcp" -ne '') { try { $staticDesign = -not (ConvertTo-ZtpBoolean $useDhcp 'networking.management.use_dhcp') } catch { Write-Verbose $_.Exception.Message } }
+    if ($staticDesign -and -not [string](Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.provisioning_network') -and
+        -not ($nodes.Count -and @($nodes | Where-Object { -not (Test-ZtpProvisioningDhcpPort -Node $_) }).Count -eq 0)) {
+        'networking.management.use_dhcp is false (a static design) but networking.management.provisioning_network is not set, so ZTP assumes DHCP on the management network while the machines are provisioned (the default, dhcp). If the site has no DHCP there, set provisioning_network to static and give each node a provisioning port with DHCP; otherwise set it to dhcp to say so.'
+    }
     # The toolkit warns about the file itself (AZL-024), for the same reason.
     $origin = $Environment['_source']
     if ($origin -is [System.Collections.IDictionary] -and @($origin['warnings'] | Where-Object { $_ -like 'AZL-024 *' }).Count) { return }
     # Mode C: no DHCP on the management network, but every node has another port with role provisioning on DHCP, which the
     # maintenance environment reaches Azure through. Nothing to warn about.
-    $nodeValue = Get-ZtpEnvValue -Environment $Environment -Path 'cluster_nodes'
-    $nodes = @(@($nodeValue) | Where-Object { $_ -is [System.Collections.IDictionary] })
     if ($nodes.Count -and @($nodes | Where-Object { -not (Test-ZtpProvisioningDhcpPort -Node $_) }).Count -eq 0) { return }
     if ([string](Get-ZtpEnvValue -Environment $Environment -Path 'network_intents.management.provisioning_network') -eq 'static') {
         'network_intents.management.provisioning_network is static: the maintenance environment needs a static address to reach Azure before the machine is claimed. Learn documents only the Configurator app for that, and whether the USB image can carry a preset address is an open research item, so ZTP sets nothing for it. Without DHCP on a provisioning port, the machine never reaches Azure and no voucher is written.'
@@ -1293,6 +1303,8 @@ function ConvertFrom-ZtpInfrastructureV5 {
 
     $mgmt = [ordered]@{}
     foreach ($k in 'subnet', 'gateway', 'dns_servers', 'site_ip_range', 'provisioning_network', 'static_method', 'provisioning_dhcp_range') { & $put $mgmt $k (& $v "networking.management.$k") }
+    # Read for the plan's warning only (the deployment's useDhcp): a static design that leaves provisioning_network at dhcp.
+    if ($null -ne (& $v 'networking.management.use_dhcp')) { $mgmt['use_dhcp'] = & $v 'networking.management.use_dhcp' }
     $distinct = @($modes | Select-Object -Unique)
     $mgmt['ip_assignment'] = if ($distinct.Count -eq 1) { $distinct[0] } else { 'static' }
     $siteVlan = & $v 'networking.management.vlan_id'

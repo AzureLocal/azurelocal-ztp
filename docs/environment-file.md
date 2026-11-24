@@ -86,6 +86,7 @@ OS configuration (azurelocal-toolkit [Phase 03 OS Configuration](https://azurelo
 | `networking.management.site_ip_range.start`, `.end` | Optional | IPv4, inside `subnet`, start before end | Only with `static_method: site`: the address range of the site's `Manual` network setting. Default: the lowest to the highest static node address. Every static node address must be inside it. |
 | `networking.management.provisioning_dhcp_range.start`, `.end` | Optional | IPv4, start before end, at most 4096 addresses | The DHCP pool on the provisioning network, where the maintenance environment takes its address. The Device stage scans it on TCP 20001 for each node without a maintenance address. Default: the management subnet. A node's static address must not be inside it. |
 | `networking.management.provisioning_network` | Optional | `dhcp` (default) or `static` | How the maintenance environment gets the address it reaches Azure with, before the machine is claimed. `dhcp`: a DHCP server answers on a port with role `provisioning` (on a machine with no DHCP on its management network, another port carries it: Mode C). `static`: the run warns, or stops when no port with role `provisioning` takes DHCP (G23). Learn documents only the Configurator app for a static address there. |
+| `networking.management.use_dhcp` | Optional | `true` or `false` | The deployment's `useDhcp`. ZTP reads it only for the plan: `false` (a static design) with `provisioning_network` left at its default prints a warning, because ZTP then assumes DHCP on the management network while the machines are provisioned. Set `provisioning_network` to say which it is. |
 | `networking.management.ip_assignment` | Optional | As the management port's | Only for nodes in the schema 5.0 form (`nodes[].management`). |
 
 #### The site's network setting
@@ -166,7 +167,7 @@ nodes:
 | `hardware.model` | Optional | Text | Compared with the vendor's `verified_models` for the derived BIOS plan (a warning, never a stop). |
 | `hardware.bmc.username` | Yes | Secret reference, or the user name itself | The BMC login of every node. See [Secrets](#secrets). |
 | `hardware.bmc.password` | Yes | Secret reference | The BMC password. |
-| `hardware.bmc.verify_certificate` | Optional | `true` or `false` (default `false`) | Check the BMC's TLS certificate. BMCs ship a self-signed one. |
+| `hardware.bmc.verify_certificate` | Optional | `true` or `false` (default `false`) | Check the BMC's TLS certificate. BMCs ship a self-signed one. The plan says whether checking is on or off and names this key. |
 | `hardware.bmc.rfs_write_attribute` | Optional | `true` or `false` | Also set the BMC's Remote File Share write attribute in the Boot stage. Default: the vendor's `bmc.rfsWriteAttribute` (Dell `true`, the others `false`). |
 | `hardware.bios` | Optional | Mapping: BIOS attribute name -> value, values quoted as strings | The machine's **final** BIOS state. The Boot stage sets it before the maintenance boot, and the Restore stage sets any key that `bios_during_provisioning` changed back to this value. |
 | `hardware.bios_during_provisioning` | Optional | Same | **Temporary** BIOS values, for the install only. The Boot stage applies them over `hardware.bios` (these win), and saves each attribute's value as found. The Restore stage, after Network and before Handoff, sets each key back to `hardware.bios[key]`, or to the saved value. |
@@ -263,7 +264,7 @@ provisioning:
 | Key | Required | Format | Used for |
 | --- | --- | --- | --- |
 | `provisioning.simplified.media_share.host` | One of the two | IPv4 | The management host's address **as the BMCs reach it**. The BMCs mount `//<host>/<name>/ztp-usb-<node>.img`. |
-| `provisioning.simplified.media_share.host_adapter` | One of the two | Adapter name | Instead of `host`: the local network adapter whose IPv4 address the BMCs reach. Useful when that address changes, for example on a VPN. It wins over `host`. |
+| `provisioning.simplified.media_share.host_adapter` | One of the two | Adapter name | Instead of `host`: the local network adapter whose IPv4 address the BMCs reach. Useful when that address changes, for example on a VPN. With `-Execute` it wins over `host`; a plan (no `-Execute`) reads no adapter, so it uses `host` when the file has one, and otherwise shows that the address is resolved on the management host. |
 | `provisioning.simplified.media_share.name` | Yes | Text, letters, digits and hyphens | Name of the SMB share for the images. |
 | `provisioning.simplified.media_share.account_name` | Optional | Default `svc-ztp-media` | The local account the BMCs sign in to the share with. |
 | `provisioning.simplified.media_share.keep` | Optional | Default `false` | Keep the share, firewall rule and account after the vouchers are collected. |

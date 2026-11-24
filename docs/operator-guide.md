@@ -374,7 +374,7 @@ The handoff is in `<media_path>\ztp-state\`:
 | File | Contents |
 | --- | --- |
 | `<run>.ztp-handoff.json` | Handoff schema 2: only what Azure generated during ZTP. See below. |
-| `<run>.ztp-cluster-inputs.yaml` | `arc_machine_names` (host name to Arc machine name) and `release.azure_local_version` (the build installed), ready to paste into a cluster deployment environment file |
+| `<run>.ztp-cluster-inputs.yaml` | The infrastructure.yml patch: `nodes[].arc_machine_name` (host name to Arc machine name) and `deployment.solution_version` (the build installed). `Convert-ZtpHandoffToClusterInputs.ps1 -HandoffPath <run>.ztp-handoff.json -InfrastructureFile <infrastructure.yml>` writes it into the file |
 | `<run>.arc-machine-names.json` | Host name to Arc machine name |
 
 The handoff holds what Azure generated during ZTP, and what Azure reports for each port after the install (`networkAdapters[]`, matched by MAC to the file):
