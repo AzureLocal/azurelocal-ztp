@@ -374,3 +374,123 @@ Describe 'Start-ZtpMonitor.ps1' {
         { & $global:ztpH_mon -SonarPath (Join-Path $TestDrive 'nothing') -SubscriptionId 00000000-0000-0000-0000-000000000000 -ResourceGroupName rg -NodesFile $global:ztpH_nodes } | Should -Throw '*Start-AzlSonar.ps1 not found*'
     }
 }
+
+Describe 'New-ZtpHandoff.ps1 reads the adapters again when the Network stage saw none' {
+    BeforeEach {
+        $script:nodesNic = Join-Path $TestDrive "nodes-reread-$([guid]::NewGuid().ToString('N')).json"
+        @{ nodes = @(
+                [ordered]@{ name = 'node-01'; service_tag = 'EXAMPLE1'; bmc_address = '198.51.100.11'; management_mac = '00:00:5E:00:53:AA'; management_ip_assignment = 'static'; management_dhcp = $true
+                    network_adapters = @([ordered]@{ name = 'Slot 3 Port 1'; mac_address = '00:00:5E:00:53:AA'; roles = @('management', 'provisioning'); ip_assignment = 'static'; ip_address = '192.0.2.11' }) }
+                [ordered]@{ name = 'node-02'; service_tag = 'EXAMPLE2'; bmc_address = '198.51.100.12'; management_mac = '00:00:5E:00:53:CC'; management_ip_assignment = 'static'; management_dhcp = $true; network_adapters = @() }) } |
+            ConvertTo-Json -Depth 6 | Set-Content $script:nodesNic
+        $script:portsNow = {
+            param([string]$Type, [string]$Ip)
+            @{ value = @(@{ name = '00000000-0000-0000-0000-000000000001'; properties = @{ networkConfiguration = @{ adapterName = 'Port1' }; reportedProperties = @{ adapterName = 'Port1'; macAddress = '00-00-5E-00-53-AA'; interfaceDescription = 'Example NIC'; ipInterfaceType = $Type; ip4Address = $Ip; subnetMask = '255.255.255.0'; defaultGateway = '192.0.2.1' } } }) }
+        }
+        $script:handoff = {
+            param($Ports, $Checks)
+            $global:ztpH_adapters = $Ports
+            $global:ztpH_machines = @{ 'node-01' = $global:ztpH_ready; 'node-02' = $global:ztpH_ready2 }
+            $h = & (Join-Path $global:ztpH_scripts 'New-ZtpHandoff.ps1') -SubscriptionId '00000000-0000-0000-0000-000000000000' -ResourceGroupName rg-example -NodeName node-01 -NodesFile $script:nodesNic -ManagementAddressCheck $Checks -InformationAction SilentlyContinue -WarningAction SilentlyContinue
+            @($h.nodes)[0]
+        }
+        Mock Invoke-AzRestMethod {
+            if ($Path -match 'edgeMachines/node-01/networkAdapters\?') { return New-ZtpHResponse 200 $global:ztpH_adapters }
+            if ($Path -match 'edgeMachines/([^/?]+)/jobs/ProvisionOs') { return New-ZtpHResponse 200 $global:ztpH_job }
+            if ($Path -match 'edgeMachines/([^/?]+)\?') { $m = $global:ztpH_machines[$Matches[1]]; if ($m) { return New-ZtpHResponse 200 $m } }
+            New-ZtpHResponse 404 $null
+        }
+        $script:unseen = @{ node = 'node-01'; verified = $false; adaptersReported = $false; reason = 'Mode B (Static with DHCP): adapters never reported within 10 minutes, so the management port (MAC 00:00:5e:00:53:aa) wasn''t checked; expected static 192.0.2.11; OS configuration sets it by MAC.' }
+    }
+
+    It 'fills in the per-port detail and the verdict from the adapters it reads now: the address is on the management port, so it is verified' {
+        $n = & $script:handoff (& $script:portsNow 'Static' '192.0.2.11') @($script:unseen)
+        $n['managementAddressVerified'] | Should -BeTrue
+        $n['managementAddressReason'] | Should -BeNullOrEmpty
+        @($n['networkAdapters']).Count | Should -Be 1
+        @($n['networkAdapters'])[0]['isManagement'] | Should -BeTrue
+    }
+
+    It 'keeps it not verified, saying what the read now found, when the port still lacks the address' {
+        $n = & $script:handoff (& $script:portsNow 'Dhcp' '192.0.2.116') @($script:unseen)
+        $n['managementAddressVerified'] | Should -BeFalse
+        $n['managementAddressReason'] | Should -BeLike 'read again at the Handoff: the management port Port1 (MAC 00:00:5e:00:53:aa) has Dhcp 192.0.2.116; the file expects 192.0.2.11; Mode B*adapters never reported within 10 minutes*'
+        @($n['networkAdapters']).Count | Should -Be 1
+    }
+
+    It 'leaves the verdict alone when the Network stage did see the adapters' {
+        $seen = @{ node = 'node-01'; verified = $false; adaptersReported = $true; reason = 'Mode B: has DHCP after the install' }
+        $n = & $script:handoff (& $script:portsNow 'Static' '192.0.2.11') @($seen)
+        $n['managementAddressVerified'] | Should -BeFalse
+        $n['managementAddressReason'] | Should -Be 'Mode B: has DHCP after the install'
+    }
+
+    It 'keeps the Network stage''s reason when the adapters are still not reported' {
+        $n = & $script:handoff @{ value = @() } @($script:unseen)
+        $n['managementAddressVerified'] | Should -BeFalse
+        $n['managementAddressReason'] | Should -BeLike '*adapters never reported within 10 minutes*'
+        @($n['networkAdapters']).Count | Should -Be 0
+    }
+
+    Context 'the verdict per mode, fail closed' {
+        BeforeEach {
+            # The node list with node-01 in another mode (and the file's address on its management port).
+            $script:setMode = {
+                param([string]$Mode)
+                $doc = Get-Content -LiteralPath $script:nodesNic -Raw | ConvertFrom-Json -AsHashtable
+                $doc.nodes[0].management_ip_assignment = $Mode
+                $doc | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $script:nodesNic
+            }
+            # The management port plus a second port with its own MAC and address.
+            $script:twoPorts = {
+                param([string]$Type, [string]$Ip, [string]$OtherIp)
+                $one = & $script:portsNow $Type $Ip
+                $other = @{ name = '00000000-0000-0000-0000-000000000002'; properties = @{ networkConfiguration = @{ adapterName = 'Port2' }; reportedProperties = @{ adapterName = 'Port2'; macAddress = '00-00-5E-00-53-BB'; interfaceDescription = 'Example NIC 2'; ipInterfaceType = 'Static'; ip4Address = $OtherIp; subnetMask = '255.255.255.0'; defaultGateway = '192.0.2.1' } } }
+                @{ value = @($one.value[0], $other) }
+            }
+        }
+
+        It 'does not verify a static address that another port also holds' {
+            $n = & $script:handoff (& $script:twoPorts 'Static' '192.0.2.11' '192.0.2.11') @($script:unseen)
+            $n['managementAddressVerified'] | Should -BeFalse
+            $n['managementAddressReason'] | Should -BeLike 'read again at the Handoff:*Port2 (MAC 00:00:5e:00:53:bb) also has 192.0.2.11*'
+        }
+
+        It 'does not verify a static node whose port reports DHCP with the right address' {
+            $n = & $script:handoff (& $script:portsNow 'Dhcp' '192.0.2.11') @($script:unseen)
+            $n['managementAddressVerified'] | Should -BeFalse
+        }
+
+        It 'judges dhcp and preconfigured like the Network stage: verified only on the address the file gives' {
+            foreach ($mode in 'dhcp', 'preconfigured') {
+                & $script:setMode $mode
+                $ok = & $script:handoff (& $script:portsNow 'Dhcp' '192.0.2.11') @($script:unseen)
+                $ok['managementAddressVerified'] | Should -BeTrue -Because $mode
+                $no = & $script:handoff (& $script:portsNow 'Dhcp' '192.0.2.116') @($script:unseen)
+                $no['managementAddressVerified'] | Should -BeFalse -Because $mode
+                $no['managementAddressReason'] | Should -BeLike 'read again at the Handoff:*has Dhcp 192.0.2.116; the file expects 192.0.2.11*'
+            }
+        }
+
+        It 'does not verify a reserved DHCP port with no address' {
+            & $script:setMode 'dhcp_reservation'
+            $n = & $script:handoff (& $script:portsNow 'Dhcp' '') @($script:unseen)
+            $n['managementAddressVerified'] | Should -BeFalse
+            $n['managementAddressReason'] | Should -BeLike 'read again at the Handoff:*no address*'
+        }
+
+        It 'keeps the Network stage''s reason, and verifies nothing, for a mode it does not know' {
+            & $script:setMode ''
+            $n = & $script:handoff (& $script:portsNow 'Static' '192.0.2.11') @($script:unseen)
+            $n['managementAddressVerified'] | Should -BeFalse
+            $n['managementAddressReason'] | Should -Be $script:unseen.reason -Because 'nothing was re-judged, so no "read again" text'
+            @($n['networkAdapters']).Count | Should -Be 1
+        }
+
+        It 'never verifies a node the Network stage has no result for, even with a matching port' {
+            $n = & $script:handoff (& $script:portsNow 'Static' '192.0.2.11') @()
+            $n['managementAddressVerified'] | Should -BeFalse
+            $n['managementAddressReason'] | Should -Be 'no Network stage result for this node'
+        }
+    }
+}

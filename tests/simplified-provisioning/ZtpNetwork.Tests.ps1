@@ -60,7 +60,8 @@ BeforeAll {
         param($Path, $Method, $Payload)
         $global:netT_calls.Add([pscustomobject]@{ Method = $Method; Path = $Path; Payload = $Payload })
         if ($Path -match '/edgeMachines/[^/]+/networkAdapters\?') {
-            if ($global:netT_noAdapters) { return New-NetTResponse 404 @{ error = @{ code = 'ResourceNotFound'; message = 'not found' } } }
+            $emptyNow = $global:netT_noAdapters -or ((Get-Variable netT_emptyReads -Scope Global -ErrorAction SilentlyContinue) -and $global:netT_emptyReads -gt 0)
+            if ($emptyNow) { if (-not $global:netT_noAdapters) { $global:netT_emptyReads-- }; return New-NetTResponse 404 @{ error = @{ code = 'ResourceNotFound'; message = 'not found' } } }
             $value = foreach ($k in $global:netT_adapters.Keys) {
                 $a = $global:netT_adapters[$k]
                 @{ id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-iic-azl-01/providers/Microsoft.AzureStackHCI/edgeMachines/node-01/networkAdapters/$k"; name = $k
@@ -106,7 +107,7 @@ BeforeAll {
     $script:static = { [ordered]@{ ip_assignment = 'static'; mac_address = '00-00-5E-00-53-AA'; adapter_name = ''; ip_address = '192.0.2.11'; subnet_mask = '255.255.255.0'; gateway = '192.0.2.1'; dns_servers = @('192.0.2.53', '192.0.2.54'); vlan_id = '0' } }
     $script:argsFor = {
         param([hashtable]$Arguments)
-        $base = @{ SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroupName = 'rg-iic-azl-01'; PollIntervalSeconds = 0; TimeoutMinutes = 5
+        $base = @{ SubscriptionId = '00000000-0000-0000-0000-000000000000'; ResourceGroupName = 'rg-iic-azl-01'; PollIntervalSeconds = 0; TimeoutMinutes = 5; AdaptersTimeoutMinutes = 0
             ChangeLogPath = $script:changeLog; EventLogPath = $script:events; InformationAction = 'SilentlyContinue'; WarningAction = 'SilentlyContinue' }
         foreach ($k in $Arguments.Keys) { $base[$k] = $Arguments[$k] }
         $base
@@ -490,5 +491,124 @@ Describe 'Get-ZtpManagementMode' {
         $m = Get-ZtpManagementMode -IpAssignment $IpAssignment -ManagementDhcp $Dhcp
         $m.Mode | Should -Be $Mode
         $m.Label | Should -Be $Label
+    }
+}
+
+Describe 'Set-ZtpManagementAddress.ps1 waits for the machine to report its network adapters' {
+    BeforeEach {
+        $global:netT_calls = [System.Collections.Generic.List[object]]::new()
+        $global:netT_jobs = @{}; $global:netT_sequence = @{}
+        $global:netT_noAdapters = $false
+        $global:netT_emptyReads = 0
+        $global:netT_adapters = [ordered]@{
+            $script:lom = New-NetTAdapter -AdapterName 'Port1' -Mac '00005e0053aa' -Description 'Example LOM' -Type 'Static' -Ip '192.0.2.11' -Mask '255.255.255.0' -Gateway '192.0.2.1' -Dns '192.0.2.53'
+        }
+        $script:changeLog = Join-Path $TestDrive "network-changes-$([guid]::NewGuid().ToString('N')).jsonl"
+        $script:events = Join-Path $TestDrive "events-$([guid]::NewGuid().ToString('N')).jsonl"
+        Mock Start-Sleep {}
+        $script:eventsNow = { if (Test-Path -LiteralPath $script:events) { @(Get-Content -LiteralPath $script:events | ForEach-Object { $_ | ConvertFrom-Json }) } else { @() } }
+        $script:reads = { @($global:netT_calls | Where-Object { $_.Method -eq 'GET' -and $_.Path -match '/networkAdapters\?' }).Count }
+    }
+    AfterAll { Remove-Variable -Scope Global -Name netT_emptyReads -ErrorAction SilentlyContinue }
+
+    It 'polls until the management MAC appears, says it is waiting, then judges the port as usual' {
+        $global:netT_emptyReads = 2
+        $row = & $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false; AdaptersTimeoutMinutes = 1 }
+        (& $script:reads) | Should -Be 3 -Because 'two empty reads, then the list'
+        $row.Verified | Should -BeTrue
+        $row.Status | Should -Be 'AlreadySet'
+        $row.AdaptersReported | Should -BeTrue
+        $waiting = @(& $script:eventsNow | Where-Object state -EQ 'WaitingForNetworkAdapters')
+        $waiting.Count | Should -Be 1
+        $waiting[0].level | Should -Be 'Info'
+        $waiting[0].evidence | Should -BeLike 'waiting for the machine to report its network adapters*'
+    }
+
+    It 'does not wait, or write the event, when the adapters are there at once' {
+        $row = & $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false; AdaptersTimeoutMinutes = 1 }
+        (& $script:reads) | Should -Be 1
+        @(& $script:eventsNow | Where-Object state -EQ 'WaitingForNetworkAdapters').Count | Should -Be 0
+        $row.Verified | Should -BeTrue
+    }
+
+    It 'after the budget: not verified, adapters never reported within N minutes, a Warning event, and the handoff is told to look again' {
+        $global:netT_noAdapters = $true
+        $row = & $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false; AdaptersTimeoutMinutes = 0.02 }
+        $row.Verified | Should -BeFalse
+        $row.Status | Should -Be 'NeverReported' -Because 'a static node whose port was never seen is not the Deferred success (Sonar counts ManagementAddressDeferredToOsConfiguration as success)'
+        $row.AdaptersReported | Should -BeFalse
+        $row.Reason | Should -BeLike '*adapters never reported within 0.02 minutes*the management port (MAC 00:00:5e:00:53:aa) wasn''t checked*'
+        (& $script:reads) | Should -BeGreaterThan 1
+        $events = & $script:eventsNow
+        @($events | Where-Object state -EQ 'WaitingForNetworkAdapters').Count | Should -Be 1
+        $never = @($events | Where-Object state -EQ 'ManagementAdaptersNeverReported')
+        $never.Count | Should -Be 1
+        $never[0].level | Should -Be 'Warning'
+        @($events | Where-Object state -EQ 'ManagementAddressDeferredToOsConfiguration').Count | Should -Be 0
+        $never[0].nextAction | Should -Not -BeLike '*OS configuration*sets the static address*'
+    }
+
+    It 'after the budget, other adapters listed but not the management MAC: the same Warning, not verified, no throw' {
+        $global:netT_adapters = [ordered]@{
+            $script:storage = New-NetTAdapter -AdapterName 'Port2' -Mac '00005e0053bb' -Description 'Example storage' -Type 'Dhcp'
+        }
+        $row = & $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false; AdaptersTimeoutMinutes = 0.02 }
+        $row.Verified | Should -BeFalse
+        $row.Status | Should -Be 'NeverReported'
+        $row.AdaptersReported | Should -BeFalse
+        $row.Reason | Should -BeLike '*adapters never reported within 0.02 minutes*Port2 00:00:5e:00:53:bb*'
+        $never = @(& $script:eventsNow | Where-Object state -EQ 'ManagementAdaptersNeverReported')
+        $never.Count | Should -Be 1
+        $never[0].level | Should -Be 'Warning'
+    }
+
+    It 'with no wait budget, other adapters but not the management MAC still stops the stage with the list it found' {
+        $global:netT_adapters = [ordered]@{ $script:storage = New-NetTAdapter -AdapterName 'Port2' -Mac '00005e0053bb' -Description 'Example storage' -Type 'Dhcp' }
+        { & $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false; AdaptersTimeoutMinutes = 0 } } | Should -Throw '*reports the management MAC*'
+    }
+
+    It 'static with -ApplyThroughAzure: the budget spent with no adapters writes the Warning event and refuses to change anything' {
+        $global:netT_noAdapters = $true
+        { & $script:run @{ ApplyThroughAzure = $true; ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false; AdaptersTimeoutMinutes = 0.02 } } | Should -Throw '*reports no network adapters within 0.02 minutes*'
+        $events = & $script:eventsNow
+        $never = @($events | Where-Object state -EQ 'ManagementAdaptersNeverReported')
+        $never.Count | Should -Be 1
+        $never[0].level | Should -Be 'Warning'
+        $never[0].evidence | Should -BeLike '*adapters never reported within 0.02 minutes*no address was set*'
+        @($events | Where-Object state -EQ 'ManagementAddressFailed').Count | Should -Be 1
+        @(& $script:puts).Count | Should -Be 0
+    }
+
+    It 'sleeps at the poll interval but never past the time left, and never faster than every 5 seconds' {
+        $global:netT_noAdapters = $true
+        $global:netT_sleeps = [System.Collections.Generic.List[int]]::new()
+        Mock Start-Sleep { $global:netT_sleeps.Add($Milliseconds) }
+        $null = & $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false; AdaptersTimeoutMinutes = 0.05; PollIntervalSeconds = 0 }
+        $global:netT_sleeps.Count | Should -BeGreaterThan 0
+        $global:netT_sleeps[0] | Should -BeGreaterThan 2000 -Because 'a poll interval of 0 is raised to 5 seconds, then cut to the 3 seconds of budget'
+        ($global:netT_sleeps | Measure-Object -Maximum).Maximum | Should -BeLessOrEqual 3000 -Because 'no sleep runs past the budget'
+        $global:netT_sleeps.Clear()
+        $null = & $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)); Execute = $true; Confirm = $false; AdaptersTimeoutMinutes = 0.05; PollIntervalSeconds = 3600 }
+        ($global:netT_sleeps | Measure-Object -Maximum).Maximum | Should -BeLessOrEqual 3000 -Because 'a long poll interval is cut to the time left'
+        Remove-Variable -Scope Global -Name netT_sleeps -ErrorAction SilentlyContinue
+    }
+
+    It 'says the same for a DHCP-reservation port, and reads once when the budget is 0' {
+        $global:netT_noAdapters = $true
+        $m = & $script:static; $m.ip_assignment = 'dhcp_reservation'
+        $row = & $script:run @{ ParameterFile = (& $script:writeParameters $m); Execute = $true; Confirm = $false; AdaptersTimeoutMinutes = 0.02 }
+        $row.Verified | Should -BeFalse
+        $row.Reason | Should -BeLike '*adapters never reported within 0.02 minutes*'
+        $global:netT_calls.Clear()
+        $row = & $script:run @{ ParameterFile = (& $script:writeParameters $m); Execute = $true; Confirm = $false; AdaptersTimeoutMinutes = 0 }
+        (& $script:reads) | Should -Be 1
+        $row.Reason | Should -Match 'reports no network adapters yet'
+        $row.AdaptersReported | Should -BeFalse
+    }
+
+    It 'a plan reads once and never waits' {
+        $global:netT_noAdapters = $true
+        $null = @(& $script:run @{ ParameterFile = (& $script:writeParameters (& $script:static)); AdaptersTimeoutMinutes = 5 })
+        (& $script:reads) | Should -Be 1
     }
 }

@@ -46,6 +46,11 @@ Invoke-ZtpEnvironment.ps1 writes it from the infrastructure file. A node without
 Nodes to handle (default: every node in the parameters file).
 .PARAMETER ApiVersion
 Microsoft.AzureStackHCI api-version of edgeMachines/networkAdapters and their jobs.
+.PARAMETER AdaptersTimeoutMinutes
+How long to wait, per node, for the edge machine to report its network adapters (the management MAC in the list) before
+the management port is judged. The list can still be empty right after Ready. While it waits, an info event says so; when
+the budget is spent without the adapters, the node is not verified ("adapters never reported within N minutes", a Warning
+event), and the Handoff stage reads the adapters again. 0 reads once.
 .PARAMETER TimeoutMinutes
 -ApplyThroughAzure: how long to wait for each ApplyConfiguration job, and then for the adapter to report the result.
 0 checks once.
@@ -77,6 +82,7 @@ param(
     [string]$ApiVersion = '2026-10-01',
     [ValidateRange(0, 1440)][int]$TimeoutMinutes = 60,
     [ValidateRange(0, 3600)][int]$PollIntervalSeconds = 30,
+    [ValidateRange(0, 240)][double]$AdaptersTimeoutMinutes = 10,
     [string]$EventLogPath,
     [string]$ChangeLogPath,
     [switch]$ApplyThroughAzure,
@@ -131,6 +137,31 @@ function Get-NodeAdapter([string]$NodeName) {
     $list = Invoke-ZtpArm -Method GET -Path "$machineRoot/$NodeName/networkAdapters" -ApiVersion $ApiVersion -AllowNotFound
     if ($null -eq $list) { return $null }
     return , @(Get-ZtpNetworkAdapterRow -List $list)
+}
+
+function Wait-ManagementAdapter {
+    # The node's adapter rows, once the list holds the management MAC: polls every -PollIntervalSeconds (at least 5, so a 0
+    # never hammers the API; the last sleep is cut to the time left) up to -AdaptersTimeoutMinutes (only with -Execute; a
+    # plan reads once). Returns the last rows read ($null or empty when the edge machine reported none) and sets
+    # $script:adaptersWaited to the minutes waited when the budget ran out without the management MAC in the list, whether
+    # no adapter was listed or only others.
+    param([string]$NodeName, [string]$MacKey)
+    $has = { param($r) $null -ne $r -and @($r).Count -gt 0 -and @(@($r) | Where-Object { $_.Mac -eq $MacKey }).Count -gt 0 }
+    $rows = Get-NodeAdapter $NodeName
+    if ((& $has $rows) -or -not $Execute -or $AdaptersTimeoutMinutes -le 0) { return , $rows }
+    Write-ZtpLog "${NodeName}: waiting for the machine to report its network adapters (up to $AdaptersTimeoutMinutes minutes)."
+    Send-NetworkEvent $NodeName 'WaitingForNetworkAdapters' "waiting for the machine to report its network adapters (up to $AdaptersTimeoutMinutes minutes)"
+    $deadline = [datetime]::UtcNow.AddMinutes($AdaptersTimeoutMinutes)
+    $interval = [math]::Max($PollIntervalSeconds, 5)
+    while ($true) {
+        $left = ($deadline - [datetime]::UtcNow).TotalMilliseconds
+        if ($left -le 0) { break }
+        Start-Sleep -Milliseconds ([int][math]::Ceiling([math]::Min($interval * 1000, $left)))
+        $rows = Get-NodeAdapter $NodeName
+        if (& $has $rows) { return , $rows }
+    }
+    $script:adaptersWaited = $AdaptersTimeoutMinutes
+    return , $rows
 }
 
 function Wait-AdapterReport([string]$NodeName, [scriptblock]$Done, [string]$What) {
@@ -202,10 +233,10 @@ function Find-ManagementAdapter([string]$NodeName, [object[]]$Rows, [string]$Mac
 function Get-ManagementVerdict {
     # What the management port (the port with role management in the file, found by its MAC; any make or slot) reports
     # after the OS install, against the parameters file. Verified, Reason (null when verified), Status (AlreadySet,
-    # Deferred or Reported), the event state and level, a one-line Text and the adapter row (Nic). Every message names the
+    # Deferred, NeverReported or Reported), the event state and level, a one-line Text and the adapter row (Nic). Every message names the
     # mode (A Reserved, B Static with DHCP, C Static without management DHCP), the port, its MAC, what it has now and what
     # the file expects. $Rows is $null or empty when the edge machine reports no adapters yet. A MAC no adapter reports throws.
-    param([string]$NodeName, [string]$Mode, [string]$MacKey, [string]$Ip, [bool]$ManagementDhcp = $true, [AllowNull()][object[]]$Rows)
+    param([string]$NodeName, [string]$Mode, [string]$MacKey, [string]$Ip, [bool]$ManagementDhcp = $true, [AllowNull()][object[]]$Rows, [double]$WaitedMinutes = 0)
     $label = (Get-ZtpManagementMode -IpAssignment $Mode -ManagementDhcp $ManagementDhcp).Label
     $v = [ordered]@{ Verified = $false; Reason = $null; Status = 'Reported'; State = 'ManagementAddressReported'; Level = 'Warning'; Text = ''; Nic = $null }
     $expectedText = switch ($Mode) {
@@ -231,7 +262,17 @@ function Get-ManagementVerdict {
         return [pscustomobject]$v
     }
     $portText = "the management port (MAC $(Format-ZtpMac $MacKey))"
-    if ($null -eq $Rows -or @($Rows).Count -eq 0) {
+    $listed = @(@($Rows) | Where-Object { $_ })
+    if ($WaitedMinutes -gt 0 -and -not @($listed | Where-Object { $_.Mac -eq $MacKey }).Count) {
+        # The wait budget is spent and the management MAC is still not in the list (no adapter at all, or only others). Not
+        # verified in every mode, and never the Deferred success of a static node: the port was not seen, so nothing is known
+        # about its address. The Handoff stage reads the adapters again.
+        $others = if ($listed.Count) { "; the adapters it did report: $(@($listed | ForEach-Object { "$($_.AdapterName) $(Format-ZtpMac $_.Mac)" }) -join ', ')" } else { '' }
+        & $notVerified "adapters never reported within $WaitedMinutes minutes, so $portText wasn't checked$others" ''
+        $v.Status = 'NeverReported'; $v.State = 'ManagementAdaptersNeverReported'; $v.Level = 'Warning'
+        return [pscustomobject]$v
+    }
+    if ($listed.Count -eq 0) {
         $now = "the edge machine reports no network adapters yet, so $portText wasn't checked"
         if ($Mode -eq 'static') { & $defer $now } else { & $notVerified $now '' }
         return [pscustomobject]$v
@@ -272,7 +313,7 @@ $failed = [System.Collections.Generic.List[string]]::new()
 foreach ($n in $selected) {
     $name = [string]$n['name']
     $mgmt = Get-ZtpPropertyValue $n 'management'
-    $row = [ordered]@{ Node = $name; Mode = ''; Status = ''; Adapter = ''; AdapterName = ''; MacAddress = ''; Address = ''; ExpectedAddress = ''; Verified = $false; Reason = $null; Released = @(); Changes = @() }
+    $row = [ordered]@{ Node = $name; Mode = ''; Status = ''; Adapter = ''; AdapterName = ''; MacAddress = ''; Address = ''; ExpectedAddress = ''; Verified = $false; Reason = $null; AdaptersReported = $true; Released = @(); Changes = @() }
     try {
         if ($null -eq $mgmt) {
             Write-ZtpLog "${name}: no management block in the parameters file; the Network stage leaves its adapters alone."
@@ -292,14 +333,21 @@ foreach ($n in $selected) {
 
         if ($mode -ne 'static' -or -not $ApplyThroughAzure) {
             # Verify only (the default; dhcp, dhcp_reservation and preconfigured always): read, compare, record.
-            $rows = if ($macKey) { Get-NodeAdapter $name } else { $null }
-            $verdict = Get-ManagementVerdict -NodeName $name -Mode $mode -MacKey $macKey -Ip $ip -ManagementDhcp ([string](Get-ZtpPropertyValue $mgmt 'management_dhcp' 'true') -ne 'False') -Rows $rows
+            $script:adaptersWaited = 0
+            $rows = if ($macKey) { Wait-ManagementAdapter $name $macKey } else { $null }
+            $verdict = Get-ManagementVerdict -NodeName $name -Mode $mode -MacKey $macKey -Ip $ip -ManagementDhcp ([string](Get-ZtpPropertyValue $mgmt 'management_dhcp' 'true') -ne 'False') -Rows $rows -WaitedMinutes $script:adaptersWaited
+            # The handoff reads the adapters again when this stage never saw them.
+            if ($macKey -and -not @(@($rows) | Where-Object { $_ -and $_.Mac -eq $macKey }).Count) { $row.AdaptersReported = $false }
             if ($verdict.Nic) { $row.Adapter = $verdict.Nic.Name; $row.AdapterName = $verdict.Nic.AdapterName; $row.Address = $verdict.Nic.Reported.Ip }
             $row.Status = $verdict.Status; $row.Verified = $verdict.Verified; $row.Reason = $verdict.Reason
             $verdictText = "$($verdict.Text)$(if ($verdict.Verified) { ' Verified.' })"
             Write-ZtpLog "${name}: $verdictText The Network stage doesn't change it." -Level $(if ($verdict.Level -eq 'Warning') { 'Warning' } else { 'Info' })
             if (-not $Execute) { "PLAN: ${name}: $mode; verify only, no change. $verdictText" }
-            $next = if ($verdict.Status -eq 'Deferred') { 'OS configuration (azurelocal-toolkit Set-AzureLocalNodeConfiguration.ps1, Network step) sets the static address on the port with the management MAC.' } else { '' }
+            $next = switch ($verdict.Status) {
+                'Deferred' { 'OS configuration (azurelocal-toolkit Set-AzureLocalNodeConfiguration.ps1, Network step) sets the static address on the port with the management MAC.' }
+                'NeverReported' { 'The Handoff stage reads the adapters again. If the management port is still missing there, check the machine''s Arc connection and the MAC in the infrastructure file.' }
+                default { '' }
+            }
             Send-NetworkEvent $name $verdict.State $verdict.Text $verdict.Level $next
             [pscustomobject]$row
             continue
@@ -315,9 +363,19 @@ foreach ($n in $selected) {
         if ($missing) { throw "${name}: a static management address needs $($missing -join ', ') in the parameters file's management block." }
         $wanted = "Static $ip $mask gw $gateway$(if ($dns) { " DNS $($dns -join ',')" }) VLAN $vlan up"
 
-        $rows = Get-NodeAdapter $name
+        $script:adaptersWaited = 0
+        $rows = Wait-ManagementAdapter $name $macKey
+        if ($script:adaptersWaited -gt 0) {
+            # The wait budget is spent without the management MAC in the list: say so (Warning) before the change is refused;
+            # the Handoff stage reads the adapters again.
+            $row.AdaptersReported = $false
+            $seen = @(@($rows) | Where-Object { $_ } | ForEach-Object { "$($_.AdapterName) $(Format-ZtpMac $_.Mac)" })
+            $never = "adapters never reported within $($script:adaptersWaited) minutes, so the management port (MAC $(Format-ZtpMac $macKey)) wasn't checked and no address was set$(if ($seen.Count) { "; the adapters it did report: $($seen -join ', ')" })"
+            Write-ZtpLog "${name}: $never." -Level Warning
+            Send-NetworkEvent $name 'ManagementAdaptersNeverReported' $never 'Warning' 'The Handoff stage reads the adapters again. Rerun the Network stage once the machine lists its adapters, or check the MAC in the infrastructure file.'
+        }
         if ($null -eq $rows -or $rows.Count -eq 0) {
-            if ($Execute) { throw "${name}: edge machine $name reports no network adapters. Run the Network stage after Ready (the OS install)." }
+            if ($Execute) { throw "${name}: edge machine $name reports no network adapters$(if ($script:adaptersWaited -gt 0) { " within $($script:adaptersWaited) minutes" }). Run the Network stage after Ready (the OS install)." }
             "PLAN: ${name}: the edge machine reports no network adapters yet (they appear after the OS install). Then: ApplyConfiguration $wanted on the adapter with MAC $(Format-ZtpMac $macKey), after moving any other adapter that holds $ip to Dhcp."
             $row.Status = 'Planned'; $row.Reason = 'static: not checked yet (plan; the edge machine reports no network adapters yet)'
             [pscustomobject]$row

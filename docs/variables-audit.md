@@ -8,7 +8,7 @@ This page walks every stage and script in `scripts/simplified-provisioning/` (Re
 
 ## Summary
 
-101 items. Before this change 29 were controlled and 72 were not (a literal in code, or in the wrapper that writes the settings). Now **64 are backed by a variable** (the 29, plus 35 that became keys with today's value as the default), **2 vendor assumptions were fixed**, and **35 stay hard-coded** with a reason each:
+102 items. Before this change 29 were controlled and 73 were not (a literal in code, or in the wrapper that writes the settings). Now **65 are backed by a variable** (the 29, plus 36 that became keys with today's value as the default), **2 vendor assumptions were fixed**, and **35 stay hard-coded** with a reason each:
 
 | Group | Items kept hard-coded | Why |
 | --- | --- | --- |
@@ -154,6 +154,7 @@ This page walks every stage and script in `scripts/simplified-provisioning/` (Re
 | --- | --- | --- | --- | --- | --- |
 | N1 | Network: find the management port by MAC and compare the address with the file; verify only | `nodes[].network_adapters[]` | `cluster_nodes[].mac_address`, `ip_address`, `ip_assignment` | verify | controlled |
 | N2 | Network: move the address through Azure's `ApplyConfiguration` | none (`-ApplyThroughAzure`) | none | off | HARD-CODED (kept): documented unreliable (the job never started on two live runs); opt-in on the orchestrator |
+| N3a | Network: how long to wait for the edge machine to report its network adapters (the management MAC in the list) before judging the port; polls every `poll_interval_seconds` (at least 5 s), only with `-Execute`; `0` reads once; on timeout the node is not verified in every mode ("adapters never reported within N minutes", row status `NeverReported`, a Warning event `ManagementAdaptersNeverReported`) and the Handoff stage reads the adapters again | `provisioning.simplified.timeouts.adapters_minutes` | `ztp.timeouts.adapters_minutes` | 10 (0 to 240) | controlled (new) |
 | N3 | Network: how long each Azure configuration job may take | `provisioning.simplified.timeouts.network_minutes` | `ztp.timeouts.network_minutes` | 60 | controlled (new) |
 | Rs1 | Restore: which BIOS values are set back (the final values, or the value saved before Boot) | `hardware.bios*`, `nodes[].bios*`, the derived plan | `bios_restore` in the node list | none | controlled |
 | Rs2 | Restore: settle time before the Arc check | `provisioning.simplified.timeouts.restore_settle_minutes` | `ztp.timeouts.restore_settle_minutes` | 5 | controlled (new) |
